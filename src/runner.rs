@@ -577,6 +577,76 @@ pub fn decode_snapshot_with_profile_backfill(s: &str) -> anyhow::Result<Snapshot
     Ok(snap)
 }
 
+/// The portions of a snapshot needed by placement and control-plane code.
+/// Weight data, runtime state, topology and morphology are deliberately
+/// skipped by the metadata decoder so a heartbeat does not materialize a
+/// complete biological checkpoint just to inspect its network dimensions.
+#[derive(Clone, Debug, Default)]
+pub struct SnapshotMetadata {
+    pub net: crate::config::NetworkConfig,
+    pub input_rows: usize,
+    pub hidden_weight_shapes: Vec<(usize, usize)>,
+    pub output_rows: usize,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct SnapshotMetadataRaw {
+    net: Option<serde_json::Value>,
+    connectome_labels: Option<serde_json::Value>,
+    w_in: SnapshotMatrixMetadata,
+    w_hh_fwd: Vec<SnapshotMatrixMetadata>,
+    w_out: SnapshotMatrixMetadata,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct SnapshotMatrixMetadata {
+    rows: usize,
+    cols: usize,
+}
+
+/// Decode snapshot configuration and matrix dimensions without allocating the
+/// serialized weight arrays. This preserves profile backfill behavior for
+/// imported connectomes while keeping the snapshot's large arrays ignored.
+pub fn decode_snapshot_metadata_with_profile_backfill(
+    payload: &str,
+) -> anyhow::Result<SnapshotMetadata> {
+    let raw: SnapshotMetadataRaw = serde_json::from_str(payload)?;
+    let Some(net_value) = raw.net else {
+        anyhow::bail!("snapshot payload must contain a top-level object field named `net`");
+    };
+    if !net_value.is_object() {
+        anyhow::bail!("snapshot payload field `net` must be an object");
+    }
+
+    let present_net_fields = net_value
+        .as_object()
+        .map(|object| object.keys().cloned().collect())
+        .unwrap_or_default();
+    let mut profile_source = serde_json::Map::new();
+    profile_source.insert("net".to_owned(), net_value.clone());
+    if let Some(labels) = raw.connectome_labels {
+        profile_source.insert("connectome_labels".to_owned(), labels);
+    }
+    let profile_source = serde_json::Value::Object(profile_source);
+    let mut net: crate::config::NetworkConfig = serde_json::from_value(net_value)?;
+    if let Some(profile) = infer_snapshot_biomimicry_profile(&profile_source) {
+        backfill_aarnn_biomimicry_profile_missing_fields(&mut net, profile, &present_net_fields);
+    }
+
+    Ok(SnapshotMetadata {
+        net,
+        input_rows: raw.w_in.rows,
+        hidden_weight_shapes: raw
+            .w_hh_fwd
+            .into_iter()
+            .map(|matrix| (matrix.rows, matrix.cols))
+            .collect(),
+        output_rows: raw.w_out.rows,
+    })
+}
+
 #[cfg(test)]
 mod snapshot_payload_tests {
     use super::*;
@@ -592,6 +662,29 @@ mod snapshot_payload_tests {
         let payload = serde_json::to_string(&Snapshot::default()).expect("serialize snapshot");
         let decoded = decode_snapshot_with_profile_backfill(&payload).expect("decode snapshot");
         assert_eq!(decoded.net, NetworkConfig::default());
+    }
+
+    #[test]
+    fn snapshot_metadata_reads_shapes_and_profile_without_materializing_weights() {
+        let payload = r#"{
+            "net": {
+                "num_hidden_layers": 1,
+                "num_hidden_per_layer_initial": 2,
+                "num_sensory_neurons": 3,
+                "num_output_neurons": 4
+            },
+            "connectome_labels": {"dataset": "openworm_celegans_connectome"},
+            "w_in": {"rows": 2, "cols": 3, "data": [1.0, 2.0]},
+            "w_hh_fwd": [{"rows": 5, "cols": 2, "data": [1.0, 2.0, 3.0]}],
+            "w_out": {"rows": 4, "cols": 5, "data": [1.0, 2.0]}
+        }"#;
+
+        let metadata = decode_snapshot_metadata_with_profile_backfill(payload)
+            .expect("decode snapshot metadata");
+        assert!(!metadata.net.io_channels_are_biological);
+        assert_eq!(metadata.input_rows, 2);
+        assert_eq!(metadata.hidden_weight_shapes, vec![(5, 2)]);
+        assert_eq!(metadata.output_rows, 4);
     }
 
     #[test]

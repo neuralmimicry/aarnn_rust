@@ -592,6 +592,33 @@ fn enqueue_pending_command(
     }
 }
 
+fn pending_load_command_matches(
+    pending_commands: &HashMap<String, Vec<NetworkCommand>>,
+    node_id: &str,
+    network_id: &str,
+    config_payload: &str,
+    layers: &[u32],
+    redundant_layers: &[u32],
+    desired_aarnn_depth: u32,
+    neuron_model: &str,
+    learning_rule: &str,
+) -> bool {
+    pending_commands
+        .get(node_id)
+        .into_iter()
+        .flatten()
+        .any(|command| {
+            command.network_id == network_id
+                && command.r#type == proto::network_command::CommandType::LoadNetwork as i32
+                && command.config_json.as_slice() == config_payload.as_bytes()
+                && command.layers == layers
+                && command.redundant_layers == redundant_layers
+                && command.desired_aarnn_depth == desired_aarnn_depth
+                && command.neuron_model == neuron_model
+                && command.learning_rule == learning_rule
+        })
+}
+
 fn fresh_single_neuron_config(desired_depth: u32) -> NetworkConfig {
     let mut cfg = NetworkConfig::default();
     if desired_depth > 0 {
@@ -1284,7 +1311,7 @@ fn network_deployment_from_payload(payload: &str) -> Option<DeploymentConfig> {
     if payload.trim().is_empty() {
         return None;
     }
-    if let Ok(snapshot) = crate::runner::decode_snapshot_with_profile_backfill(payload) {
+    if let Ok(snapshot) = crate::runner::decode_snapshot_metadata_with_profile_backfill(payload) {
         let mut deployment = snapshot.net.deployment;
         deployment.normalize();
         return Some(deployment);
@@ -1317,7 +1344,7 @@ fn network_config_from_config_payload(payload: &str) -> Option<NetworkConfig> {
     if payload.trim().is_empty() {
         return None;
     }
-    if crate::runner::decode_snapshot_with_profile_backfill(payload).is_ok() {
+    if crate::runner::decode_snapshot_metadata_with_profile_backfill(payload).is_ok() {
         return None;
     }
     serde_json::from_str::<NetworkConfig>(payload).ok()
@@ -1327,7 +1354,7 @@ fn network_config_from_payload(payload: &str) -> Option<NetworkConfig> {
     if payload.trim().is_empty() {
         return None;
     }
-    if let Ok(snapshot) = crate::runner::decode_snapshot_with_profile_backfill(payload) {
+    if let Ok(snapshot) = crate::runner::decode_snapshot_metadata_with_profile_backfill(payload) {
         return Some(snapshot.net);
     }
     serde_json::from_str::<NetworkConfig>(payload).ok()
@@ -1436,41 +1463,48 @@ pub(crate) fn configured_layer_neuron_counts(payload: &str) -> HashMap<u32, u64>
         return HashMap::new();
     }
 
-    if let Ok(snapshot) = crate::runner::decode_snapshot_with_profile_backfill(payload) {
-        let hidden_layers = snapshot.w_hh_fwd.len().saturating_add(1);
-        let mut counts = HashMap::new();
-        for layer in 0..hidden_layers {
-            let size = if snapshot.w_hh_fwd.is_empty() {
-                snapshot.w_in.rows
-            } else if layer < snapshot.w_hh_fwd.len() {
-                snapshot.w_hh_fwd[layer].cols
-            } else {
-                snapshot.w_hh_fwd[layer - 1].rows
-            };
-            counts.insert(layer as u32, size as u64);
-        }
-        if snapshot.net.io_channels_are_biological {
-            counts.insert(hidden_layers as u32, snapshot.w_out.rows as u64);
-        }
-        return counts;
+    if let Ok(snapshot) = crate::runner::decode_snapshot_metadata_with_profile_backfill(payload) {
+        return configured_layer_neuron_counts_from_metadata(&snapshot);
     }
 
     serde_json::from_str::<NetworkConfig>(payload)
-        .ok()
-        .map(|config| {
-            let mut counts = HashMap::new();
-            for layer in 0..config.num_hidden_layers {
-                counts.insert(layer as u32, config.num_hidden_per_layer_initial as u64);
-            }
-            if config.io_channels_are_biological {
-                counts.insert(
-                    config.num_hidden_layers as u32,
-                    config.num_output_neurons as u64,
-                );
-            }
-            counts
-        })
+        .map(|config| configured_layer_neuron_counts_from_config(&config))
         .unwrap_or_default()
+}
+
+fn configured_layer_neuron_counts_from_config(config: &NetworkConfig) -> HashMap<u32, u64> {
+    let mut counts = HashMap::new();
+    for layer in 0..config.num_hidden_layers {
+        counts.insert(layer as u32, config.num_hidden_per_layer_initial as u64);
+    }
+    if config.io_channels_are_biological {
+        counts.insert(
+            config.num_hidden_layers as u32,
+            config.num_output_neurons as u64,
+        );
+    }
+    counts
+}
+
+fn configured_layer_neuron_counts_from_metadata(
+    snapshot: &crate::runner::SnapshotMetadata,
+) -> HashMap<u32, u64> {
+    let hidden_layers = snapshot.hidden_weight_shapes.len().saturating_add(1);
+    let mut counts = HashMap::new();
+    for layer in 0..hidden_layers {
+        let size = if snapshot.hidden_weight_shapes.is_empty() {
+            snapshot.input_rows
+        } else if layer < snapshot.hidden_weight_shapes.len() {
+            snapshot.hidden_weight_shapes[layer].1
+        } else {
+            snapshot.hidden_weight_shapes[layer - 1].0
+        };
+        counts.insert(layer as u32, size as u64);
+    }
+    if snapshot.net.io_channels_are_biological {
+        counts.insert(hidden_layers as u32, snapshot.output_rows as u64);
+    }
+    counts
 }
 
 fn configured_total_neurons(payload: &str) -> u64 {
@@ -2786,6 +2820,9 @@ fn collect_autonomous_transition_plans(
     let deployment_by_network: HashMap<String, DeploymentConfig> = state
         .network_registry
         .iter()
+        .filter(|(net_id, status)| {
+            status.autonomous_transition_enabled && !state.stable_network_ids.contains(*net_id)
+        })
         .map(|(net_id, status)| {
             let payload = state
                 .network_snapshots
@@ -4600,6 +4637,43 @@ fn config_payload_fingerprint(bytes: &[u8]) -> u64 {
     hasher.finish()
 }
 
+fn network_load_command_fingerprint(
+    config_json: &[u8],
+    layers: &[u32],
+    redundant_layers: &[u32],
+    desired_aarnn_depth: u32,
+    neuron_model: &str,
+    learning_rule: &str,
+) -> u64 {
+    // Fingerprint the exact command in one streaming pass. In particular, do
+    // not decode a snapshot here: checkpoint payloads can be hundreds of MiB.
+    // Length prefixes keep adjacent components unambiguous.
+    let mut fingerprint = 0xcbf2_9ce4_8422_2325u64;
+    let mut feed = |bytes: &[u8]| {
+        for byte in (bytes.len() as u64).to_le_bytes().iter().chain(bytes) {
+            fingerprint ^= u64::from(*byte);
+            fingerprint = fingerprint.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    feed(config_json);
+    feed(
+        &layers
+            .iter()
+            .flat_map(|layer| layer.to_le_bytes())
+            .collect::<Vec<_>>(),
+    );
+    feed(
+        &redundant_layers
+            .iter()
+            .flat_map(|layer| layer.to_le_bytes())
+            .collect::<Vec<_>>(),
+    );
+    feed(&desired_aarnn_depth.to_le_bytes());
+    feed(neuron_model.as_bytes());
+    feed(learning_rule.as_bytes());
+    fingerprint
+}
+
 #[cfg(feature = "replicated_durability")]
 pub fn open_managed_durability(
     network_id: &str,
@@ -4781,6 +4855,11 @@ pub struct NodeState {
     /// is coordination metadata, not biological time.
     pub consistent_cut_epochs: HashMap<String, u64>,
     pub network_runtime_metrics: HashMap<String, HashMap<String, NetworkResources>>,
+    /// Last successfully applied legacy load command fingerprint per local
+    /// network. Reported in NetworkResources so the orchestrator can avoid
+    /// retransmitting an unchanged large snapshot without mistaking a changed
+    /// snapshot for a ready assignment.
+    pub network_load_fingerprints: HashMap<String, u64>,
     pub last_heartbeat: HashMap<String, std::time::Instant>,
     pub pending_commands: HashMap<String, Vec<NetworkCommand>>, // node_id -> commands
     /// Idempotently remembered activation results. A worker may replay a
@@ -5110,6 +5189,7 @@ impl DistributedNode {
                 network_snapshots: HashMap::new(),
                 consistent_cut_epochs: HashMap::new(),
                 network_runtime_metrics: HashMap::new(),
+                network_load_fingerprints: HashMap::new(),
                 last_heartbeat: HashMap::new(),
                 pending_commands: HashMap::new(),
                 stable_activation_results: HashMap::new(),
@@ -7749,6 +7829,11 @@ impl DistributedNode {
                     num_neurons: total_neurons,
                     layer_neuron_counts,
                     avg_step_time_ms: net.avg_step_time_ms,
+                    load_fingerprint: state
+                        .network_load_fingerprints
+                        .get(id)
+                        .copied()
+                        .unwrap_or_default(),
                 },
             );
         }
@@ -8776,21 +8861,51 @@ impl DistributedNode {
                     .map(|node_id| (net_id.clone(), node_id))
             })
             .collect();
-        let deployment_by_network: HashMap<String, DeploymentConfig> = state
+        let stable_network_ids = state.stable_network_ids.clone();
+        // Parse each large checkpoint once per rebalance into a compact
+        // metadata projection. The placement loop below reuses it for layer
+        // counts and deployment policy instead of decoding weight matrices
+        // several times from the same 100+ MiB JSON string.
+        let snapshot_metadata_by_network: HashMap<_, _> = state
             .network_registry
             .iter()
-            .map(|(net_id, status)| {
+            .filter(|(net_id, _)| !stable_network_ids.contains(*net_id))
+            .filter_map(|(net_id, status)| {
                 let payload = state
                     .network_snapshots
                     .get(net_id)
                     .filter(|payload| !payload.trim().is_empty())
                     .map(String::as_str)
                     .unwrap_or(status.config_json.as_str());
-                let deployment = network_deployment_from_payload(payload).unwrap_or_default();
+                crate::runner::decode_snapshot_metadata_with_profile_backfill(payload)
+                    .ok()
+                    .map(|metadata| (net_id.clone(), metadata))
+            })
+            .collect();
+        let deployment_by_network: HashMap<String, DeploymentConfig> = state
+            .network_registry
+            .iter()
+            .map(|(net_id, status)| {
+                let deployment = snapshot_metadata_by_network
+                    .get(net_id)
+                    .map(|metadata| {
+                        let mut deployment = metadata.net.deployment.clone();
+                        deployment.normalize();
+                        deployment
+                    })
+                    .or_else(|| {
+                        let payload = state
+                            .network_snapshots
+                            .get(net_id)
+                            .filter(|payload| !payload.trim().is_empty())
+                            .map(String::as_str)
+                            .unwrap_or(status.config_json.as_str());
+                        network_deployment_from_payload(payload)
+                    })
+                    .unwrap_or_default();
                 (net_id.clone(), deployment)
             })
             .collect();
-        let stable_network_ids = state.stable_network_ids.clone();
 
         let mut all_pending = Vec::new();
         // The registry is mutably rebuilt below.  Take a consistent snapshot of
@@ -8799,9 +8914,13 @@ impl DistributedNode {
         let runtime_metrics_snapshot = state.network_runtime_metrics.clone();
         let node_statuses_snapshot = state.nodes.clone();
         let transport_stats_snapshot = state.spike_transport_stats.clone();
-        let (network_registry, network_snapshots) = {
+        let (network_registry, network_snapshots, pending_commands) = {
             let state = &mut *state;
-            (&mut state.network_registry, &mut state.network_snapshots)
+            (
+                &mut state.network_registry,
+                &mut state.network_snapshots,
+                &mut state.pending_commands,
+            )
         };
 
         for (net_id, net_status) in network_registry.iter_mut() {
@@ -8823,51 +8942,67 @@ impl DistributedNode {
             }
             let mut snapshot_layers: Option<u32> = None;
             let mut config_payload: Option<String> = None;
+            let mut configured_counts: Option<HashMap<u32, u64>> = None;
+            let mut remove_snapshot = false;
+            let mut merged_snapshot: Option<String> = None;
 
-            if let Some(snap_json) = network_snapshots.get(net_id).cloned() {
-                let mut effective_snapshot = snap_json.clone();
-                if let Some(requested_cfg) =
-                    network_config_from_config_payload(&net_status.config_json)
-                {
-                    if let Ok(snap) =
-                        crate::runner::decode_snapshot_with_profile_backfill(&snap_json)
-                    {
+            if let Some(snap_json) = network_snapshots.get(net_id) {
+                let mut effective_snapshot = snap_json.as_str();
+                // Bare NetworkConfig documents are small metadata. A large
+                // config_json value is itself a checkpoint and was already
+                // projected into snapshot_metadata_by_network above.
+                let requested_cfg = (net_status.config_json.len() <= 1024 * 1024)
+                    .then(|| network_config_from_config_payload(&net_status.config_json))
+                    .flatten();
+                if let Some(requested_cfg) = requested_cfg {
+                    if let Some(snap) = snapshot_metadata_by_network.get(net_id) {
                         if network_config_shape_compatible(&snap.net, &requested_cfg) {
-                            if let Some(merged) =
-                                snapshot_with_network_config(&snap_json, &requested_cfg)
-                            {
-                                if merged != snap_json {
-                                    network_snapshots.insert(net_id.clone(), merged.clone());
+                            if snap.net != requested_cfg {
+                                if let Some(merged) =
+                                    snapshot_with_network_config(snap_json, &requested_cfg)
+                                {
+                                    merged_snapshot = Some(merged);
+                                    effective_snapshot = merged_snapshot
+                                        .as_deref()
+                                        .expect("merged snapshot was just stored");
                                 }
-                                effective_snapshot = merged;
                             }
+                            snapshot_layers = Some(configured_execution_layer_count(&snap.net));
+                            configured_counts =
+                                Some(configured_layer_neuron_counts_from_metadata(snap));
                         } else {
                             // Snapshot shape conflicts with requested config (e.g. stale S/O from
                             // previous runs). Prefer config payload to keep hosted runners aligned.
                             config_payload = serde_json::to_string(&requested_cfg).ok();
                             snapshot_layers =
                                 Some(configured_execution_layer_count(&requested_cfg));
-                            network_snapshots.remove(net_id);
+                            configured_counts =
+                                Some(configured_layer_neuron_counts_from_config(&requested_cfg));
+                            remove_snapshot = true;
                         }
                     }
                 }
                 if config_payload.is_none() {
-                    config_payload = Some(effective_snapshot.clone());
-                    if let Ok(snap) =
-                        crate::runner::decode_snapshot_with_profile_backfill(&effective_snapshot)
-                    {
+                    config_payload = Some(effective_snapshot.to_owned());
+                    if let Some(snap) = snapshot_metadata_by_network.get(net_id) {
                         snapshot_layers = Some(configured_execution_layer_count(&snap.net));
+                        configured_counts =
+                            Some(configured_layer_neuron_counts_from_metadata(snap));
                     }
                 }
             } else if !net_status.config_json.is_empty() {
-                if let Ok(snap) =
-                    crate::runner::decode_snapshot_with_profile_backfill(&net_status.config_json)
-                {
-                    let snap_json = net_status.config_json.clone();
-                    network_snapshots.insert(net_id.clone(), snap_json.clone());
-                    config_payload = Some(snap_json);
+                if let Some(snap) = snapshot_metadata_by_network.get(net_id) {
+                    config_payload = Some(net_status.config_json.clone());
                     snapshot_layers = Some(configured_execution_layer_count(&snap.net));
+                    configured_counts = Some(configured_layer_neuron_counts_from_metadata(snap));
+                    network_snapshots.insert(net_id.clone(), net_status.config_json.clone());
                 }
+            }
+            if remove_snapshot {
+                network_snapshots.remove(net_id);
+            }
+            if let Some(merged) = merged_snapshot {
+                network_snapshots.insert(net_id.clone(), merged);
             }
 
             let total_layers = if let Some(layers) = snapshot_layers {
@@ -9004,10 +9139,9 @@ impl DistributedNode {
             // immutable config/snapshot dimensions so that interval cannot be
             // rendered as a zero-neuron network.  Later runtime observations
             // may increase these values as biological growth occurs.
-            merge_layer_neuron_counts(
-                &mut known_counts,
-                &configured_layer_neuron_counts(&config_json),
-            );
+            let configured_counts =
+                configured_counts.unwrap_or_else(|| configured_layer_neuron_counts(&config_json));
+            merge_layer_neuron_counts(&mut known_counts, &configured_counts);
             let mut hierarchical_plan_telemetry = None;
 
             net_status.distribution.clear();
@@ -9030,6 +9164,14 @@ impl DistributedNode {
                 };
 
                 let layers: Vec<u32> = (0..total_layers).collect();
+                let expected_load_fingerprint = network_load_command_fingerprint(
+                    config_json.as_bytes(),
+                    &layers,
+                    &[],
+                    net_status.desired_aarnn_depth,
+                    &net_status.neuron_model,
+                    &net_status.learning_rule,
+                );
                 net_status.distribution.insert(
                     node_id.clone(),
                     LayerRange {
@@ -9039,18 +9181,40 @@ impl DistributedNode {
                     },
                 );
 
-                let cmd = NetworkCommand {
-                    r#type: proto::network_command::CommandType::LoadNetwork as i32,
-                    network_id: net_id.clone(),
-                    config_json: config_json.as_bytes().to_vec(),
-                    layers,
-                    redundant_layers: Vec::new(),
-                    desired_aarnn_depth: net_status.desired_aarnn_depth,
-                    neuron_model: net_status.neuron_model.clone(),
-                    learning_rule: net_status.learning_rule.clone(),
-                };
+                let assignment_ready =
+                    previous_distribution.get(&node_id).is_some_and(|previous| {
+                        previous.layers == layers && previous.backup_layers.is_empty()
+                    }) && runtime_metrics_snapshot
+                        .get(net_id)
+                        .and_then(|metrics| metrics.get(&node_id))
+                        .is_some_and(|metrics| {
+                            metrics.load_fingerprint == expected_load_fingerprint
+                        });
+                let pending_load_exists = pending_load_command_matches(
+                    pending_commands,
+                    &node_id,
+                    net_id,
+                    &config_json,
+                    &layers,
+                    &[],
+                    net_status.desired_aarnn_depth,
+                    &net_status.neuron_model,
+                    &net_status.learning_rule,
+                );
+                if !assignment_ready && !pending_load_exists {
+                    let cmd = NetworkCommand {
+                        r#type: proto::network_command::CommandType::LoadNetwork as i32,
+                        network_id: net_id.clone(),
+                        config_json: config_json.as_bytes().to_vec(),
+                        layers,
+                        redundant_layers: Vec::new(),
+                        desired_aarnn_depth: net_status.desired_aarnn_depth,
+                        neuron_model: net_status.neuron_model.clone(),
+                        learning_rule: net_status.learning_rule.clone(),
+                    };
+                    all_pending.push((node_id.clone(), cmd));
+                }
                 let node_id_clone = node_id.clone();
-                all_pending.push((node_id, cmd));
                 if !net_status.playing {
                     let stop_cmd = NetworkCommand {
                         r#type: proto::network_command::CommandType::Stop as i32,
@@ -9083,16 +9247,6 @@ impl DistributedNode {
                             .map(|(node_id, _)| node_id.as_str())
                     })
                     .unwrap_or_default();
-                let planner_result = plan_active_layer_assignments(
-                    net_id,
-                    planner_home,
-                    total_layers,
-                    &config_json,
-                    &known_counts,
-                    &target_node_capacities,
-                    &node_statuses_snapshot,
-                    &transport_stats_snapshot,
-                );
                 // A valid published assignment is authoritative while the
                 // workers report noisy capacity/latency telemetry. Running
                 // the hierarchical planner first made every heartbeat able
@@ -9107,11 +9261,18 @@ impl DistributedNode {
                     total_layers,
                 );
                 if node_assignments.is_none() {
-                    node_assignments = planner_result
-                        .as_ref()
-                        .map(|(assignments, _)| assignments.clone());
-                    if let Some((_, telemetry)) = planner_result.as_ref() {
-                        hierarchical_plan_telemetry = Some(telemetry.clone());
+                    if let Some((assignments, telemetry)) = plan_active_layer_assignments(
+                        net_id,
+                        planner_home,
+                        total_layers,
+                        &config_json,
+                        &known_counts,
+                        &target_node_capacities,
+                        &node_statuses_snapshot,
+                        &transport_stats_snapshot,
+                    ) {
+                        node_assignments = Some(assignments);
+                        hierarchical_plan_telemetry = Some(telemetry);
                     }
                 }
                 let mut node_assignments = node_assignments.unwrap_or_else(|| {
@@ -9129,6 +9290,14 @@ impl DistributedNode {
 
                 for (node_id, layers, redundant) in node_assignments {
                     let hosted_layers = hosted_layers_for_assignment(&layers, &redundant);
+                    let expected_load_fingerprint = network_load_command_fingerprint(
+                        config_json.as_bytes(),
+                        &hosted_layers,
+                        &redundant,
+                        net_status.desired_aarnn_depth,
+                        &net_status.neuron_model,
+                        &net_status.learning_rule,
+                    );
                     net_status.distribution.insert(
                         node_id.clone(),
                         LayerRange {
@@ -9145,18 +9314,40 @@ impl DistributedNode {
                         },
                     );
 
-                    let cmd = NetworkCommand {
-                        r#type: proto::network_command::CommandType::LoadNetwork as i32,
-                        network_id: net_id.clone(),
-                        config_json: config_json.as_bytes().to_vec(),
-                        layers: hosted_layers,
-                        redundant_layers: redundant,
-                        desired_aarnn_depth: net_status.desired_aarnn_depth,
-                        neuron_model: net_status.neuron_model.clone(),
-                        learning_rule: net_status.learning_rule.clone(),
-                    };
+                    let assignment_ready =
+                        previous_distribution.get(&node_id).is_some_and(|previous| {
+                            previous.layers == layers && previous.backup_layers == redundant
+                        }) && runtime_metrics_snapshot
+                            .get(net_id)
+                            .and_then(|metrics| metrics.get(&node_id))
+                            .is_some_and(|metrics| {
+                                metrics.load_fingerprint == expected_load_fingerprint
+                            });
+                    let pending_load_exists = pending_load_command_matches(
+                        pending_commands,
+                        &node_id,
+                        net_id,
+                        &config_json,
+                        &hosted_layers,
+                        &redundant,
+                        net_status.desired_aarnn_depth,
+                        &net_status.neuron_model,
+                        &net_status.learning_rule,
+                    );
+                    if !assignment_ready && !pending_load_exists {
+                        let cmd = NetworkCommand {
+                            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+                            network_id: net_id.clone(),
+                            config_json: config_json.as_bytes().to_vec(),
+                            layers: hosted_layers,
+                            redundant_layers: redundant,
+                            desired_aarnn_depth: net_status.desired_aarnn_depth,
+                            neuron_model: net_status.neuron_model.clone(),
+                            learning_rule: net_status.learning_rule.clone(),
+                        };
+                        all_pending.push((node_id.clone(), cmd));
+                    }
                     let node_id_clone = node_id.clone();
-                    all_pending.push((node_id, cmd));
                     if !net_status.playing {
                         let stop_cmd = NetworkCommand {
                             r#type: proto::network_command::CommandType::Stop as i32,
@@ -9252,7 +9443,7 @@ impl DistributedNode {
         }
 
         for (node_id, cmd) in all_pending {
-            enqueue_pending_command(&mut state.pending_commands, node_id, cmd);
+            enqueue_pending_command(pending_commands, node_id, cmd);
         }
     }
 
@@ -9294,7 +9485,15 @@ impl DistributedNode {
         let mut state = self.state.write().await;
         match cmd_type {
             CommandType::LoadNetwork => {
-                if let Some(net_arc) = state.networks.get(&cmd.network_id) {
+                let load_fingerprint = network_load_command_fingerprint(
+                    &cmd.config_json,
+                    &cmd.layers,
+                    &cmd.redundant_layers,
+                    cmd.desired_aarnn_depth,
+                    &cmd.neuron_model,
+                    &cmd.learning_rule,
+                );
+                if let Some(net_arc) = state.networks.get(&cmd.network_id).cloned() {
                     let mut net = net_arc.write().await;
                     #[cfg(feature = "stable_executor_live")]
                     if net.stable_executor_registered() {
@@ -9340,6 +9539,9 @@ impl DistributedNode {
                         && !model_changed
                         && !learning_changed
                     {
+                        state
+                            .network_load_fingerprints
+                            .insert(cmd.network_id.clone(), load_fingerprint);
                         return;
                     }
 
@@ -9365,6 +9567,7 @@ impl DistributedNode {
                     net.remote_spike_steps_fwd.clear();
                     net.remote_spike_steps_bwd.clear();
 
+                    let mut config_applied = !config_changed;
                     if config_changed {
                         let cfg_str = String::from_utf8_lossy(&cmd.config_json).to_string();
                         if let Ok(_snap) =
@@ -9372,16 +9575,21 @@ impl DistributedNode {
                         {
                             #[cfg(feature = "growth3d")]
                             let has_snapshot_topo = _snap.topo.is_some();
-                            if let Err(e) = net.runner.import_network_json(&cfg_str) {
-                                nm_err!(
+                            match net.runner.import_network_json(&cfg_str) {
+                                Ok(()) => {
+                                    config_applied = true;
+                                    net.last_config_fingerprint = incoming_cfg_fp;
+                                }
+                                Err(e) => nm_err!(
                                     "[warn] Failed to import snapshot for {}: {}",
                                     cmd.network_id,
                                     e
-                                );
+                                ),
                             }
                             #[cfg(feature = "superdense_executor")]
-                            net.superdense.reset();
-                            net.last_config_fingerprint = incoming_cfg_fp;
+                            if config_applied {
+                                net.superdense.reset();
+                            }
                             if !net.assigned_layers.is_empty() {
                                 if let (Some(min), Some(max)) = (
                                     net.assigned_layers.iter().min(),
@@ -9401,6 +9609,7 @@ impl DistributedNode {
                             #[cfg(feature = "superdense_executor")]
                             net.superdense.reset();
                             net.last_config_fingerprint = incoming_cfg_fp;
+                            config_applied = true;
                         }
                     }
                     if layers_changed && !cmd.layers.is_empty() {
@@ -9431,6 +9640,11 @@ impl DistributedNode {
                     }
                     lock_external_sensory_ingress(&net.external_sensory_ingress)
                         .sync_network_metadata(&net);
+                    if config_applied {
+                        state
+                            .network_load_fingerprints
+                            .insert(cmd.network_id.clone(), load_fingerprint);
+                    }
                 } else {
                     nm_log!(
                         "[info] Loading network {} with layers {:?} (redundant: {:?}, depth: {}, model: {}, learning: {})",
@@ -9445,11 +9659,13 @@ impl DistributedNode {
                     let mut snapshot_json: Option<String> = None;
                     #[cfg(feature = "growth3d")]
                     let mut snapshot_has_topo = false;
+                    let mut config_payload_valid = cmd.config_json.is_empty();
                     let mut net_cfg = if !cmd.config_json.is_empty() {
                         let cfg_str = String::from_utf8_lossy(&cmd.config_json).to_string();
                         if let Ok(snap) =
                             crate::runner::decode_snapshot_with_profile_backfill(&cfg_str)
                         {
+                            config_payload_valid = true;
                             #[cfg(feature = "growth3d")]
                             {
                                 snapshot_has_topo = snap.topo.is_some();
@@ -9457,13 +9673,19 @@ impl DistributedNode {
                             snapshot_json = Some(cfg_str);
                             snap.net
                         } else {
-                            serde_json::from_str(&cfg_str).unwrap_or_else(|e| {
-                                nm_err!(
-                                    "[error] Failed to parse config JSON in LoadNetwork: {}",
-                                    e
-                                );
-                                NetworkConfig::default()
-                            })
+                            match serde_json::from_str(&cfg_str) {
+                                Ok(config) => {
+                                    config_payload_valid = true;
+                                    config
+                                }
+                                Err(e) => {
+                                    nm_err!(
+                                        "[error] Failed to parse config JSON in LoadNetwork: {}",
+                                        e
+                                    );
+                                    NetworkConfig::default()
+                                }
+                            }
                         }
                     } else {
                         let mut cfg = NetworkConfig::default();
@@ -9501,6 +9723,7 @@ impl DistributedNode {
 
                     if let Some(json) = snapshot_json {
                         if let Err(e) = runner.import_network_json(&json) {
+                            config_payload_valid = false;
                             nm_err!(
                                 "[error] Failed to import snapshot JSON in LoadNetwork: {}",
                                 e
@@ -9671,6 +9894,11 @@ impl DistributedNode {
                             workspace_binding,
                         })),
                     );
+                    if config_payload_valid {
+                        state
+                            .network_load_fingerprints
+                            .insert(cmd.network_id.clone(), load_fingerprint);
+                    }
                 }
             }
             CommandType::UnloadNetwork => {
@@ -9688,6 +9916,7 @@ impl DistributedNode {
                     state.sensory_ingress_mailboxes.remove(&cmd.network_id);
                     nm_log!("[info] Unloaded network {} from local node", cmd.network_id);
                 }
+                state.network_load_fingerprints.remove(&cmd.network_id);
             }
             CommandType::Start | CommandType::Stop | CommandType::Repeat | CommandType::Reset => {
                 if let Some(net_arc) = state.networks.get(&cmd.network_id) {
@@ -12218,6 +12447,74 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
+    fn a_pending_checkpoint_load_is_reused_until_the_worker_handles_it() {
+        let command = NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "shared".to_owned(),
+            config_json: br#"{"net":{}}"#.to_vec(),
+            layers: vec![0, 1],
+            redundant_layers: vec![1],
+            desired_aarnn_depth: 3,
+            neuron_model: "aarnn".to_owned(),
+            learning_rule: "aarnn".to_owned(),
+        };
+        let pending = HashMap::from([("worker-a".to_owned(), vec![command])]);
+
+        assert!(pending_load_command_matches(
+            &pending,
+            "worker-a",
+            "shared",
+            r#"{"net":{}}"#,
+            &[0, 1],
+            &[1],
+            3,
+            "aarnn",
+            "aarnn",
+        ));
+        assert!(!pending_load_command_matches(
+            &pending,
+            "worker-a",
+            "shared",
+            r#"{"net":{"changed":true}}"#,
+            &[0, 1],
+            &[1],
+            3,
+            "aarnn",
+            "aarnn",
+        ));
+    }
+
+    #[test]
+    fn load_fingerprint_changes_with_checkpoint_or_command_settings() {
+        let base =
+            network_load_command_fingerprint(b"checkpoint-a", &[0, 1], &[1], 3, "aarnn", "aarnn");
+        assert_eq!(
+            base,
+            network_load_command_fingerprint(b"checkpoint-a", &[0, 1], &[1], 3, "aarnn", "aarnn",)
+        );
+        assert_ne!(
+            base,
+            network_load_command_fingerprint(b"checkpoint-b", &[0, 1], &[1], 3, "aarnn", "aarnn",)
+        );
+        assert_ne!(
+            base,
+            network_load_command_fingerprint(b"checkpoint-a", &[0, 2], &[1], 3, "aarnn", "aarnn",)
+        );
+        assert_ne!(
+            base,
+            network_load_command_fingerprint(b"checkpoint-a", &[0, 1], &[1], 4, "aarnn", "aarnn",)
+        );
+        assert_ne!(
+            base,
+            network_load_command_fingerprint(b"checkpoint-a", &[0, 1], &[1], 3, "lif", "aarnn",)
+        );
+        assert_ne!(
+            base,
+            network_load_command_fingerprint(b"checkpoint-a", &[0, 1], &[1], 3, "aarnn", "stdp",)
+        );
+    }
+
+    #[test]
     fn production_cutover_requires_a_durable_cluster_snapshot_catalogue() {
         assert!(validate_cluster_snapshot_root(Some("/var/lib/aarnn/cuts")).is_ok());
         assert!(
@@ -13528,6 +13825,21 @@ mod tests {
                 r#"{"num_hidden_layers":2,"num_hidden_per_layer_initial":11,"num_output_neurons":3}"#
             ),
             25
+        );
+    }
+
+    #[test]
+    fn configured_snapshot_counts_use_matrix_dimensions_without_weight_values() {
+        let payload = r#"{
+            "net": {"io_channels_are_biological": false},
+            "w_in": {"rows": 302, "cols": 24, "data": [0.1, 0.2]},
+            "w_hh_fwd": [{"rows": 96, "cols": 302, "data": [0.1, 0.2]}],
+            "w_out": {"rows": 96, "cols": 96, "data": [0.1, 0.2]}
+        }"#;
+
+        assert_eq!(
+            configured_layer_neuron_counts(payload),
+            HashMap::from([(0, 302), (1, 96)])
         );
     }
 

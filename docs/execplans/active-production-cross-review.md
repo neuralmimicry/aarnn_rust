@@ -3557,3 +3557,31 @@ no native engine content hash is presented as biological or physics equivalence.
 - [!] This is local compatibility-runtime evidence. Production multi-master
   delegation, authenticated auto-enrolment, multi-brain fairness and live
   cross-owner federation still require their Phase 5–8 gates.
+
+## Progress update — 2026-09-30 04:58Z: Webots rebalance snapshot pressure
+
+- [x] Reproduced the live AARNN orchestrator instability: the rollback image
+  had restarted six times and was again consuming memory before its 16 GiB
+  limit. The shared Webots world continues saving state on `sm00`; its fleet
+  configuration remains intentionally empty until AARNN ingress is stable.
+- [x] Added `SnapshotMetadata` decoding in `src/runner.rs`. It keeps profile
+  backfill and exact matrix dimensions while serde skips weight arrays,
+  topology and runtime-state allocation for metadata-only reads. Reused that
+  projection in rebalance and avoided recomputing hierarchical placement when
+  a valid assignment is already published.
+- [x] Rebalance now avoids rebuilding `LoadNetwork` payloads for ready workers
+  and avoids copying a checkpoint already pending with the same target,
+  dimensions and bytes. Tests cover metadata-derived layer counts and pending
+  checkpoint-load reuse.
+- [x] Added a bounded `NetworkResources.load_fingerprint` report for the last
+  successfully applied legacy load command. Rebalance skips an identical
+  checkpoint only when the worker reports the matching snapshot, placement,
+  depth, model and learning-rule fingerprint; changed or unapplied loads are
+  still sent.
+- [x] `cargo test --locked --lib` passed (373 tests); `cargo check --locked
+  --all-features --lib --bins`, `cargo fmt --all` and both Webots Ansible
+  playbook syntax checks passed. Existing compiler warnings remain.
+- [~] The immutable AARNN image still needs a native ARM64/64K-HWE build and
+  rollout. The current Kubernetes orchestrator remains on its rollback image;
+  Webots bindings and live neural-to-actuator operation have not yet been
+  restored or verified.

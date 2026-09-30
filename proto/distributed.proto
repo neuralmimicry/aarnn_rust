@@ -283,6 +283,10 @@ message NetworkResources {
   uint64 num_neurons = 1;
   map<uint32, uint64> layer_neuron_counts = 2;
   float avg_step_time_ms = 3;
+  // Fingerprint of the last successfully applied legacy LoadNetwork command.
+  // Lets the orchestrator distinguish a warm worker from one that needs a
+  // changed checkpoint or placement without retransmitting large snapshots.
+  uint64 load_fingerprint = 4;
 }
 message JoinRequest {
   string node_id = 1;
