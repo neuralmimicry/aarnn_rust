@@ -34,6 +34,9 @@ use aarnn_rust::nmchain::{
     NmChainAccountSnapshot, NmChainClient, NmChainIdentityUpsertRequest, NmChainLedgerResponse,
     NmChainLoginObservedRequest, NmChainTokenMutationRequest,
 };
+use aarnn_rust::peripheral::{
+    ChannelKind, Direction, MAX_PERIPHERAL_SESSION_TTL_SECS, PeripheralSessionRegistry,
+};
 use aarnn_rust::runner::decode_snapshot_with_profile_backfill;
 use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager};
 use aarnn_rust::runtime_api::{
@@ -355,6 +358,10 @@ struct AppState {
     /// orchestrator state. It is deliberately optional for the legacy
     /// reference profile; missing state makes management requests fail closed.
     management: Option<Arc<StdMutex<PersistedManagementOrchestrator>>>,
+    /// Locally consented, short-lived peripheral sessions. Exact-scoped grant
+    /// decisions come from the existing orchestrator Policy; this process-local
+    /// registry remains reference-only until Phase 7 authority can replicate it.
+    peripheral_sessions: Arc<StdMutex<PeripheralSessionRegistry>>,
     /// In-memory migration journals are used only when the reference web
     /// profile has no `NM_MIGRATION_JOURNAL_DIR`. Production deployments set
     /// that directory so every transition uses the crash-safe journal.
@@ -578,6 +585,9 @@ fn api_access_requirement(method: &Method, path: &str) -> Option<AccessRequireme
         }
         ("GET", ["api", "management", "migrations", _]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "operations", _]) => Some(AccessRequirement::aarnn_observe()),
+        ("POST", ["api", "peripheral", "sessions"])
+        | ("DELETE", ["api", "peripheral", "sessions"]) => Some(AccessRequirement::aarnn_use()),
+        ("GET", ["api", "peripheral", "sessions"]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "status"]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "snapshot"]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "cluster_snapshot"]) => Some(AccessRequirement::aarnn_observe()),
@@ -752,11 +762,13 @@ fn apply_cors_headers(headers: &mut HeaderMap, origin: &str) {
     );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static("Content-Type, Authorization, X-Requested-With"),
+        HeaderValue::from_static(
+            "Content-Type, Authorization, X-Requested-With, X-AARNN-Peripheral-Session",
+        ),
     );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_METHODS,
-        HeaderValue::from_static("GET, POST, OPTIONS"),
+        HeaderValue::from_static("GET, POST, DELETE, OPTIONS"),
     );
     headers.insert(
         header::ACCESS_CONTROL_MAX_AGE,
@@ -1823,6 +1835,57 @@ struct ManagementHttpMigrationQuery {
     observed_leader_term: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PeripheralInputGrantConfig {
+    principal: String,
+    brain_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PeripheralSessionCreatePayload {
+    brain_id: String,
+    local_consent: bool,
+    #[serde(default = "default_peripheral_session_ttl")]
+    ttl_secs: u64,
+}
+
+const fn default_peripheral_session_ttl() -> u64 {
+    300
+}
+
+fn peripheral_input_grants_from_env() -> anyhow::Result<Vec<(String, String)>> {
+    let Some(raw) = env_opt("NM_PERIPHERAL_INPUT_GRANTS_JSON") else {
+        return Ok(Vec::new());
+    };
+    parse_peripheral_input_grants_json(&raw)
+}
+
+fn parse_peripheral_input_grants_json(raw: &str) -> anyhow::Result<Vec<(String, String)>> {
+    let configured: Vec<PeripheralInputGrantConfig> = serde_json::from_str(&raw)
+        .context("NM_PERIPHERAL_INPUT_GRANTS_JSON must be a JSON array of scoped grants")?;
+    if configured.len() > 1024 {
+        anyhow::bail!("NM_PERIPHERAL_INPUT_GRANTS_JSON exceeds the 1024-grant bound");
+    }
+    configured
+        .into_iter()
+        .map(|grant| {
+            let principal = grant.principal.trim();
+            let brain_id = grant.brain_id.trim();
+            if principal.is_empty()
+                || principal.len() > 256
+                || brain_id.is_empty()
+                || brain_id.len() > 256
+            {
+                anyhow::bail!(
+                    "peripheral input grants require bounded principal and brain_id values"
+                );
+            }
+            Ok((principal.to_owned(), brain_id.to_owned()))
+        })
+        .collect()
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // --all-features links reqwest's aws-lc-rs and tonic's ring backend in
@@ -1979,6 +2042,7 @@ async fn main() -> anyhow::Result<()> {
     let cors = CorsConfig {
         allowed_origins: cors_allowed_origins_from_env(),
     };
+    let peripheral_input_grants = peripheral_input_grants_from_env()?;
 
     // The browser management client is enabled only when an explicit
     // persisted orchestrator state path is supplied. This keeps the
@@ -2000,6 +2064,13 @@ async fn main() -> anyhow::Result<()> {
                 ] {
                     policy.grant(principal, capability);
                 }
+            }
+            for (principal, brain_id) in &peripheral_input_grants {
+                policy.grant_for_brain(
+                    principal.clone(),
+                    brain_id.clone(),
+                    ManagementCapability::PeripheralInput,
+                );
             }
             let leader_term = env_opt("NM_LEASE_TERM")
                 .and_then(|value| value.parse().ok())
@@ -2060,6 +2131,7 @@ async fn main() -> anyhow::Result<()> {
         session_store,
         runtime,
         management,
+        peripheral_sessions: Arc::new(StdMutex::new(PeripheralSessionRegistry::default())),
         migration_journals: Arc::new(StdMutex::new(BTreeMap::new())),
         chain,
         token_pricing,
@@ -2139,6 +2211,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/fpv/jobs/{job_id}/cancel", post(fpv_cancel_job))
         .route("/fpv/jobs/{job_id}/retry", post(fpv_retry_job))
         .route("/fpv/jobs/{job_id}/video", get(fpv_download_video))
+        .route(
+            "/peripheral/sessions",
+            get(get_peripheral_session)
+                .post(create_peripheral_session)
+                .delete(revoke_peripheral_session),
+        )
         .route("/status", get(status))
         .route("/snapshot", get(snapshot))
         .route("/cluster_snapshot", get(cluster_snapshot))
@@ -3322,6 +3400,65 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             }
           }
         },
+        "/api/peripheral/sessions": {
+          "post": {
+            "tags": ["peripheral"],
+            "summary": "Create a locally consented AER input session",
+            "description": "Requires a deployment grant scoped to the authenticated principal and brain. The returned session expires within 15 minutes and must be revoked when input stops.",
+            "operationId": "createPeripheralInputSession",
+            "security": [{ "cookieAuth": [] }],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "required": ["brain_id", "local_consent"],
+                    "properties": {
+                      "brain_id": { "type": "string" },
+                      "local_consent": { "type": "boolean", "enum": [true] },
+                      "ttl_secs": { "type": "integer", "minimum": 1, "maximum": 900, "default": 300 }
+                    }
+                  }
+                }
+              }
+            },
+            "responses": {
+              "201": { "description": "Locally consented session created; response contains the session token and visible expiry." },
+              "400": { "description": "Invalid scope, expiry, or missing local consent." },
+              "403": { "description": "No exact principal/brain AER-input grant or authentication is disabled." },
+              "503": { "description": "Peripheral session registry unavailable or at capacity." }
+            }
+          },
+          "get": {
+            "tags": ["peripheral"],
+            "summary": "Get owned peripheral session status",
+            "operationId": "getPeripheralSession",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              { "name": "X-AARNN-Peripheral-Session", "in": "header", "required": true, "schema": { "type": "string" } }
+            ],
+            "responses": {
+              "200": { "description": "Session scope, expiry, consent time and active indicator state." },
+              "403": { "description": "Session belongs to another principal or authentication is disabled." },
+              "404": { "description": "Session was not found." }
+            }
+          },
+          "delete": {
+            "tags": ["peripheral"],
+            "summary": "Revoke an owned peripheral session immediately",
+            "operationId": "revokePeripheralSession",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              { "name": "X-AARNN-Peripheral-Session", "in": "header", "required": true, "schema": { "type": "string" } }
+            ],
+            "responses": {
+              "200": { "description": "Session revoked and local indicator marked inactive." },
+              "403": { "description": "Session belongs to another principal or authentication is disabled." },
+              "404": { "description": "Session was not found." }
+            }
+          }
+        },
         "/api/aer/inject": {
               "post": {
                 "tags": ["network"],
@@ -3329,6 +3466,9 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
                 "description": "Injects sensory spikes into the next simulation step. Accepts raw spike transports (`aer_payload_hex`, `spike_indices`) or continuous `input_values` that are encoded using the provided `spike_io` policy.",
             "operationId": "injectAerExchange",
             "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              { "name": "X-AARNN-Peripheral-Session", "in": "header", "required": true, "schema": { "type": "string" }, "description": "Active locally consented AER input session scoped to the request brain." }
+            ],
             "requestBody": {
               "required": true,
               "content": {
@@ -3368,6 +3508,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "200": { "description": "AER exchange accepted.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AerInjectResponse" } } } },
               "400": { "description": "Invalid payload or missing fields.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "Missing, expired, revoked, or incorrectly scoped peripheral session.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Target connection/stream unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
             }
@@ -3379,6 +3520,9 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "description": "Resolves an active worker when node_id is omitted, admits the frame through the distributed AER path, and returns output activity observed after admission.",
             "operationId": "inferAerExchange",
             "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              { "name": "X-AARNN-Peripheral-Session", "in": "header", "required": true, "schema": { "type": "string" }, "description": "Active locally consented AER input session scoped to the request brain." }
+            ],
             "requestBody": {
               "required": true,
               "content": {
@@ -3391,6 +3535,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "200": { "description": "Admission and output spike result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
               "400": { "description": "Invalid or empty sensory frame.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "Missing, expired, revoked, or incorrectly scoped peripheral session.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "No active worker or inference transport failure.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
@@ -3403,6 +3548,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "operationId": "streamAerExchange",
             "security": [{ "cookieAuth": [] }],
             "parameters": [
+              { "name": "X-AARNN-Peripheral-Session", "in": "header", "required": true, "schema": { "type": "string" }, "description": "Active locally consented AER input session scoped to every stream frame." },
               { "name": "network_id", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Optional default network ID for all frames; if omitted each frame must include `network_id`." },
               { "name": "addr", "in": "query", "required": false, "schema": { "type": "string" } },
               { "name": "node_id", "in": "query", "required": false, "schema": { "type": "string" } },
@@ -3427,6 +3573,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "200": { "description": "Stream accepted and forwarded.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AerInjectResponse" } } } },
               "400": { "description": "Invalid NDJSON or missing data.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "Missing, expired, revoked, or incorrectly scoped peripheral session.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Target connection/stream unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
@@ -3435,9 +3582,12 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
           "post": {
             "tags": ["integration"],
             "summary": "Mirror Gail LLM I/O into the AARNN runtime",
-            "description": "Accepts a mirrored Gail input or output exchange, persists the exchange beneath the runtime root, optionally stimulates the selected network with the supplied AER payload, and can return a low-confidence bootstrap candidate reply. This route is intended for backend integrations and is normally called with a Customers-issued Gail service-account bearer token.",
+            "description": "Accepts a mirrored Gail input or output exchange, persists the exchange beneath the runtime root, optionally stimulates the selected network with the supplied AER payload, and can return a low-confidence bootstrap candidate reply. When network_id is set, the authenticated principal must have an exact peripheral-input grant and an active locally consented AER session. Backend integrations must send that session in X-AARNN-Peripheral-Session.",
             "operationId": "mirrorLlmExchange",
             "security": [{ "cookieAuth": [] }, { "bearerAuth": [] }],
+            "parameters": [
+              { "name": "X-AARNN-Peripheral-Session", "in": "header", "required": false, "schema": { "type": "string" }, "description": "Required when network_id is supplied; identifies the active scoped AER input session." }
+            ],
             "requestBody": {
               "required": true,
               "content": {
@@ -3449,7 +3599,8 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "responses": {
               "200": { "description": "Mirrored exchange accepted.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LlmMirrorResponse" } } } },
               "400": { "description": "Invalid mirrored exchange payload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "Missing, expired, revoked, or incorrectly scoped peripheral session.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
         },
@@ -7738,8 +7889,241 @@ async fn send_aer_inference(
 /// already encoded AER frame to this bounded HTTP gateway; the gateway keeps
 /// target resolution, admission, logical-time assignment, and output history
 /// on the same distributed path used by the native simulators.
+fn peripheral_failure(status: StatusCode, message: impl ToString) -> Response {
+    (status, Json(json!({ "error": message.to_string() }))).into_response()
+}
+
+fn has_explicit_peripheral_input_grant(
+    state: &AppState,
+    principal_id: &str,
+    brain_id: &str,
+) -> bool {
+    let Some(management) = &state.management else {
+        return false;
+    };
+    let Ok(management) = management.lock() else {
+        return false;
+    };
+    management.state().allows_explicitly_for_brain(
+        &Principal {
+            id: principal_id.to_owned(),
+        },
+        brain_id,
+        &ManagementCapability::PeripheralInput,
+    )
+}
+
+async fn create_peripheral_session(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(payload): Json<PeripheralSessionCreatePayload>,
+) -> Response {
+    if state.auth.mode == AuthMode::None {
+        return peripheral_failure(
+            StatusCode::FORBIDDEN,
+            "peripheral access is disabled when web authentication is set to none",
+        );
+    }
+    if payload.ttl_secs == 0 || payload.ttl_secs > MAX_PERIPHERAL_SESSION_TTL_SECS {
+        return peripheral_failure(
+            StatusCode::BAD_REQUEST,
+            format!("ttl_secs must be between 1 and {MAX_PERIPHERAL_SESSION_TTL_SECS}"),
+        );
+    }
+    let brain_id = payload.brain_id.trim();
+    if !has_explicit_peripheral_input_grant(&state, &user.username, brain_id) {
+        return peripheral_failure(
+            StatusCode::FORBIDDEN,
+            "no peripheral-input grant exists for this principal and brain",
+        );
+    }
+    let id = CsrfToken::new_random().secret().to_owned();
+    let mut registry = match state.peripheral_sessions.lock() {
+        Ok(registry) => registry,
+        Err(_) => {
+            return peripheral_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "peripheral authorization state is unavailable",
+            );
+        }
+    };
+    let session = match registry.create(
+        id,
+        user.username,
+        brain_id.to_owned(),
+        ChannelKind::Aer,
+        Direction::Input,
+        now_ts(),
+        payload.ttl_secs,
+        payload.local_consent,
+    ) {
+        Ok(session) => session,
+        Err(error) => {
+            let status = match &error {
+                aarnn_rust::peripheral::PeripheralError::PeripheralConsentRequired => {
+                    StatusCode::BAD_REQUEST
+                }
+                aarnn_rust::peripheral::PeripheralError::PeripheralSessionCapacityExceeded => {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+                _ => StatusCode::BAD_REQUEST,
+            };
+            return peripheral_failure(status, error);
+        }
+    };
+    let mut response = (
+        StatusCode::CREATED,
+        Json(json!({
+            "session_id": session.id,
+            "brain_id": session.brain_id,
+            "channel": "aer",
+            "direction": "input",
+            "created_at_unix_secs": session.created_at_unix_secs,
+            "expires_at_unix_secs": session.expires_at_unix_secs,
+            "local_consent_at_unix_secs": session.local_consent_at_unix_secs,
+            "indicator_active": session.indicator_active(now_ts()),
+        })),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+async fn get_peripheral_session(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    headers: HeaderMap,
+) -> Response {
+    if state.auth.mode == AuthMode::None {
+        return peripheral_failure(StatusCode::FORBIDDEN, "authentication is required");
+    }
+    let session_id = match peripheral_session_token(&headers) {
+        Ok(session_id) => session_id,
+        Err(response) => return response,
+    };
+    let registry = match state.peripheral_sessions.lock() {
+        Ok(registry) => registry,
+        Err(_) => {
+            return peripheral_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "peripheral authorization state is unavailable",
+            );
+        }
+    };
+    let Some(session) = registry.get(session_id) else {
+        return peripheral_failure(StatusCode::NOT_FOUND, "peripheral session was not found");
+    };
+    if session.principal != user.username {
+        return peripheral_failure(StatusCode::FORBIDDEN, "peripheral session owner mismatch");
+    }
+    Json(json!({
+        "brain_id": session.brain_id.clone(),
+        "channel": "aer",
+        "direction": "input",
+        "created_at_unix_secs": session.created_at_unix_secs,
+        "expires_at_unix_secs": session.expires_at_unix_secs,
+        "local_consent_at_unix_secs": session.local_consent_at_unix_secs,
+        "revoked_at_unix_secs": session.revoked_at_unix_secs,
+        "indicator_active": session.indicator_active(now_ts()),
+    }))
+    .into_response()
+}
+
+async fn revoke_peripheral_session(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    headers: HeaderMap,
+) -> Response {
+    if state.auth.mode == AuthMode::None {
+        return peripheral_failure(StatusCode::FORBIDDEN, "authentication is required");
+    }
+    let session_id = match peripheral_session_token(&headers) {
+        Ok(session_id) => session_id,
+        Err(response) => return response,
+    };
+    let mut registry = match state.peripheral_sessions.lock() {
+        Ok(registry) => registry,
+        Err(_) => {
+            return peripheral_failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "peripheral authorization state is unavailable",
+            );
+        }
+    };
+    match registry.revoke(session_id, &user.username, now_ts()) {
+        Ok(session) => Json(json!({
+            "revoked": true,
+            "brain_id": session.brain_id,
+            "channel": "aer",
+            "direction": "input",
+            "revoked_at_unix_secs": session.revoked_at_unix_secs,
+            "indicator_active": false,
+        }))
+        .into_response(),
+        Err(aarnn_rust::peripheral::PeripheralError::PeripheralSessionNotFound) => {
+            peripheral_failure(StatusCode::NOT_FOUND, "peripheral session was not found")
+        }
+        Err(error) => peripheral_failure(StatusCode::FORBIDDEN, error),
+    }
+}
+
+fn peripheral_session_token(headers: &HeaderMap) -> Result<&str, Response> {
+    headers
+        .get("x-aarnn-peripheral-session")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            peripheral_failure(
+                StatusCode::FORBIDDEN,
+                "an active peripheral session is required",
+            )
+        })
+}
+
+fn authorize_peripheral_aer_input(
+    state: &AppState,
+    user: &AuthUser,
+    headers: &HeaderMap,
+    brain_id: &str,
+) -> Result<(), Response> {
+    if state.auth.mode == AuthMode::None {
+        return Err(peripheral_failure(
+            StatusCode::FORBIDDEN,
+            "peripheral access is disabled when web authentication is set to none",
+        ));
+    }
+    if !has_explicit_peripheral_input_grant(state, &user.username, brain_id.trim()) {
+        return Err(peripheral_failure(
+            StatusCode::FORBIDDEN,
+            "the principal no longer has a peripheral-input grant for this brain",
+        ));
+    }
+    let session_id = peripheral_session_token(headers)?;
+    let registry = state.peripheral_sessions.lock().map_err(|_| {
+        peripheral_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "peripheral authorization state is unavailable",
+        )
+    })?;
+    registry
+        .authorize(
+            session_id,
+            &user.username,
+            brain_id.trim(),
+            ChannelKind::Aer,
+            Direction::Input,
+            now_ts(),
+        )
+        .map_err(|error| peripheral_failure(StatusCode::FORBIDDEN, error))
+}
+
 async fn aer_infer(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    headers: HeaderMap,
     Json(payload): Json<AerInferencePayload>,
 ) -> impl IntoResponse {
     if payload.network_id.trim().is_empty() {
@@ -7748,6 +8132,11 @@ async fn aer_infer(
             Json(json!({ "error": "network_id is required" })),
         )
             .into_response();
+    }
+    if let Err(response) =
+        authorize_peripheral_aer_input(&state, &user, &headers, &payload.network_id)
+    {
+        return response;
     }
     if payload
         .input_values
@@ -7854,8 +8243,19 @@ const LLM_MIRROR_DEFAULT_SPIKES: usize = 128;
 async fn llm_mirror(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
+    headers: HeaderMap,
     Json(payload): Json<LlmMirrorPayload>,
 ) -> impl IntoResponse {
+    if let Some(network_id) = payload
+        .network_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|network_id| !network_id.is_empty())
+    {
+        if let Err(response) = authorize_peripheral_aer_input(&state, &user, &headers, network_id) {
+            return response;
+        }
+    }
     let request_id = payload.request_id.trim().to_string();
     if request_id.is_empty() {
         return (
@@ -8435,8 +8835,15 @@ fn api_error_message(error: ApiError) -> String {
 
 async fn aer_inject(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    headers: HeaderMap,
     Json(payload): Json<AerInjectPayload>,
 ) -> impl IntoResponse {
+    if let Err(response) =
+        authorize_peripheral_aer_input(&state, &user, &headers, &payload.network_id)
+    {
+        return response;
+    }
     let orchestrator_addr =
         match resolve_addr_or_default(payload.addr, state.default_orchestrator.clone()) {
             Ok(addr) => addr,
@@ -8493,9 +8900,20 @@ async fn aer_inject(
 
 async fn aer_stream(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Query(query): Query<AerStreamQuery>,
+    headers: HeaderMap,
     body: axum::body::Body,
 ) -> impl IntoResponse {
+    if state.auth.mode == AuthMode::None {
+        return peripheral_failure(
+            StatusCode::FORBIDDEN,
+            "peripheral access is disabled when web authentication is set to none",
+        );
+    }
+    if let Err(response) = peripheral_session_token(&headers) {
+        return response;
+    }
     let orchestrator_addr =
         match resolve_addr_or_default(query.addr, state.default_orchestrator.clone()) {
             Ok(addr) => addr,
@@ -8702,6 +9120,12 @@ async fn aer_stream(
         }
     };
 
+    if let Err(response) =
+        authorize_peripheral_aer_input(&state, &user, &headers, &resolved_network_id)
+    {
+        return response;
+    }
+
     let target_addr = if query.node_id.is_some() {
         match resolve_network_addr(
             orchestrator_addr.clone(),
@@ -8882,6 +9306,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn peripheral_session_token_headers_are_supported_for_cors_clients() {
+        let mut headers = HeaderMap::new();
+        apply_cors_headers(&mut headers, "https://workstation.example");
+        let allowed_headers = headers
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .and_then(|value| value.to_str().ok())
+            .expect("allow headers");
+        assert!(allowed_headers.contains("X-AARNN-Peripheral-Session"));
+        let allowed_methods = headers
+            .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+            .and_then(|value| value.to_str().ok())
+            .expect("allow methods");
+        assert!(allowed_methods.contains("DELETE"));
+    }
+
+    #[test]
+    fn peripheral_input_grant_configuration_is_explicit_and_brain_scoped() {
+        let grants =
+            parse_peripheral_input_grants_json(r#"[{"principal":"alice","brain_id":"brain-a"}]"#)
+                .expect("valid deployment grant list");
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0], ("alice".to_owned(), "brain-a".to_owned()));
+        assert!(
+            parse_peripheral_input_grants_json(
+                r#"[{"principal":"alice","brain_id":"brain-a","all_brains":true}]"#
+            )
+            .is_err()
+        );
+        assert!(
+            parse_peripheral_input_grants_json(r#"[{"principal":"alice","brain_id":" "}]"#)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn remote_grpc_requests_carry_bearer_credentials() {
         let mut request = Request::new(StatusRequest {});
         attach_grpc_bearer(&mut request, "remote-token");
@@ -8995,6 +9454,18 @@ mod tests {
         );
         assert_eq!(
             api_access_requirement(&Method::POST, "/api/aer/infer"),
+            Some(AccessRequirement::aarnn_use())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::POST, "/api/peripheral/sessions"),
+            Some(AccessRequirement::aarnn_use())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/peripheral/sessions"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::DELETE, "/api/peripheral/sessions"),
             Some(AccessRequirement::aarnn_use())
         );
         assert_eq!(

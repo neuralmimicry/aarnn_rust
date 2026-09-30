@@ -51,7 +51,7 @@ pub struct Policy {
     /// cannot be used as permission on another.
     grants: BTreeMap<String, BTreeSet<Capability>>,
     #[serde(default)]
-    brain_grants: BTreeMap<(String, String), BTreeSet<Capability>>,
+    brain_grants: BTreeMap<String, BTreeMap<String, BTreeSet<Capability>>>,
 }
 
 impl Policy {
@@ -78,7 +78,9 @@ impl Policy {
         capability: Capability,
     ) {
         self.brain_grants
-            .entry((principal.into(), brain_id.into()))
+            .entry(principal.into())
+            .or_default()
+            .entry(brain_id.into())
             .or_default()
             .insert(capability);
     }
@@ -92,8 +94,68 @@ impl Policy {
         self.allows(principal, capability)
             || self
                 .brain_grants
-                .get(&(principal.id.clone(), brain_id.to_owned()))
+                .get(&principal.id)
+                .and_then(|brains| brains.get(brain_id))
                 .is_some_and(|capabilities| capabilities.contains(capability))
+    }
+
+    /// Check only a grant attached to this exact brain. Peripheral access
+    /// must not inherit a cluster-wide management permission.
+    pub fn allows_explicitly_for_brain(
+        &self,
+        principal: &Principal,
+        brain_id: &str,
+        capability: &Capability,
+    ) -> bool {
+        self.brain_grants
+            .get(&principal.id)
+            .and_then(|brains| brains.get(brain_id))
+            .is_some_and(|capabilities| capabilities.contains(capability))
+    }
+
+    fn explicit_brain_grants_for(&self, capability: &Capability) -> BTreeSet<(String, String)> {
+        self.brain_grants
+            .iter()
+            .flat_map(|(principal, brains)| {
+                brains.iter().filter_map(|(brain_id, capabilities)| {
+                    capabilities
+                        .contains(capability)
+                        .then(|| (principal.clone(), brain_id.clone()))
+                })
+            })
+            .collect()
+    }
+
+    fn replace_explicit_brain_grants(
+        &mut self,
+        capability: Capability,
+        grants: impl IntoIterator<Item = (String, String)>,
+    ) -> bool {
+        let replacement = grants.into_iter().collect::<BTreeSet<_>>();
+        let current = self.explicit_brain_grants_for(&capability);
+        let had_global_grant = self
+            .grants
+            .values()
+            .any(|capabilities| capabilities.contains(&capability));
+        if current == replacement && !had_global_grant {
+            return false;
+        }
+        for capabilities in self.grants.values_mut() {
+            capabilities.remove(&capability);
+        }
+        self.grants
+            .retain(|_, capabilities| !capabilities.is_empty());
+        for brains in self.brain_grants.values_mut() {
+            for capabilities in brains.values_mut() {
+                capabilities.remove(&capability);
+            }
+            brains.retain(|_, capabilities| !capabilities.is_empty());
+        }
+        self.brain_grants.retain(|_, brains| !brains.is_empty());
+        for (principal, brain_id) in replacement {
+            self.grant_for_brain(principal, brain_id, capability.clone());
+        }
+        true
     }
 }
 
@@ -1515,6 +1577,25 @@ impl ManagementOrchestrator {
         self.policy
             .allows_for_brain(principal, brain_id, capability)
     }
+
+    pub fn allows_explicitly_for_brain(
+        &self,
+        principal: &Principal,
+        brain_id: &str,
+        capability: &Capability,
+    ) -> bool {
+        self.policy
+            .allows_explicitly_for_brain(principal, brain_id, capability)
+    }
+
+    fn replace_explicit_brain_grants(
+        &mut self,
+        capability: Capability,
+        grants: impl IntoIterator<Item = (String, String)>,
+    ) -> bool {
+        self.policy
+            .replace_explicit_brain_grants(capability, grants)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1542,6 +1623,8 @@ impl PersistedManagementOrchestrator {
         leader_term: LeaseTerm,
         policy: Policy,
     ) -> Result<Self, PersistedAuthorityError> {
+        let configured_peripheral_input_grants =
+            policy.explicit_brain_grants_for(&Capability::PeripheralInput);
         let path = path.into();
         let lock_path = path.with_extension("management.lock");
         if let Some(parent) = path.parent() {
@@ -1576,6 +1659,11 @@ impl PersistedManagementOrchestrator {
                     }));
                 }
                 let mut state = document.state;
+                let peripheral_grants_changed = state.replace_explicit_brain_grants(
+                    Capability::PeripheralInput,
+                    configured_peripheral_input_grants,
+                );
+                let mut state_changed = peripheral_grants_changed;
                 let was_legacy_audit = state.audit.iter().any(|record| record.sequence == 0);
                 if was_legacy_audit {
                     reseal_legacy_audit(&mut state.audit)
@@ -1585,9 +1673,12 @@ impl PersistedManagementOrchestrator {
                 if leader_term > state.leader_term() {
                     state.replace_leader_term(leader_term);
                     state.requeue_running_after_takeover();
-                    persist_management_state(&path, &state)?;
+                    state_changed = true;
                 }
-                if was_legacy_audit && leader_term == state.leader_term() {
+                if was_legacy_audit {
+                    state_changed = true;
+                }
+                if state_changed {
                     persist_management_state(&path, &state)?;
                 }
                 Ok(state)
@@ -4835,6 +4926,44 @@ mod tests {
     }
 
     #[test]
+    fn peripheral_input_requires_an_exact_brain_grant_and_can_be_revoked() {
+        let principal = Principal {
+            id: "alice".to_owned(),
+        };
+        let mut policy = Policy::default();
+        policy.grant("alice", Capability::PeripheralInput);
+        assert!(policy.allows_for_brain(&principal, "brain-a", &Capability::PeripheralInput));
+        assert!(!policy.allows_explicitly_for_brain(
+            &principal,
+            "brain-a",
+            &Capability::PeripheralInput
+        ));
+
+        policy.replace_explicit_brain_grants(
+            Capability::PeripheralInput,
+            [("alice".to_owned(), "brain-a".to_owned())],
+        );
+        assert!(policy.allows_explicitly_for_brain(
+            &principal,
+            "brain-a",
+            &Capability::PeripheralInput
+        ));
+        assert!(!policy.allows_explicitly_for_brain(
+            &principal,
+            "brain-b",
+            &Capability::PeripheralInput
+        ));
+
+        policy.replace_explicit_brain_grants(Capability::PeripheralInput, []);
+        assert!(!policy.allows_explicitly_for_brain(
+            &principal,
+            "brain-a",
+            &Capability::PeripheralInput
+        ));
+        assert!(!policy.allows_for_brain(&principal, "brain-a", &Capability::PeripheralInput));
+    }
+
+    #[test]
     fn lease_issue_requires_quorum_and_replaces_old_fencing_token() {
         let mut authority =
             QuorumLeaseAuthority::new(["cp-a", "cp-b", "cp-c"]).expect("valid quorum membership");
@@ -5173,6 +5302,44 @@ mod tests {
                 ManagementError::IdempotencyConflict(_)
             ))
         ));
+        fs::remove_file(&path).unwrap();
+        let _ = fs::remove_file(path.with_extension("management.lock"));
+    }
+
+    #[test]
+    fn persisted_peripheral_grants_follow_the_deployment_scope_on_restart() {
+        let path = std::env::temp_dir().join(format!(
+            "aarnn-peripheral-grants-{}-{}.json",
+            std::process::id(),
+            EventId::new(35).unwrap()
+        ));
+        let _ = fs::remove_file(&path);
+        let mut initial_policy = Policy::default();
+        initial_policy.grant_for_brain("alice", "brain-a", Capability::PeripheralInput);
+        let first =
+            PersistedManagementOrchestrator::open(&path, LeaseTerm::INITIAL, initial_policy)
+                .unwrap();
+        drop(first);
+
+        let mut updated_policy = Policy::default();
+        updated_policy.grant_for_brain("alice", "brain-b", Capability::PeripheralInput);
+        let reopened =
+            PersistedManagementOrchestrator::open(&path, LeaseTerm::INITIAL, updated_policy)
+                .unwrap();
+        let principal = Principal {
+            id: "alice".to_owned(),
+        };
+        assert!(!reopened.state().allows_explicitly_for_brain(
+            &principal,
+            "brain-a",
+            &Capability::PeripheralInput
+        ));
+        assert!(reopened.state().allows_explicitly_for_brain(
+            &principal,
+            "brain-b",
+            &Capability::PeripheralInput
+        ));
+        drop(reopened);
         fs::remove_file(&path).unwrap();
         let _ = fs::remove_file(path.with_extension("management.lock"));
     }

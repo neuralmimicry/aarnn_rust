@@ -18,6 +18,7 @@
   var canvas = document.getElementById("webgl-canvas");
   var message = document.getElementById("webgl-message");
   var transport = document.getElementById("webgl-transport");
+  var peripheralIndicator = document.getElementById("webgl-peripheral-indicator");
   var capability = document.getElementById("webgl-capability");
   var stepText = document.getElementById("webgl-step");
   var inputSpikeText = document.getElementById("webgl-input-spikes");
@@ -36,6 +37,7 @@
   var requestController = null;
   var robot = { x: 0, z: 0, heading: 0, phase: 0, actuators: [] };
   var aerSession = null;
+  var peripheralSessionId = null;
   var routeParams = new URLSearchParams(window.location.search || "");
   var routeNetwork = (routeParams.get("network_id") || "").trim();
   var routeNode = (routeParams.get("node_id") || "").trim();
@@ -151,6 +153,7 @@
     var deadline = window.setTimeout(function () { controller.abort(); }, 2000);
     if (socialMode) body.body_session = bodySession;
     var headers = { "Content-Type": "application/json" };
+    if (!socialMode && peripheralSessionId) headers["X-AARNN-Peripheral-Session"] = peripheralSessionId;
     if (socialMode) headers.Authorization = "Bearer " + bodyToken;
     fetch(socialMode ? "/api/body" : "/api/aer/infer", { method: "POST", credentials: "same-origin", signal: controller.signal, headers: headers, body: JSON.stringify(body) })
       .then(function (response) { return response.json().then(function (payload) { if (!response.ok) throw new Error(payload.error || "inference request failed"); return payload; }); })
@@ -166,6 +169,21 @@
   if (!gl) { capability.className = "webgl-note webgl-error"; capability.textContent = "WebGL unavailable"; setMessage("This browser does not expose WebGL. The neural runtime is unaffected; use Webots, Unity, or Unreal for rendered simulation.", "webgl-error"); }
   else { capability.className = "webgl-note webgl-ok"; capability.textContent = "WebGL available"; try { initGl(); } catch (error) { capability.textContent = "WebGL shader error"; setMessage(error.message, "webgl-error"); } }
   function disconnect() {
+    var revokedSessionId = peripheralSessionId;
+    peripheralSessionId = null;
+    if (revokedSessionId) {
+      fetch("/api/peripheral/sessions", {
+        method: "DELETE", credentials: "same-origin", keepalive: true,
+        headers: { "X-AARNN-Peripheral-Session": revokedSessionId }
+      }).then(function (response) {
+        if (peripheralIndicator) peripheralIndicator.textContent = response.ok || response.status === 404 ? "off" : "local input stopped; revoke pending";
+      }).catch(function () {
+        if (peripheralIndicator) peripheralIndicator.textContent = "local input stopped; server session expires within five minutes";
+      });
+      if (peripheralIndicator) peripheralIndicator.textContent = "revoking";
+    } else if (peripheralIndicator) {
+      peripheralIndicator.textContent = "off";
+    }
     if (bodySession) {
       fetch("/api/body/close", { method: "POST", headers: {"Content-Type":"application/json", "Authorization":"Bearer "+bodyToken}, body:JSON.stringify({body_session:bodySession}), keepalive:true }).catch(function () {});
       bodySession = "";
@@ -174,7 +192,7 @@
     connected = false; sessionGeneration += 1;
     if (requestController) requestController.abort();
     robot.actuators.fill(0); if (worldRenderer) worldRenderer.bodyDirty = true;
-    transport.textContent = "disconnected"; connectButton.textContent = "Connect brain";
+    transport.textContent = "disconnected"; connectButton.textContent = "Connect with local consent";
   }
   robotSelect.addEventListener("change", function () { disconnect(); updateProfile(); });
   networkInput.addEventListener("input", function () { disconnect(); updateProfile(); syncControlSurfaceLink(); });
@@ -183,7 +201,39 @@
     if (connected) { disconnect(); return; }
     if (bodyOpening) return;
     function ready() { connected = true; connectButton.textContent = "Disconnect"; aerSession = makeSession(); transport.className = "webgl-ok"; transport.textContent = "connected"; setMessage(socialMode ? "Local NAO social reference session active." : "Sensory frames are being admitted through the distributed AER gateway.", "webgl-ok"); }
-    if (!socialMode) { ready(); return; }
+    if (!socialMode) {
+      var brainId = networkInput.value.trim();
+      if (!brainId) { setMessage("Select a brain before requesting peripheral input consent.", "webgl-error"); return; }
+      var generation = sessionGeneration;
+      connectButton.disabled = true;
+      fetch("/api/peripheral/sessions", {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brain_id: brainId, local_consent: true, ttl_secs: 300 })
+      }).then(function (response) {
+        return response.json().then(function (payload) {
+          if (!response.ok) throw new Error(payload.error || "peripheral input grant denied");
+          return payload;
+        });
+      }).then(function (payload) {
+        if (generation !== sessionGeneration) {
+          fetch("/api/peripheral/sessions", {
+            method: "DELETE", credentials: "same-origin", keepalive: true,
+            headers: { "X-AARNN-Peripheral-Session": payload.session_id }
+          }).catch(function () {});
+          return;
+        }
+        peripheralSessionId = payload.session_id;
+        if (peripheralIndicator) {
+          peripheralIndicator.textContent = "AER input active until " + new Date(Number(payload.expires_at_unix_secs) * 1000).toLocaleTimeString();
+        }
+        ready();
+      }).catch(function (error) {
+        setMessage(error.message + " Rendering remains in offline preview mode.", "webgl-error");
+        if (peripheralIndicator) peripheralIndicator.textContent = "off";
+      }).finally(function () { connectButton.disabled = false; });
+      return;
+    }
     bodyToken = document.getElementById("nao-body-token").value.trim();
     var generation = sessionGeneration; bodyOpening = true;
     fetch("/api/body/open", {method:"POST", headers:{"Content-Type":"application/json", "Authorization":"Bearer "+bodyToken}, body:"{}"})

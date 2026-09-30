@@ -89,6 +89,7 @@ const ioInputUrl = document.getElementById("io-input-url");
 const ioAerBase = document.getElementById("io-aer-base");
 const ioSourceToggle = document.getElementById("io-source-toggle");
 const ioSourceStatus = document.getElementById("io-source-status");
+const ioPeripheralIndicator = document.getElementById("io-peripheral-indicator");
 const ioVideoControls = document.getElementById("io-video-controls");
 const ioVideoFile = document.getElementById("io-video-file");
 const ioVideoFilePick = document.getElementById("io-video-file-pick");
@@ -329,6 +330,8 @@ let snapshotFetchInFlight = false;
 let snapshotFetchQueued = false;
 let snapshotBudgetRefreshTimer = 0;
 let ioSourceRunner = null;
+let ioPeripheralSessionId = null;
+let ioPeripheralSessionOpening = false;
 let runtimeStatusRequestSeq = 0;
 let runtimeStatusFetchInFlight = false;
 let runtimeStatusFetchQueued = false;
@@ -6336,6 +6339,40 @@ function setIoStatus(text, cssClass = "io-status-idle") {
   ioSourceStatus.classList.remove("io-status-idle", "io-status-connecting", "io-status-active", "io-status-error");
   ioSourceStatus.classList.add(cssClass);
 }
+function setIoPeripheralIndicator(text) {
+  if (ioPeripheralIndicator) ioPeripheralIndicator.textContent = text;
+}
+async function createPeripheralInputSession(brainId) {
+  const response = await runtimeFetch("/api/peripheral/sessions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ brain_id: brainId, local_consent: true, ttl_secs: 300 })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `Peripheral grant request failed (${response.status})`);
+  }
+  if (typeof payload.session_id !== "string" || !payload.session_id) {
+    throw new Error("Peripheral gateway returned no session identifier");
+  }
+  return payload;
+}
+function revokePeripheralInputSession() {
+  const sessionId = ioPeripheralSessionId;
+  ioPeripheralSessionId = null;
+  if (!sessionId) return;
+  setIoPeripheralIndicator("Revoking local AER input consent…");
+  runtimeFetch("/api/peripheral/sessions", {
+    method: "DELETE",
+    headers: { "x-aarnn-peripheral-session": sessionId },
+    keepalive: true
+  }).then(response => {
+    if (!response.ok) throw new Error(`revoke failed (${response.status})`);
+    setIoPeripheralIndicator("AER input consent revoked; no peripheral session is active.");
+  }).catch(() => {
+    setIoPeripheralIndicator("Local AER input stopped. The server session will expire within five minutes.");
+  });
+}
 function syncIoControls() {
   if (!ioInputSource || !ioInputUrl || !ioAerBase || !ioSourceToggle) return;
   state.io.sourceType = normalizeIoSourceType(state.io.sourceType);
@@ -6346,8 +6383,8 @@ function syncIoControls() {
   const videoEnabled = ioInputSource.value === "video-file" || ioInputSource.value === "camera";
   ioInputUrl.disabled = !sourceEnabled || state.io.streaming;
   ioAerBase.disabled = !sourceEnabled || state.io.streaming;
-  ioSourceToggle.disabled = !sourceEnabled;
-  ioSourceToggle.textContent = state.io.streaming ? "Disconnect" : "Connect";
+  ioSourceToggle.disabled = !sourceEnabled || ioPeripheralSessionOpening;
+  ioSourceToggle.textContent = state.io.streaming ? "Disconnect and revoke" : "Connect with consent";
   if (ioVideoControls) ioVideoControls.hidden = !videoEnabled;
   if (ioVideoAudioControls) ioVideoAudioControls.hidden = !videoEnabled;
   if (ioVideoAudio) ioVideoAudio.checked = Boolean(state.io.videoAudioEnabled);
@@ -6402,11 +6439,21 @@ async function sendAerFrameToApi(frame, ctxDefaults) {
   if (!payload.aer_payload_hex && (!payload.spike_indices || payload.spike_indices.length === 0)) {
     return;
   }
+  if (!ioPeripheralSessionId) {
+    throw new Error("AER input is not active; connect again to grant a local session");
+  }
   const management = generatedManagementClient();
   if (!management) {
     throw new Error("Versioned management client unavailable; AER admission refused");
   }
-  const resp = await management.injectAer(payload);
+  const resp = await runtimeFetch("/api/aer/inject", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-aarnn-peripheral-session": ioPeripheralSessionId
+    },
+    body: JSON.stringify(payload)
+  });
   if (!resp.ok) {
     let message = `AER inject failed (${resp.status})`;
     try {
@@ -6419,7 +6466,7 @@ async function sendAerFrameToApi(frame, ctxDefaults) {
   }
 }
 async function startIoSourceStream() {
-  if (state.io.streaming) return;
+  if (state.io.streaming || ioPeripheralSessionOpening) return;
   if (state.io.sourceType !== "aer-http-stream") {
     setIoStatus("Source disabled", "io-status-idle");
     return;
@@ -6440,6 +6487,22 @@ async function startIoSourceStream() {
     setIoStatus("Live source streaming is not supported in this browser.", "io-status-error");
     return;
   }
+  ioPeripheralSessionOpening = true;
+  syncIoControls();
+  setIoStatus("Requesting scoped AER input grant…", "io-status-connecting");
+  try {
+    const session = await createPeripheralInputSession(state.activeNetwork);
+    ioPeripheralSessionId = session.session_id;
+    const expiry = new Date(Number(session.expires_at_unix_secs) * 1000).toLocaleTimeString();
+    setIoPeripheralIndicator(`Local consent active for AER input to ${state.activeNetwork}; session expires at ${expiry}. Disconnect revokes it immediately.`);
+  } catch (error) {
+    setIoStatus(`AER input denied: ${error instanceof Error ? error.message : String(error)}`, "io-status-error");
+    setIoPeripheralIndicator("No peripheral session is active.");
+    ioPeripheralSessionOpening = false;
+    syncIoControls();
+    return;
+  }
+  ioPeripheralSessionOpening = false;
   const controller = new AbortController();
   const defaults = {
     addr: state.active,
@@ -6517,6 +6580,7 @@ async function startIoSourceStream() {
   } finally {
     state.io.streaming = false;
     ioSourceRunner = null;
+    revokePeripheralInputSession();
     syncIoControls();
   }
 }
@@ -6526,6 +6590,7 @@ function stopIoSourceStream() {
     ioSourceRunner.controller.abort();
   }
   ioSourceRunner = null;
+  revokePeripheralInputSession();
   setIoStatus("Disconnected", "io-status-idle");
   syncIoControls();
 }

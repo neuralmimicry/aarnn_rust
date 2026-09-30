@@ -50,12 +50,57 @@ The intended modules are `peripheral/session`, `peripheral/clock`, `peripheral/a
 The current checkout resolves the implementation paths to `src/providers.rs` and
 `src/ui.rs` for the native Rust UI, `web_ui/index.html`, `web_ui/app.js` and
 `web_ui/style.css` for the browser shell, `apps/android/app/src/main/**` for
-the Android shell, and no checked-in `apps/ios` project. The existing visual
+the Android shell, and `apps/ios/*.swift` for the portable SwiftUI source (there
+is no checked-in Xcode project). The existing visual
 providers produce sensory spikes but do not retain a preview frame; the web
 input panel only admits HTTP AER; Android reports camera/media unavailable;
 and the flat CLI has no video-file or camera source flags. This feature closes
 the user-visible preview/parity slice while retaining the governed admission
 boundary and recording the missing iOS project as a delivery constraint.
+
+The INV-017 ingress review resolves the current workspace to the root Cargo
+package/library, `aarnn-biox6-exporter`, and `tools/xtask` (`cargo metadata
+--format-version 1 --no-deps`). The relevant authorization and ingress code is
+in `src/management.rs`, `src/peripheral.rs`, `src/bin/web_ui.rs`,
+`src/distributed.rs`, and `proto/distributed.proto`; the Webots client is under
+`webots_service/`. `build.rs` generates tonic/prost Rust bindings from the two
+protobuf sources into Cargo's build output. No `CONTRIBUTING` file or
+deployment reference to `NM_PERIPHERAL_INPUT_GRANTS_JSON` was found. CI's
+authoritative host checks include formatting, Clippy, all-feature check, the
+library/web-UI tests and integration tests; the ARM runner executes the
+all-feature check/build and its focused runner suite. Android is a Gradle
+reference shell with no signing credentials; iOS currently has Swift sources
+but no Xcode project, signing configuration or generated XCFramework.
+
+On `main` at `345b788`, the browser AER routes `/api/aer/inject`,
+`/api/aer/infer`, and `/api/aer/stream` are protected only by general
+`aarnn:use`; `AuthMode::None` bypasses that service check. `Capability` already
+contains `PeripheralInput` and `PeripheralOutput`, but these capabilities are
+not consulted by those routes. `src/peripheral.rs` has only caller-supplied
+input/output booleans on a bound channel; it does not yet model a principal-
+and-brain-scoped grant, expiry, revocation, or a local-consent/indicator state.
+The distributed `PrepareSensoryInput`/`CommitSensoryInput`/`AbortSensoryInput`
+methods are worker-to-worker admission and do not supply workstation consent.
+The reference browser gateway now reads an exact principal/brain AER-input
+grant list from `NM_PERIPHERAL_INPUT_GRANTS_JSON`, formatted as
+`[{"principal":"...","brain_id":"..."}]`. The matching authenticated
+principal must still create a locally consented session (300-second default,
+900-second maximum) before `/api/aer/inject`, `/api/aer/infer`, or
+`/api/aer/stream` accepts input. The short-lived session can be inspected and
+revoked by its owner; `AuthMode::None` always denies it. The registry is
+process-local reference state and is not Phase 7 replicated authority, so
+restart removes active sessions and production workstation I/O remains gated.
+
+The local and origin Codex branch `codex/webots-api-ingress-20260929` is still
+checked out in `/tmp/aarnn-webots-api-ingress-20260930` and contains five
+commits beyond `main`. Its latest review adds a principal/network allow-list
+and fails closed when the gateway bearer is unconfigured, but the allow-list is
+deployment-static and has no session lease, immediate revocation, or local
+consent/indicator lifecycle. Keep it unmerged until this slice closes those
+gaps and the relevant security tests pass. The prior Phase 7 plan records its
+replicated-authority, identity, and audit gates as incomplete; this change may
+add a fail-closed reference/session contract, but it must not claim production
+management authority or enable `workstation_io`.
 
 ## Architecture and safety constraints
 
@@ -119,6 +164,46 @@ Profile causal critical paths, allocator/state layout, queues, batching, GPU tra
 Provide persisted-state/config/deployment migrations, rolling-upgrade and rollback rehearsal. Close all deferred tests, publish project/architecture/protocol/security/scientific/runbook documentation, remove layer-group fallback and temporary flags, and prove no old direct-worker/layer-broadcast path is reachable.
 
 ## Progress
+
+- [~] `2026-09-30 06:32Z` Started the authorized INV-017 vertical slice after
+  verifying the clean `main` baseline (`345b788`), Cargo workspace, current
+  AER ingress authorization, and the still-existing Webots Codex branch.
+  General `aarnn:use` and auth-mode `none` are insufficient; the implementation
+  is being designed around a separate resource-scoped peripheral permission,
+  a short-lived active session, explicit local consent/visibility, and
+  immediate revocation. The user clarified that robot elements share
+  wall-clock time to account for computation/latency differences; record that
+  as a common pacing/service-level reference while retaining independent
+  per-brain logical time and no fleet-wide slowest-network barrier.
+
+- [x] `2026-09-30 07:21Z` Implemented deployment-configured exact principal/brain
+  grants using the existing `Capability::PeripheralInput` policy, short-lived
+  locally consented AER-input sessions, owner status/revoke endpoints, and
+  browser/WebGL indicators with explicit stop/revoke handling. AER inject,
+  infer, stream and network-targeted LLM mirror requests check both the current
+  grant and active matching session; auth mode `none` fails closed. Grant
+  configuration replaces stale persisted input grants on restart. Validation:
+  `cargo test --lib peripheral` (10 passed), `cargo test --bin web_ui` (18
+  passed), and `cargo test --test web_ui_browser_compat
+  webgl_simulator_is_shipped_through_the_authenticated_gateway` (1 passed).
+  `rustfmt --check`, JavaScript syntax, shell syntax, workflow YAML and
+  `git diff --check` passed. The session registry is still process-local
+  reference authority; production profiles remain disabled pending Phase 7.
+
+- [x] `2026-09-30 07:21Z` Fixed container promotion disk exhaustion on `sm00`:
+  isolated Podman runroot, graphroot and temp storage now use disk-backed
+  `/var/tmp`; manifest and latest-alias jobs prepare and clean their isolated
+  storage even on failure. The failing run's ARM64/X64 builds and three
+  manifest jobs had succeeded, leaving only latest-alias promotion failed.
+  Recovery dispatch and remote success verification remain pending after the
+  workflow fix reaches `main`.
+
+- [~] `2026-09-30 07:21Z` Reviewed `codex/webots-api-ingress-20260929` (five
+  commits): its placement-aware sparse sensory admission and bridge-width fixes
+  are useful, but its deployment-static allow-list is a duplicate policy
+  authority. Merge the data path only through the existing management policy
+  and the new short-lived peripheral session gate; then run the ingress and
+  workflow recovery checks before deleting Codex branches.
 
 - [x] `2026-09-29 08:21Z` Diagnosed and fixed the frozen output raster as a split data
   source: canvas brightness consumed fresh `GetNetworkActivity` worker polls,
@@ -699,6 +784,25 @@ Enable modality capabilities independently by deployment/browser/OS profile. Sta
 
 ## Surprises & Discoveries
 
+The previous worktree summary said no Codex branches remained, but repository
+inspection found `codex/webots-api-ingress-20260929` both locally and at
+`origin`, checked out in a separate clean worktree. It contains a real
+placement-aware Webots ingress and a newer static principal/network grant
+guard. The guard is narrower than general `aarnn:use` and rejects an
+unconfigured bearer, but configuration-only revocation and absent local
+session state do not satisfy all of INV-017. Review and consolidate its
+independent commits only after the scoped expiring/revocable grant checks are
+present; then remove the Codex branch/worktree so the requested final branch
+set is `main` only.
+
+The browser gateway has a separately configured persisted `Policy` and
+already-defined brain-scoped `Capability::PeripheralInput`/`PeripheralOutput`,
+but the AER handlers use only the web service-level `aarnn:use` requirement.
+Those two authorization dimensions need separate checks. The present web
+authentication middleware deliberately treats `AuthMode::None` as a local
+development identity, so a peripheral guard must independently default-deny
+that mode rather than treating the injected username as proof of consent.
+
 Only governed peripheral/effect reference types and host tests are present.
 Browser/native media and USB AER adapters, scientific fixtures, federation,
 device timing and migration evidence are absent; layer-group paths remain
@@ -892,12 +996,41 @@ revocable peripheral-input grant and hosted acceptance evidence exist.
 
 ## Decision Log
 
+- `2026-09-30 / DEC-INV017-SESSION-GATE`: workstation sensory ingress requires
+  both a deployment-provisioned peripheral grant scoped to the authenticated
+  principal, requested brain, channel and direction and an ephemeral active
+  session established by an explicit
+  local action. The session has a bounded expiry, locally visible state and
+  an owner-initiated immediate revoke; general `aarnn:use`, brain control,
+  anonymous/development auth and discovery are never substitutes. Apply this
+  first to the existing browser AER ingress and portable peripheral contract;
+  keep production media/AER profiles disabled until Phase 7 authority and
+  Phase 8 hardware/client gates pass. Authority: `INV-017`, Sections 16.5,
+  16.16, 16.23–16.24 and 21.10/API-013–019.
+- `2026-09-30 / DEC-SHARED-ROBOT-CLOCK`: use one shared monotonic wall-clock
+  reference across the robot fleet for pacing, deadline and computation/
+  latency measurements. A network with lower neuron count may complete its
+  cycle earlier and proceed independently; unrelated networks do not wait
+  for the slowest network. Each brain retains its own logical tags, and only
+  its declared versioned mapping translates between wall-clock capture/deadline
+  time and that brain's eligible tags. Wall-clock never decides causal order.
+  Authority: user's multi-robot timing clarification, Section 3.4, Sections
+  12.1–12.3, and `INV-002`/`INV-010`.
+
 - `2026-09-30 / DEC-0085U`: keep the candidate Webots ingress unmerged until
   external sensory injection enforces a dedicated, scoped and revocable
   peripheral-input grant. An optional shared bearer plus general `aarnn:use`
   does not satisfy Section 16.5 or `INV-017`; hosted Webots acceptance is also
   unverified. The unrelated 64K HWE image-manifest fix may be consolidated
   independently. Authority: Section 16.5 and `INV-017`.
+- `2026-09-30 / DEC-0085V`: preserve the Webots placement-aware sparse ingress
+  only behind the authenticated web gateway's existing brain-scoped
+  `Capability::PeripheralInput` and active `PeripheralAuthorizationSession`;
+  remove the branch's parallel static grant map. The internal orchestrator
+  RPC still requires its service bearer. This reference path does not claim
+  hosted Webots or production replicated-session acceptance. Authority:
+  explicit INV-017 implementation authorisation, Sections 16.5, 16.16–16.18,
+  and API-013–019.
 
 - `2026-09-29 / DEC-0085R`: populate the cluster output raster from the same
   bounded worker activity responses that drive cluster neuron brightness.

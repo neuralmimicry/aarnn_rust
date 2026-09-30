@@ -200,11 +200,21 @@ fn webgl_simulator_is_shipped_through_the_authenticated_gateway() {
     let html = read_asset("web_ui/webgl-sim.html");
     let source = read_asset("web_ui/webgl-sim.js");
     let app = read_asset("web_ui/app.js");
+    let app_html = read_asset("web_ui/index.html");
     let gateway = read_asset("src/bin/web_ui.rs");
     let launcher = read_asset("scripts/run_sim.sh");
     assert!(html.contains("webgl-canvas") && html.contains("webgl-network"));
     assert!(read_asset("web_ui/index.html").contains("/sim/webgl"));
     assert!(source.contains("getContext(\"webgl\"") && source.contains("/api/aer/infer"));
+    assert!(source.contains("/api/peripheral/sessions"));
+    assert!(source.contains("X-AARNN-Peripheral-Session"));
+    assert!(source.contains("local_consent: true"));
+    assert!(source.contains("webgl-peripheral-indicator"));
+    assert!(app.contains("createPeripheralInputSession"));
+    assert!(app.contains("x-aarnn-peripheral-session"));
+    assert!(app_html.contains("Disconnect revokes the session immediately"));
+    assert!(gateway.contains("authorize_peripheral_aer_input"));
+    assert!(gateway.contains("NM_PERIPHERAL_INPUT_GRANTS_JSON"));
     for profile in [
         "celegans",
         "drosophila_banc",

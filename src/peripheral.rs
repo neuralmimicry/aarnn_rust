@@ -13,10 +13,14 @@ use thiserror::Error;
 /// High-rate media must use a separately negotiated bounded transport.
 pub const MAX_PERIPHERAL_PAYLOAD_BYTES: usize = 1024 * 1024;
 pub const MAX_PERIPHERAL_QUEUE_SAMPLES: usize = 4096;
+/// Peripheral sessions are short-lived even when the browser remains open.
+pub const MAX_PERIPHERAL_SESSION_TTL_SECS: u64 = 15 * 60;
+const MAX_ACTIVE_PERIPHERAL_SESSIONS: usize = 1024;
 const CAPTURE_DEDUPE_WINDOW: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ChannelKind {
+    Aer,
     UsbAer,
     Audio,
     Video,
@@ -28,6 +32,36 @@ pub enum ChannelKind {
 pub enum Direction {
     Input,
     Output,
+}
+
+/// A scoped, locally consented lease for a browser or workstation peripheral.
+/// This is independent from brain management permissions and is intentionally
+/// ephemeral; callers must check it again at each ingress operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeripheralAuthorizationSession {
+    pub id: String,
+    pub principal: String,
+    pub brain_id: String,
+    pub channel: ChannelKind,
+    pub direction: Direction,
+    pub created_at_unix_secs: u64,
+    pub expires_at_unix_secs: u64,
+    pub local_consent_at_unix_secs: u64,
+    pub revoked_at_unix_secs: Option<u64>,
+}
+
+impl PeripheralAuthorizationSession {
+    pub fn indicator_active(&self, now_unix_secs: u64) -> bool {
+        self.revoked_at_unix_secs.is_none() && now_unix_secs < self.expires_at_unix_secs
+    }
+}
+
+/// Process-local session registry used by the reference web gateway. A
+/// production multi-replica deployment must move this same contract behind
+/// the phase-7 replicated authority before enabling workstation I/O.
+#[derive(Debug, Clone, Default)]
+pub struct PeripheralSessionRegistry {
+    sessions: BTreeMap<String, PeripheralAuthorizationSession>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -238,6 +272,133 @@ pub enum PeripheralError {
     DeviceEpochOverflow,
     #[error("peripheral cursor state is invalid or exceeds its bounded schema")]
     InvalidCursorState,
+    #[error("peripheral session request is invalid")]
+    InvalidPeripheralSession,
+    #[error("peripheral access requires explicit local consent")]
+    PeripheralConsentRequired,
+    #[error("peripheral session has expired")]
+    PeripheralSessionExpired,
+    #[error("peripheral session has been revoked")]
+    PeripheralSessionRevoked,
+    #[error("peripheral session belongs to a different principal")]
+    PeripheralSessionPrincipalMismatch,
+    #[error("peripheral session does not cover this brain, channel, and direction")]
+    PeripheralSessionScopeMismatch,
+    #[error("peripheral session registry is at capacity")]
+    PeripheralSessionCapacityExceeded,
+    #[error("peripheral session was not found")]
+    PeripheralSessionNotFound,
+}
+
+impl PeripheralSessionRegistry {
+    pub fn create(
+        &mut self,
+        id: String,
+        principal: String,
+        brain_id: String,
+        channel: ChannelKind,
+        direction: Direction,
+        now_unix_secs: u64,
+        ttl_secs: u64,
+        local_consent: bool,
+    ) -> Result<PeripheralAuthorizationSession, PeripheralError> {
+        if !local_consent {
+            return Err(PeripheralError::PeripheralConsentRequired);
+        }
+        let id = id.trim();
+        let principal = principal.trim();
+        let brain_id = brain_id.trim();
+        if id.is_empty()
+            || id.len() > 128
+            || principal.is_empty()
+            || principal.len() > 256
+            || brain_id.is_empty()
+            || brain_id.len() > 256
+            || ttl_secs == 0
+            || ttl_secs > MAX_PERIPHERAL_SESSION_TTL_SECS
+        {
+            return Err(PeripheralError::InvalidPeripheralSession);
+        }
+        let expires_at_unix_secs = now_unix_secs
+            .checked_add(ttl_secs)
+            .ok_or(PeripheralError::InvalidPeripheralSession)?;
+
+        self.sessions.retain(|_, session| {
+            session.revoked_at_unix_secs.is_none() && now_unix_secs < session.expires_at_unix_secs
+        });
+        if self.sessions.len() >= MAX_ACTIVE_PERIPHERAL_SESSIONS {
+            return Err(PeripheralError::PeripheralSessionCapacityExceeded);
+        }
+        if self.sessions.contains_key(id) {
+            return Err(PeripheralError::InvalidPeripheralSession);
+        }
+
+        let session = PeripheralAuthorizationSession {
+            id: id.to_owned(),
+            principal: principal.to_owned(),
+            brain_id: brain_id.to_owned(),
+            channel,
+            direction,
+            created_at_unix_secs: now_unix_secs,
+            expires_at_unix_secs,
+            local_consent_at_unix_secs: now_unix_secs,
+            revoked_at_unix_secs: None,
+        };
+        self.sessions.insert(id.to_owned(), session.clone());
+        Ok(session)
+    }
+
+    pub fn authorize(
+        &self,
+        id: &str,
+        principal: &str,
+        brain_id: &str,
+        channel: ChannelKind,
+        direction: Direction,
+        now_unix_secs: u64,
+    ) -> Result<(), PeripheralError> {
+        let session = self
+            .sessions
+            .get(id)
+            .ok_or(PeripheralError::PeripheralSessionNotFound)?;
+        if session.principal != principal {
+            return Err(PeripheralError::PeripheralSessionPrincipalMismatch);
+        }
+        if session.brain_id != brain_id
+            || session.channel != channel
+            || session.direction != direction
+        {
+            return Err(PeripheralError::PeripheralSessionScopeMismatch);
+        }
+        if session.revoked_at_unix_secs.is_some() {
+            return Err(PeripheralError::PeripheralSessionRevoked);
+        }
+        if now_unix_secs >= session.expires_at_unix_secs {
+            return Err(PeripheralError::PeripheralSessionExpired);
+        }
+        Ok(())
+    }
+
+    pub fn revoke(
+        &mut self,
+        id: &str,
+        principal: &str,
+        now_unix_secs: u64,
+    ) -> Result<PeripheralAuthorizationSession, PeripheralError> {
+        let session = self
+            .sessions
+            .get_mut(id)
+            .ok_or(PeripheralError::PeripheralSessionNotFound)?;
+        if session.principal != principal {
+            return Err(PeripheralError::PeripheralSessionPrincipalMismatch);
+        }
+        session.revoked_at_unix_secs = Some(now_unix_secs);
+        Ok(session.clone())
+    }
+
+    pub fn get(&self, id: &str) -> Option<&PeripheralAuthorizationSession> {
+        self.sessions.get(id)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -669,6 +830,115 @@ mod tests {
         assert!(matches!(
             result,
             Err(PeripheralError::InvalidCapacity { .. })
+        ));
+    }
+
+    #[test]
+    fn peripheral_session_requires_local_consent_and_bounded_expiry() {
+        let mut registry = PeripheralSessionRegistry::default();
+        assert!(matches!(
+            registry.create(
+                "session-a".to_owned(),
+                "alice".to_owned(),
+                "brain-a".to_owned(),
+                ChannelKind::Aer,
+                Direction::Input,
+                100,
+                60,
+                false,
+            ),
+            Err(PeripheralError::PeripheralConsentRequired)
+        ));
+        assert!(matches!(
+            registry.create(
+                "session-a".to_owned(),
+                "alice".to_owned(),
+                "brain-a".to_owned(),
+                ChannelKind::Aer,
+                Direction::Input,
+                100,
+                MAX_PERIPHERAL_SESSION_TTL_SECS + 1,
+                true,
+            ),
+            Err(PeripheralError::InvalidPeripheralSession)
+        ));
+    }
+
+    #[test]
+    fn peripheral_session_is_principal_scoped_expires_and_can_be_revoked_immediately() {
+        let mut registry = PeripheralSessionRegistry::default();
+        let session = registry
+            .create(
+                "session-a".to_owned(),
+                "alice".to_owned(),
+                "brain-a".to_owned(),
+                ChannelKind::Aer,
+                Direction::Input,
+                100,
+                60,
+                true,
+            )
+            .expect("explicitly consented session");
+        assert!(session.indicator_active(159));
+        registry
+            .authorize(
+                "session-a",
+                "alice",
+                "brain-a",
+                ChannelKind::Aer,
+                Direction::Input,
+                159,
+            )
+            .expect("matching live session");
+        assert!(matches!(
+            registry.authorize(
+                "session-a",
+                "bob",
+                "brain-a",
+                ChannelKind::Aer,
+                Direction::Input,
+                159,
+            ),
+            Err(PeripheralError::PeripheralSessionPrincipalMismatch)
+        ));
+        assert!(matches!(
+            registry.authorize(
+                "session-a",
+                "alice",
+                "brain-b",
+                ChannelKind::Aer,
+                Direction::Input,
+                159,
+            ),
+            Err(PeripheralError::PeripheralSessionScopeMismatch)
+        ));
+        assert!(matches!(
+            registry.authorize(
+                "session-a",
+                "alice",
+                "brain-a",
+                ChannelKind::Aer,
+                Direction::Input,
+                160,
+            ),
+            Err(PeripheralError::PeripheralSessionExpired)
+        ));
+
+        registry
+            .revoke("session-a", "alice", 120)
+            .expect("owner can immediately revoke its session");
+        let revoked = registry.get("session-a").expect("revoked state retained");
+        assert!(!revoked.indicator_active(120));
+        assert!(matches!(
+            registry.authorize(
+                "session-a",
+                "alice",
+                "brain-a",
+                ChannelKind::Aer,
+                Direction::Input,
+                120,
+            ),
+            Err(PeripheralError::PeripheralSessionRevoked)
         ));
     }
 }

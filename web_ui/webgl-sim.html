@@ -57,7 +57,7 @@
           <label>Target node (optional)
             <input id="webgl-node" placeholder="auto" autocomplete="off" />
           </label>
-          <button class="btn" id="webgl-connect" type="button">Connect brain</button>
+          <button class="btn" id="webgl-connect" type="button">Connect with local consent</button>
           <button class="btn ghost" id="webgl-pause" type="button">Pause</button>
           <label><span>Anatomy cutaway</span><input id="webgl-anatomy" type="checkbox" /></label>
           <button class="btn ghost" id="webgl-focus-robot" type="button">Inspect robot</button>
@@ -77,6 +77,7 @@
           <div class="webgl-stat"><span>Shared content</span><strong id="webgl-content-version"></strong></div>
           <h2 style="margin-top:16px">Neural link</h2>
           <div class="webgl-stat"><span>Transport</span><strong id="webgl-transport">idle</strong></div>
+          <div class="webgl-stat"><span>Peripheral consent</span><strong id="webgl-peripheral-indicator">off</strong></div>
           <div class="webgl-stat"><span>Brain</span><strong id="webgl-brain">celegans_0</strong></div>
           <div class="webgl-stat"><span>Node</span><strong id="webgl-target">auto</strong></div>
           <div class="webgl-stat"><span>Step</span><strong id="webgl-step">0</strong></div>
@@ -84,7 +85,7 @@
           <div class="webgl-stat"><span>Actuator channels</span><strong id="webgl-output">96</strong></div>
           <div class="webgl-stat"><span>Input spikes</span><strong id="webgl-input-spikes">0</strong></div>
           <div class="webgl-stat"><span>Output spikes</span><strong id="webgl-output-spikes">0</strong></div>
-          <p id="webgl-message" role="status" class="webgl-note">Select a running brain and connect. Rendering remains available as an offline preview when no brain is configured.</p>
+          <p id="webgl-message" role="status" class="webgl-note">Select a running brain and connect. Connecting grants this browser AER input to that brain for up to five minutes; disconnect revokes it. Rendering remains available as an offline preview when no brain is configured.</p>
           <p class="webgl-note">Browser input is focused to this page. Camera, microphone, WebUSB, global keyboard, and global pointer access are not assumed by this simulator.</p>
           <section id="nao-social-setup" hidden>
             <h2>Local NAO conversation lab</h2>
