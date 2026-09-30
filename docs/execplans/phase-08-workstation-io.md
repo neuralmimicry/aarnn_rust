@@ -166,6 +166,57 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
 
 ## Progress
 
+- [~] `2026-09-30 09:45Z` Compared the deployed AARNN contract with this source
+  branch. The source at `src/bin/web_ui.rs` requires an
+  `X-AARNN-Peripheral-Session` header for `/api/aer/inject` and checks a
+  matching, locally consented session in process-local registry state. The
+  public production OpenAPI currently differs: it has no
+  `/api/peripheral/sessions` route and documents `/api/aer/inject` as requiring
+  only the deployment-configured exact network grant. The authenticated live
+  `/api/peripheral/input-grants` response confirms principal `webots` is scoped
+  to `neuralmimicry-shared-snn` and `tenant-aarnn`. Thus the running API image
+  has not adopted the checked-in session contract (or traffic reaches a
+  different API deployment); the Webots C++ controller's stable JSON
+  `session_id` is only an idempotent producer identity and will not satisfy the
+  new header if that source is deployed. Its logs also show intermittent HTTP
+  401s, which remain unexplained even though the same bearer currently
+  authenticates read-only calls. `/api/me` reports broad AARNN control access
+  for this service identity and needs a least-privilege review. Do not equate
+  the JSON producer ID with user consent or bypass the gate. A background
+  simulator needs an explicit, exact-network managed-session contract with
+  visible status, revocation and restart/failover semantics; workstation-local
+  consent remains unchanged. Phase 7 replicated session authority is still an
+  unmet prerequisite for production enablement. Evidence: source blame assigns
+  the check to `95006716`; production OpenAPI and
+  `/api/peripheral/input-grants` were read on 2026-09-30, alongside `sm00`
+  controller logs from 09:37–09:39Z.
+
+- [~] `2026-09-30 09:45Z` The same live controller journal shows
+  `neuralmimicry-shared-snn` sensory frames being admitted (about 1,095 by
+  simulation step 513,001) with 10–11 input spikes, but every available
+  activity report in the sampled interval had zero output spikes and zero
+  mapped actuators; some activity projections returned busy. `tenant-aarnn`
+  frames are rejected because the actual network sensory width is zero. The
+  authenticated cluster status reports exactly these two networks active on
+  `native-qc02`, `native-qc03`, `native-qc04`, `native-sm00` and
+  `native-sm01`; it does not list `qc00`, `qc01` or `qc05` as active native
+  AARNN workers. No brain snapshot, weight or topology was read or changed.
+  The `tenant-aarnn` mismatch needs an authorised topology/I/O decision; a
+  profile declaration of 32 inputs does not resize the network.
+
+- [x] `2026-09-30 09:45Z` Verified public route boundaries: unauthenticated
+  `https://neuralmimicry.ai/webots` and
+  `https://webots.neuralmimicry.ai/` return HTTP 200, while an unauthenticated
+  `/stream` request returns 401. An authenticated browser handoff was not
+  exercised, so the site route alone is not browser acceptance evidence.
+  Recovered the same existing 49-byte `sm00`/`sm01` Webots service credential
+  into the profile's intended controller-side source in the sibling
+  `simulation_environment` repository,
+  `ansible/playbooks/.secrets/customers/spirit/webots_access_token`, after
+  adding that directory to `.gitignore`; the directory/file are mode 0700/0600
+  and Ansible resolves a value of at least 32 characters. No credential value
+  was printed or committed.
+
 - [~] `2026-09-30 06:32Z` Started the authorized INV-017 vertical slice after
   verifying the clean `main` baseline (`345b788`), Cargo workspace, current
   AER ingress authorization, and the still-existing Webots Codex branch.
