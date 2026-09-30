@@ -223,6 +223,14 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   step from `230a4ee`. Push and verify a fresh run after consolidation; then
   remove the reviewed Codex branches and worktrees.
 
+- [~] `2026-09-30 10:51Z` Actions run `36689171325` built the Ubuntu 24.04
+  X64 package, then failed its metadata-probe container with exit 126:
+  rootless Podman's `pasta` helper could not open its network namespace under
+  the isolated `/var/tmp` runroot (`Permission denied`). The build and smoke
+  install already use host networking; the metadata-only probe did not. Added
+  `--network host` to that probe. Validate the workflow and rerun the complete
+  release workflow before closing this CI recovery item.
+
 - [~] `2026-09-30 08:20Z` The fresh run `36684684809` confirmed the X64 build
   and lint checks, then exposed 13 test-only `NetworkResources` initializers
   missing the new `load_fingerprint` field. Added neutral zero fingerprints

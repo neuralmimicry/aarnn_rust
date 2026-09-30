@@ -615,6 +615,7 @@ jobs:
           podman run --rm -i --pull=missing \
             --authfile "$authfile" \
             --platform "linux/${{ matrix.container_platform }}" \
+            --network host \
             -e EXPECTED_VERSION="${{ needs.release-meta.outputs.artifact_version }}" \
             -e EXPECTED_SUFFIX="${{ matrix.ubuntu_label }}" \
             -e EXPECTED_ARCH="${{ matrix.deb_arch }}" \
