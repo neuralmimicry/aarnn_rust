@@ -93,11 +93,12 @@ restart removes active sessions and production workstation I/O remains gated.
 
 The local and origin Codex branch `codex/webots-api-ingress-20260929` is still
 checked out in `/tmp/aarnn-webots-api-ingress-20260930` and contains five
-commits beyond `main`. Its latest review adds a principal/network allow-list
-and fails closed when the gateway bearer is unconfigured, but the allow-list is
-deployment-static and has no session lease, immediate revocation, or local
-consent/indicator lifecycle. Keep it unmerged until this slice closes those
-gaps and the relevant security tests pass. The prior Phase 7 plan records its
+commits beyond `main`. Its placement-aware sparse ingress is being merged
+through the existing brain-scoped policy and this short-lived session gate;
+the branch's parallel deployment-static grant map is excluded. Its internal
+gRPC ingress now fails closed when its service bearer is unconfigured. Hosted
+Webots acceptance and Phase 7 replicated session authority remain incomplete.
+The prior Phase 7 plan records its
 replicated-authority, identity, and audit gates as incomplete; this change may
 add a fail-closed reference/session contract, but it must not claim production
 management authority or enable `workstation_io`.
@@ -204,6 +205,23 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   authority. Merge the data path only through the existing management policy
   and the new short-lived peripheral session gate; then run the ingress and
   workflow recovery checks before deleting Codex branches.
+
+- [~] `2026-09-30 07:25Z` Reconciled the Webots sparse ingress with the
+  `PeripheralInput` policy and active session gate at `/api/aer/inject`; the
+  internal orchestrator RPC retains its fail-closed service bearer. Sparse
+  retries now require a bounded stable producer `session_id`, and frame
+  sequence is bound to the non-negative source step. The branch's separate
+  static grant map is excluded. Run the distributed ingress regressions and
+  final merged-tree checks before marking this consolidation complete.
+
+- [x] `2026-09-30 07:35Z` Merged-tree verification passed: `cargo test --lib
+  external_sensory` (2 passed), `cargo test --bin web_ui` (18 passed), the
+  browser gateway compatibility test (1 passed), `cargo fmt --all --check`,
+  and `git diff --cached --check`. Actions run `36579172049` failed on its
+  older `fcb7487` workflow because `Publish Release` invoked `gh` without
+  installing it; the current `main` baseline contains the CLI installation
+  step from `230a4ee`. Push and verify a fresh run after consolidation; then
+  remove the reviewed Codex branches and worktrees.
 
 - [x] `2026-09-29 08:21Z` Diagnosed and fixed the frozen output raster as a split data
   source: canvas brightness consumed fresh `GetNetworkActivity` worker polls,
@@ -786,14 +804,12 @@ Enable modality capabilities independently by deployment/browser/OS profile. Sta
 
 The previous worktree summary said no Codex branches remained, but repository
 inspection found `codex/webots-api-ingress-20260929` both locally and at
-`origin`, checked out in a separate clean worktree. It contains a real
-placement-aware Webots ingress and a newer static principal/network grant
-guard. The guard is narrower than general `aarnn:use` and rejects an
-unconfigured bearer, but configuration-only revocation and absent local
-session state do not satisfy all of INV-017. Review and consolidate its
-independent commits only after the scoped expiring/revocable grant checks are
-present; then remove the Codex branch/worktree so the requested final branch
-set is `main` only.
+`origin`, checked out in a separate worktree. It contains placement-aware
+Webots ingress, sparse-width bridge fixes and a snapshot reload optimisation.
+Its static principal/network map lacked expiry, immediate revocation and local
+consent, so it is excluded in favour of the existing brain-scoped policy and
+short-lived session gate. The data path is being retained through the
+authenticated HTTP gateway; hosted acceptance remains unverified.
 
 The browser gateway has a separately configured persisted `Policy` and
 already-defined brain-scoped `Capability::PeripheralInput`/`PeripheralOutput`,
@@ -985,14 +1001,12 @@ projection across monotonic cuts for the same assignment, accepts safely
 lagging results, and refreshes if the cut advanced during computation. A
 network/layer reassignment or time rewind still rejects that projection.
 
-The candidate `codex/webots-api-ingress-20260929` branch was reviewed on
-2026-09-30. Its new external sensory gRPC method accepts requests without a
-credential when neither shared bearer variable is configured, and the HTTP
-route grants only general `aarnn:use` access (with `AuthMode::None` also
-bypassing session authentication). This does not establish the separate,
-scoped peripheral-input authorisation required by Section 16.5 and `INV-017`.
-The hosted Webots path is also unverified. Keep that ingress unmerged until a
-revocable peripheral-input grant and hosted acceptance evidence exist.
+The first Webots ingress commits accepted external sensory gRPC calls without
+a credential and protected the HTTP route only with general `aarnn:use`; the
+branch's latest commit changes the gRPC path to fail closed without its
+service bearer. The ingress is now being consolidated only behind the HTTP
+route's exact `PeripheralInput` policy and active local session. Hosted Webots
+acceptance and Phase 7 replicated session authority remain unverified.
 
 ## Decision Log
 
@@ -1017,7 +1031,8 @@ revocable peripheral-input grant and hosted acceptance evidence exist.
   Authority: user's multi-robot timing clarification, Section 3.4, Sections
   12.1–12.3, and `INV-002`/`INV-010`.
 
-- `2026-09-30 / DEC-0085U`: keep the candidate Webots ingress unmerged until
+- `2026-09-30 / DEC-0085U` (superseded by DEC-0085V): keep the candidate
+  Webots ingress unmerged until
   external sensory injection enforces a dedicated, scoped and revocable
   peripheral-input grant. An optional shared bearer plus general `aarnn:use`
   does not satisfy Section 16.5 or `INV-017`; hosted Webots acceptance is also

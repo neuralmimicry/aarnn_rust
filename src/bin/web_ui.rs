@@ -15,8 +15,8 @@ use aarnn_rust::distributed::EXTERNAL_SENSORY_LAYER_INDEX;
 use aarnn_rust::distributed::proto::{
     ClusterNetworkSnapshotRequest, ConfigUpdate, ControlUpdate, DisplayProjectionRequest,
     NetworkActivityRequest, NetworkActivityResponse, NetworkSnapshotRequest,
-    NetworkSnapshotResponse, NetworkUpdateRequest, SpikeBatch, SpikeIndices, StatusRequest,
-    control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
+    NetworkSnapshotResponse, NetworkUpdateRequest, SensoryInputFrame, SpikeBatch, SpikeIndices,
+    StatusRequest, control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
     network_update_request,
 };
 use aarnn_rust::engine::{EngineSpec, RunnerEngine};
@@ -1576,6 +1576,8 @@ struct AerInjectPayload {
     addr: Option<String>,
     network_id: String,
     node_id: Option<String>,
+    /// Stable producer session identity for retry-safe placement-aware ingress.
+    session_id: Option<String>,
     step_index: Option<i64>,
     time_ms: Option<f32>,
     dt_ms: Option<f32>,
@@ -2959,6 +2961,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
                   "addr": { "type": "string", "nullable": true, "description": "Orchestrator address; defaults to server config." },
                   "network_id": { "type": "string" },
                   "node_id": { "type": "string", "nullable": true, "description": "Optional specific node target." },
+                  "session_id": { "type": "string", "nullable": true, "maxLength": 128, "description": "Stable producer session identity for retry-safe sparse sensory admission; required when spike_indices are sent without node_id or another encoding." },
                   "step_index": { "type": "integer", "format": "int64", "nullable": true },
                   "time_ms": { "type": "number", "format": "float", "nullable": true, "description": "Optional physical time for temporal encoders such as phase coding." },
                   "dt_ms": { "type": "number", "format": "float", "nullable": true, "description": "Optional timestep used for temporal encoders when `time_ms` is omitted." },
@@ -3463,7 +3466,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "post": {
                 "tags": ["network"],
                 "summary": "Inject one AER exchange into a running network",
-                "description": "Injects sensory spikes into the next simulation step. Accepts raw spike transports (`aer_payload_hex`, `spike_indices`) or continuous `input_values` that are encoded using the provided `spike_io` policy.",
+                "description": "Requires an exact principal/brain PeripheralInput grant and active locally consented AER session. Sparse `spike_indices` without an explicit `node_id` use the orchestrator's placement-aware prepare/commit path; provide a stable `session_id` for idempotent retries. Other transports accept raw AER or continuous values encoded by `spike_io`.",
             "operationId": "injectAerExchange",
             "security": [{ "cookieAuth": [] }],
             "parameters": [
@@ -8839,6 +8842,13 @@ async fn aer_inject(
     headers: HeaderMap,
     Json(payload): Json<AerInjectPayload>,
 ) -> impl IntoResponse {
+    if payload.network_id.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "network_id is required" })),
+        )
+            .into_response();
+    }
     if let Err(response) =
         authorize_peripheral_aer_input(&state, &user, &headers, &payload.network_id)
     {
@@ -8864,6 +8874,100 @@ async fn aer_inject(
     } else {
         orchestrator_addr
     };
+
+    // Sparse external sensory input must enter through the orchestrator's
+    // placement-aware prepare/commit path. The browser-facing route has
+    // already checked the exact PeripheralInput grant and active local
+    // session before this internal service-authenticated RPC is made.
+    if payload.node_id.is_none()
+        && payload
+            .aer_payload_hex
+            .as_ref()
+            .is_none_or(|value| value.trim().is_empty())
+        && payload.input_values.as_ref().is_none_or(Vec::is_empty)
+        && payload.spike_indices.is_some()
+    {
+        let step_index = payload.step_index.unwrap_or(0);
+        if step_index < 0 {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "step_index must be non-negative for external sensory input" })),
+            )
+                .into_response();
+        }
+        let session_id = match payload
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(session_id) if session_id.len() <= 128 => session_id.to_owned(),
+            Some(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "session_id must be at most 128 bytes" })),
+                )
+                    .into_response();
+            }
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "stable session_id is required for retry-safe external sensory input" })),
+                )
+                    .into_response();
+            }
+        };
+        let mut client = match connect_cluster_client(target_addr.clone()).await {
+            Ok(client) => client,
+            Err(error) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({ "error": format!("connect failed: {error}") })),
+                )
+                    .into_response();
+            }
+        };
+        let mut request = authenticated_grpc_request(SensoryInputFrame {
+            schema_version: aarnn_rust::distributed::SENSORY_INPUT_FRAME_SCHEMA_VERSION,
+            network_id: payload.network_id.clone(),
+            source_node_id: String::new(),
+            session_id,
+            frame_sequence: step_index as u64,
+            step_index,
+            spikes: Vec::new(),
+            active_spike_indices: payload.spike_indices.unwrap_or_default(),
+            active_spike_indices_present: true,
+        });
+        request.set_timeout(Duration::from_secs(20));
+        return match client.inject_external_sensory_frame(request).await {
+            Ok(response)
+                if response.get_ref().accepted
+                    && response.get_ref().frame_sequence == step_index as u64 =>
+            {
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "accepted": 1,
+                        "target": target_addr,
+                        "network_id": payload.network_id,
+                        "frame_sequence": step_index,
+                        "mode": "placement-aware-sensory-ingress",
+                    })),
+                )
+                    .into_response()
+            }
+            Ok(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "orchestrator returned a mismatched sensory-frame acknowledgement" })),
+            )
+                .into_response(),
+            Err(error) => (
+                grpc_status_to_http(&error),
+                Json(json!({ "error": format!("sensory input admission failed: {error}") })),
+            )
+                .into_response(),
+        };
+    }
 
     let batch = match build_aer_batch(
         &target_addr,

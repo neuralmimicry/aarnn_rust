@@ -215,6 +215,11 @@ fn webgl_simulator_is_shipped_through_the_authenticated_gateway() {
     assert!(app_html.contains("Disconnect revokes the session immediately"));
     assert!(gateway.contains("authorize_peripheral_aer_input"));
     assert!(gateway.contains("NM_PERIPHERAL_INPUT_GRANTS_JSON"));
+    assert!(gateway.contains("inject_external_sensory_frame"));
+    assert!(
+        gateway.contains("stable session_id is required for retry-safe external sensory input")
+    );
+    assert!(!gateway.contains("has_peripheral_input_grant("));
     for profile in [
         "celegans",
         "drosophila_banc",
