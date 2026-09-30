@@ -4039,10 +4039,9 @@ fn validate_external_sensory_gateway_authorization<T>(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        // Reference deployments keep the gRPC API on the trusted cluster
-        // network and may not configure a management bearer. Production
-        // deployments that do configure one must present it on this route.
-        return Ok(());
+        return Err(Status::unauthenticated(
+            "sensory-ingress credentials are not configured",
+        ));
     };
     let supplied = request
         .metadata()
@@ -14816,6 +14815,13 @@ mod tests {
 
     #[test]
     fn external_sensory_gateway_enforces_the_configured_bearer() {
+        assert_eq!(
+            validate_external_sensory_gateway_authorization(&Request::new(()), None)
+                .expect_err("an unconfigured gateway must fail closed")
+                .code(),
+            tonic::Code::Unauthenticated
+        );
+
         let request = Request::new(());
         assert_eq!(
             validate_external_sensory_gateway_authorization(

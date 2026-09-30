@@ -347,6 +347,10 @@ struct AppState {
     default_node: Option<String>,
     default_runtime_user: Option<String>,
     auth: AuthConfig,
+    /// Per-network peripheral-input grants. This is deliberately separate
+    /// from general AARNN service access: a control/use token alone must not
+    /// be able to inject sensory samples into an arbitrary brain.
+    peripheral_input_grants: HashMap<String, HashSet<String>>,
     cors: CorsConfig,
     users: Arc<RwLock<UserStore>>,
     session_store: Arc<FileSessionStore>,
@@ -577,6 +581,7 @@ fn api_access_requirement(method: &Method, path: &str) -> Option<AccessRequireme
             Some(AccessRequirement::aarnn_control())
         }
         ("GET", ["api", "management", "migrations", _]) => Some(AccessRequirement::aarnn_observe()),
+        ("GET", ["api", "peripheral", "input-grants"]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "operations", _]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "status"]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "snapshot"]) => Some(AccessRequirement::aarnn_observe()),
@@ -659,6 +664,51 @@ fn env_opt(key: &str) -> Option<String> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+}
+
+fn parse_peripheral_input_grants(
+    raw: Option<&str>,
+) -> anyhow::Result<HashMap<String, HashSet<String>>> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(HashMap::new());
+    };
+    let configured: HashMap<String, Vec<String>> = serde_json::from_str(raw)
+        .context("NM_PERIPHERAL_INPUT_GRANTS_JSON must be a JSON object mapping network IDs to principal ID arrays")?;
+    let mut grants = HashMap::with_capacity(configured.len());
+    for (network_id, principals) in configured {
+        let network_id = network_id.trim().to_owned();
+        anyhow::ensure!(
+            !network_id.is_empty(),
+            "NM_PERIPHERAL_INPUT_GRANTS_JSON contains an empty network ID"
+        );
+        let mut principal_ids = HashSet::with_capacity(principals.len());
+        for principal_id in principals {
+            let principal_id = principal_id.trim().to_owned();
+            anyhow::ensure!(
+                !principal_id.is_empty(),
+                "NM_PERIPHERAL_INPUT_GRANTS_JSON contains an empty principal for network {network_id}"
+            );
+            principal_ids.insert(principal_id);
+        }
+        grants.insert(network_id, principal_ids);
+    }
+    Ok(grants)
+}
+
+fn has_peripheral_input_grant(
+    auth_mode: AuthMode,
+    grants: &HashMap<String, HashSet<String>>,
+    principal_id: &str,
+    network_id: &str,
+) -> bool {
+    let principal_id = principal_id.trim();
+    let network_id = network_id.trim();
+    auth_mode != AuthMode::None
+        && !principal_id.is_empty()
+        && !network_id.is_empty()
+        && grants
+            .get(network_id)
+            .is_some_and(|principals| principals.contains(principal_id))
 }
 
 fn parse_env_bool(value: &str) -> Option<bool> {
@@ -2056,6 +2106,9 @@ async fn main() -> anyhow::Result<()> {
             .or_else(|| env_opt("NM_WEB_UI_DEFAULT_NODE")),
         default_runtime_user: env_opt("NM_WEB_UI_DEFAULT_RUNTIME_USER"),
         auth,
+        peripheral_input_grants: parse_peripheral_input_grants(
+            env_opt("NM_PERIPHERAL_INPUT_GRANTS_JSON").as_deref(),
+        )?,
         cors,
         users: Arc::new(RwLock::new(users)),
         session_store,
@@ -2148,6 +2201,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/aer/inject", post(aer_inject))
         .route("/aer/infer", post(aer_infer))
         .route("/aer/stream", post(aer_stream))
+        .route("/peripheral/input-grants", get(peripheral_input_grants))
         .route("/llm/mirror", post(llm_mirror))
         .route("/update_network", post(update_network))
         .route("/control_network", post(control_network))
@@ -3325,11 +3379,24 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             }
           }
         },
+        "/api/peripheral/input-grants": {
+          "get": {
+            "tags": ["security"],
+            "summary": "List the caller's active peripheral-input network grants",
+            "description": "Returns only the authenticated principal's network scopes. Grants are deployment-managed and revoked by removing the principal from the network mapping and rolling out the Web UI deployment.",
+            "operationId": "listPeripheralInputGrants",
+            "security": [{ "cookieAuth": [] }, { "bearerAuth": [] }],
+            "responses": {
+              "200": { "description": "Active network scopes for the caller.", "content": { "application/json": { "schema": { "type": "object", "properties": { "principal_id": { "type": "string" }, "capability": { "type": "string", "enum": ["peripheral_input"] }, "network_ids": { "type": "array", "items": { "type": "string" } } }, "required": ["principal_id", "capability", "network_ids"] } } } },
+              "401": { "description": "An authenticated identity is required.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
         "/api/aer/inject": {
               "post": {
                 "tags": ["network"],
                 "summary": "Inject one AER exchange into a running network",
-                "description": "Injects sensory spikes into the next simulation step. Sparse `spike_indices` without an explicit `node_id` use the orchestrator's placement-aware bounded sensory admission path; provide a stable `session_id` so retries remain idempotent. Other transports retain the compatibility path. Continuous `input_values` are encoded using the provided `spike_io` policy.",
+                "description": "Injects sensory spikes into the next simulation step. The authenticated principal must have a deployment-configured peripheral-input grant scoped to this network; general `aarnn:use` access is not sufficient. Sparse `spike_indices` without an explicit `node_id` use the orchestrator's placement-aware bounded sensory admission path; provide a stable `session_id` so retries remain idempotent. Other transports retain the compatibility path. Continuous `input_values` are encoded using the provided `spike_io` policy.",
             "operationId": "injectAerExchange",
             "security": [{ "cookieAuth": [] }],
             "requestBody": {
@@ -3371,6 +3438,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "200": { "description": "AER exchange accepted.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AerInjectResponse" } } } },
               "400": { "description": "Invalid payload or missing fields.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "No scoped peripheral-input grant exists for this principal and network.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Target connection/stream unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
             }
@@ -3379,7 +3447,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
           "post": {
             "tags": ["network"],
             "summary": "Admit one browser/WebGL sensory frame and return later output spikes",
-            "description": "Resolves an active worker when node_id is omitted, admits the frame through the distributed AER path, and returns output activity observed after admission.",
+            "description": "Resolves an active worker when node_id is omitted, admits the frame through the distributed AER path, and returns output activity observed after admission. Requires a deployment-configured peripheral-input grant scoped to the requested network.",
             "operationId": "inferAerExchange",
             "security": [{ "cookieAuth": [] }],
             "requestBody": {
@@ -3394,6 +3462,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "200": { "description": "Admission and output spike result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
               "400": { "description": "Invalid or empty sensory frame.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "No scoped peripheral-input grant exists for this principal and network.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "No active worker or inference transport failure.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
@@ -3402,7 +3471,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "post": {
                 "tags": ["network"],
                 "summary": "Inject a stream of AER exchanges (NDJSON over HTTP)",
-                "description": "Accepts newline-delimited JSON frames in request body. Each frame can contain raw spike transport fields (`aer_payload_hex`, `spike_indices`) or `input_values` with a `spike_io` encoder selection. Use `Content-Type: application/x-ndjson`.",
+                "description": "Accepts newline-delimited JSON frames in request body. Each frame can contain raw spike transport fields (`aer_payload_hex`, `spike_indices`) or `input_values` with a `spike_io` encoder selection. Every frame requires a deployment-configured peripheral-input grant scoped to its network. Use `Content-Type: application/x-ndjson`.",
             "operationId": "streamAerExchange",
             "security": [{ "cookieAuth": [] }],
             "parameters": [
@@ -3430,6 +3499,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "200": { "description": "Stream accepted and forwarded.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AerInjectResponse" } } } },
               "400": { "description": "Invalid NDJSON or missing data.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "No scoped peripheral-input grant exists for this principal and network.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
               "503": { "description": "Target connection/stream unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
@@ -3452,7 +3522,8 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "responses": {
               "200": { "description": "Mirrored exchange accepted.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LlmMirrorResponse" } } } },
               "400": { "description": "Invalid mirrored exchange payload.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "No scoped peripheral-input grant exists for this principal and network.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
             }
           }
         },
@@ -3604,6 +3675,35 @@ async fn api_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         billing_admin_url: state.commerce.billing_admin_url.clone(),
         neuron_daily_rate: state.token_pricing.neuron_daily_rate,
     })
+}
+
+async fn peripheral_input_grants(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> axum::response::Response {
+    if state.auth.mode == AuthMode::None {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "peripheral grants require an authenticated identity" })),
+        )
+            .into_response();
+    }
+    let mut network_ids = state
+        .peripheral_input_grants
+        .iter()
+        .filter_map(|(network_id, principals)| {
+            principals
+                .contains(user.username.trim())
+                .then_some(network_id.clone())
+        })
+        .collect::<Vec<_>>();
+    network_ids.sort();
+    Json(json!({
+        "principal_id": user.username,
+        "capability": "peripheral_input",
+        "network_ids": network_ids,
+    }))
+    .into_response()
 }
 
 async fn me(
@@ -7772,12 +7872,27 @@ async fn send_aer_inference(
 /// on the same distributed path used by the native simulators.
 async fn aer_infer(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(payload): Json<AerInferencePayload>,
 ) -> impl IntoResponse {
     if payload.network_id.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "network_id is required" })),
+        )
+            .into_response();
+    }
+    if !has_peripheral_input_grant(
+        state.auth.mode,
+        &state.peripheral_input_grants,
+        &user.username,
+        &payload.network_id,
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(
+                json!({ "error": "a scoped peripheral-input grant is required for this network" }),
+            ),
         )
             .into_response();
     }
@@ -7888,6 +8003,25 @@ async fn llm_mirror(
     Extension(user): Extension<AuthUser>,
     Json(payload): Json<LlmMirrorPayload>,
 ) -> impl IntoResponse {
+    if let Some(network_id) = payload
+        .network_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|network_id| !network_id.is_empty())
+    {
+        if !has_peripheral_input_grant(
+            state.auth.mode,
+            &state.peripheral_input_grants,
+            &user.username,
+            network_id,
+        ) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "a scoped peripheral-input grant is required for this network" })),
+            )
+                .into_response();
+        }
+    }
     let request_id = payload.request_id.trim().to_string();
     if request_id.is_empty() {
         return (
@@ -8467,8 +8601,30 @@ fn api_error_message(error: ApiError) -> String {
 
 async fn aer_inject(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Json(payload): Json<AerInjectPayload>,
 ) -> impl IntoResponse {
+    if payload.network_id.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "network_id is required" })),
+        )
+            .into_response();
+    }
+    if !has_peripheral_input_grant(
+        state.auth.mode,
+        &state.peripheral_input_grants,
+        &user.username,
+        &payload.network_id,
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(
+                json!({ "error": "a scoped peripheral-input grant is required for this network" }),
+            ),
+        )
+            .into_response();
+    }
     let orchestrator_addr =
         match resolve_addr_or_default(payload.addr, state.default_orchestrator.clone()) {
             Ok(addr) => addr,
@@ -8613,6 +8769,7 @@ async fn aer_inject(
 
 async fn aer_stream(
     State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Query(query): Query<AerStreamQuery>,
     body: axum::body::Body,
 ) -> impl IntoResponse {
@@ -8684,6 +8841,18 @@ async fn aer_stream(
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(json!({ "error": format!("missing network_id on frame line {}", parsed_lines) })),
+                )
+                    .into_response();
+            }
+            if !has_peripheral_input_grant(
+                state.auth.mode,
+                &state.peripheral_input_grants,
+                &user.username,
+                &frame_network_id,
+            ) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({ "error": "a scoped peripheral-input grant is required for this network" })),
                 )
                     .into_response();
             }
@@ -8760,6 +8929,18 @@ async fn aer_stream(
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(json!({ "error": format!("missing network_id on final line {}", parsed_lines) })),
+                )
+                    .into_response();
+            }
+            if !has_peripheral_input_grant(
+                state.auth.mode,
+                &state.peripheral_input_grants,
+                &user.username,
+                &frame_network_id,
+            ) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({ "error": "a scoped peripheral-input grant is required for this network" })),
                 )
                     .into_response();
             }
@@ -9007,6 +9188,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn peripheral_input_grants_are_principal_and_network_scoped() {
+        let grants = parse_peripheral_input_grants(Some(
+            r#"{"hexapod_01":["webots"],"celegans_01":["operator"]}"#,
+        ))
+        .expect("valid grants parse");
+        assert!(has_peripheral_input_grant(
+            AuthMode::Oidc,
+            &grants,
+            "webots",
+            "hexapod_01"
+        ));
+        assert!(!has_peripheral_input_grant(
+            AuthMode::Oidc,
+            &grants,
+            "webots",
+            "celegans_01"
+        ));
+        assert!(!has_peripheral_input_grant(
+            AuthMode::Oidc,
+            &grants,
+            "other-service",
+            "hexapod_01"
+        ));
+        assert!(!has_peripheral_input_grant(
+            AuthMode::None,
+            &grants,
+            "webots",
+            "hexapod_01"
+        ));
+        assert!(
+            parse_peripheral_input_grants(None)
+                .expect("missing configuration defaults to no grants")
+                .is_empty()
+        );
+        assert!(parse_peripheral_input_grants(Some("not-json")).is_err());
+    }
+
+    #[test]
     fn remote_grpc_requests_carry_bearer_credentials() {
         let mut request = Request::new(StatusRequest {});
         attach_grpc_bearer(&mut request, "remote-token");
@@ -9088,6 +9307,10 @@ mod tests {
         );
         assert_eq!(
             api_access_requirement(&Method::GET, "/api/management/status"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/peripheral/input-grants"),
             Some(AccessRequirement::aarnn_observe())
         );
         assert_eq!(
