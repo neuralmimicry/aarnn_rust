@@ -14912,7 +14912,7 @@ mod tests {
         let worker = DistributedNode::new("worker-a".to_owned(), false);
         let mut config = NetworkConfig::default();
         config.num_sensory_neurons = 1;
-        config.sensory_target_layer = Some(1);
+        config.sensory_target_layer = Some(0);
         worker
             .handle_command(NetworkCommand {
                 r#type: proto::network_command::CommandType::LoadNetwork as i32,
