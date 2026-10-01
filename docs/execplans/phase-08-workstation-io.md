@@ -181,20 +181,37 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
 
 ## Progress
 
-- [~] `2026-10-01 07:40Z` The ARM64 `Verify` leg of workflow run
+- [~] `2026-10-01 06:40Z` The ARM64 `Verify` leg of workflow run
   `36818861504` compiled on the only self-hosted ARM runner, which is live
   cluster node `qc01`. During that run the AARNN engine and orchestrator were
   OOM-killed; the run was cancelled before release or image publication. The
-  last cluster observation showed both pods Ready after restart, with restart
-  counts of 2 and 5 and `OOMKilled` as their last termination reason. The
-  current workstation has no Kubernetes context, so recovery has not been
-  rechecked from this session. Move verification, package, container, and
+  subsequent read through the Ansible control host `spirit` found both pods
+  Ready, with restart counts of 2 and 5 and `OOMKilled` as their last
+  termination reason; current use was about 1.8 GiB for the engine and 1.9 GiB
+  for the orchestrator. This confirms process readiness only, not recovery of
+  every live brain. Four FPV worker pods remain unready with exit code 2 and
+  hundreds of restarts; investigate that separate worker failure before
+  claiming full runtime health. Move verification, package, container, and
   promotion jobs onto architecture-matched GitHub-hosted runners before
   dispatching the all-features build again. The workflow edits now select
   `ubuntu-24.04`/`ubuntu-24.04-arm`; syntax validation passed with `yamllint`,
-  while actionlint is unavailable. Still review dispatch behavior, publish the
-  workflow change, rebuild the cancelled `node` workload, and verify live pod
-  health before updating Ansible image pins.
+  while actionlint is unavailable. Commit `199d49f` moved verification,
+  package, container and promotion jobs to architecture-matched hosted runners
+  and was pushed to this branch. All-feature build run `36826207197` is now
+  verifying; after its workload manifests pass, update Ansible pins and deploy.
+  Before closing recovery, confirm live neural state and investigate the FPV
+  worker crash loop.
+
+- [x] `2026-10-01 06:47Z` Re-converged the persistent Webots world from the
+  `codex/webots-shared-world-20260929` checkout with
+  `ansible-playbook -i inventory/hosts.ini playbooks/shared_world.yml`, with
+  the role search path set to this checkout's `ansible/roles`; both `sm00` and
+  `sm01` completed with zero changes. The service remains active only on primary
+  `sm00`, both GPU checks
+  pass, and both hosts expose `libgpgme.so.11` plus OpenCV 4.6 video-I/O. The
+  live broker health endpoint reports one healthy `shared-fleet` world. The
+  AARNN ingress image rollout still awaits verified images from run
+  `36826207197`.
 
 - [~] `2026-10-01 04:59Z` Read-only source tracing found why managed Webots
   output polls can report no actuator spikes even while sensory ingress is
