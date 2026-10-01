@@ -7445,7 +7445,19 @@ impl DistributedNode {
         let total_ram = sys.total_memory();
         let available_ram = sys.available_memory();
 
-        let state = self.state.read().await;
+        // Never hold the node-state lock while waiting for a neural traversal
+        // to release its network lock. Prepare/Commit sensory RPCs need that
+        // same state lock to resolve their ingress mailbox; on a busy worker,
+        // nesting these locks turns a slow heartbeat snapshot into an input
+        // admission outage.
+        let networks = self
+            .state
+            .read()
+            .await
+            .networks
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
         let mut total_node_neurons = 0u64;
         let mut redundant_node_neurons = 0u64;
         let mut max_current_depth = 0u32;
@@ -7454,7 +7466,7 @@ impl DistributedNode {
         let mut total_avg_step_time = 0.0f32;
         let mut count = 0;
 
-        for net_arc in state.networks.values() {
+        for net_arc in networks {
             let net = net_arc.read().await;
             let mut net_neurons = 0u64;
             let mut red_neurons = 0u64;
@@ -7578,6 +7590,9 @@ impl DistributedNode {
             (0, 0, 0.0, 0, 0, 0)
         };
 
+        // This short snapshot is taken only after all potentially blocking
+        // per-network reads have completed.
+        let state = self.state.read().await;
         let (comm_protocol, peer_comm_protocols) = {
             #[cfg(feature = "openmpi")]
             let mpi_available = crate::openmpi_runtime::spike_transport_available();
@@ -7844,9 +7859,19 @@ impl DistributedNode {
     }
 
     pub async fn get_network_resources(&self) -> HashMap<String, NetworkResources> {
-        let state = self.state.read().await;
+        let (networks, load_fingerprints) = {
+            let state = self.state.read().await;
+            (
+                state
+                    .networks
+                    .iter()
+                    .map(|(id, network)| (id.clone(), network.clone()))
+                    .collect::<Vec<_>>(),
+                state.network_load_fingerprints.clone(),
+            )
+        };
         let mut res = HashMap::new();
-        for (id, net_arc) in &state.networks {
+        for (id, net_arc) in networks {
             let net = net_arc.read().await;
             let mut layer_neuron_counts = HashMap::new();
             let mut total_neurons = 0u64;
@@ -7877,17 +7902,14 @@ impl DistributedNode {
                 }
             }
 
+            let load_fingerprint = load_fingerprints.get(&id).copied().unwrap_or_default();
             res.insert(
-                id.clone(),
+                id,
                 NetworkResources {
                     num_neurons: total_neurons,
                     layer_neuron_counts,
                     avg_step_time_ms: net.avg_step_time_ms,
-                    load_fingerprint: state
-                        .network_load_fingerprints
-                        .get(id)
-                        .copied()
-                        .unwrap_or_default(),
+                    load_fingerprint,
                 },
             );
         }
@@ -7902,12 +7924,19 @@ impl DistributedNode {
         let mut registrations = Vec::new();
         #[cfg(feature = "stable_executor_live")]
         {
-            let state = self.state.read().await;
-            for (network_id, network) in &state.networks {
+            let networks = self
+                .state
+                .read()
+                .await
+                .networks
+                .iter()
+                .map(|(network_id, network)| (network_id.clone(), network.clone()))
+                .collect::<Vec<_>>();
+            for (network_id, network) in networks {
                 let network = network.read().await;
                 if let Some(executor) = network.stable_executor.as_ref() {
                     registrations.push(stable_registration_to_proto(
-                        executor.registration_identity(network_id.clone()),
+                        executor.registration_identity(network_id),
                     ));
                 }
             }
@@ -13670,6 +13699,96 @@ mod tests {
             .await
             .expect_err("display polling must not wait behind neural traversal");
         assert_eq!(busy.code(), tonic::Code::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_resource_snapshots_do_not_hold_node_state_during_network_reads() {
+        let node = DistributedNode::new("resource-lock-test".to_string(), false);
+        let mut config = NetworkConfig::default();
+        config.num_sensory_neurons = 2;
+        config.num_hidden_layers = 1;
+        config.num_hidden_per_layer_initial = 3;
+        config.num_output_neurons = 2;
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "resource-lock-test".to_string(),
+            config_json: serde_json::to_string(&config)
+                .expect("serialize resource test config")
+                .into_bytes(),
+            layers: vec![0, 1],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "lif".to_string(),
+            learning_rule: "stdp".to_string(),
+        })
+        .await;
+
+        let network = node
+            .state
+            .read()
+            .await
+            .networks
+            .get("resource-lock-test")
+            .expect("network loaded")
+            .clone();
+        let network_writer = network.write().await;
+
+        let resource_node = node.clone();
+        let resources = tokio::spawn(async move { resource_node.get_resources().await });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let state_writer = tokio::time::timeout(Duration::from_millis(100), node.state.write())
+            .await
+            .expect("get_resources must release node state before waiting for a network read");
+        drop(state_writer);
+        assert!(!resources.is_finished(), "the network read remains blocked");
+
+        let network_resources_node = node.clone();
+        let network_resources =
+            tokio::spawn(async move { network_resources_node.get_network_resources().await });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let state_writer = tokio::time::timeout(Duration::from_millis(100), node.state.write())
+            .await
+            .expect(
+                "get_network_resources must release node state before waiting for a network read",
+            );
+        drop(state_writer);
+        assert!(
+            !network_resources.is_finished(),
+            "the network read remains blocked"
+        );
+
+        #[cfg(feature = "stable_executor_live")]
+        {
+            let registrations_node = node.clone();
+            let registrations = tokio::spawn(async move {
+                registrations_node.get_stable_executor_registrations().await
+            });
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let state_writer = tokio::time::timeout(Duration::from_millis(100), node.state.write())
+                .await
+                .expect("stable registrations must release node state before network reads");
+            drop(state_writer);
+            assert!(
+                !registrations.is_finished(),
+                "the stable network read remains blocked"
+            );
+            drop(network_writer);
+            resources.await.expect("resource snapshot task");
+            network_resources
+                .await
+                .expect("network resource snapshot task");
+            registrations
+                .await
+                .expect("stable registration snapshot task");
+        }
+        #[cfg(not(feature = "stable_executor_live"))]
+        {
+            drop(network_writer);
+            resources.await.expect("resource snapshot task");
+            network_resources
+                .await
+                .expect("network resource snapshot task");
+        }
     }
 
     #[tokio::test]
