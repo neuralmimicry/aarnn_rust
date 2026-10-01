@@ -3615,6 +3615,12 @@ fn primary_owner_missing_from_network_affinity(
 /// in-memory topology with that older snapshot. Placement is only required
 /// when the set of hosted layers changes.
 fn network_resource_topology_changed(range: &LayerRange, resources: &NetworkResources) -> bool {
+    // Heartbeats use a cached resource sample when the simulation owns the
+    // Runner lock. An empty layer map is therefore a transient unknown, not
+    // a request to erase and reload the worker's biological state.
+    if resources.layer_neuron_counts.is_empty() {
+        return false;
+    }
     let hosted_layers = range
         .layers
         .iter()
@@ -5148,6 +5154,11 @@ impl NodeState {
 pub struct DistributedNode {
     pub state: Arc<RwLock<NodeState>>,
     pub system: Arc<RwLock<System>>,
+    /// Best-effort snapshots for heartbeat reporting. A network worker holds
+    /// its write lock while advancing a biological step; control-plane
+    /// heartbeats must use the last completed snapshot rather than wait for
+    /// that step and disappear from orchestrator membership.
+    network_resource_cache: Arc<std::sync::RwLock<HashMap<String, ManagedNetworkResourceSnapshot>>>,
     /// Serializes placement passes so heartbeats can request work without
     /// stacking redundant rebalances behind a slow planner pass.
     rebalance_gate: Arc<tokio::sync::Mutex<()>>,
@@ -5196,6 +5207,58 @@ struct NetworkWorkerHandles {
     worker: tokio::task::JoinHandle<()>,
     output: tokio::task::JoinHandle<()>,
     autosave: tokio::task::JoinHandle<()>,
+}
+
+#[derive(Clone, Default)]
+struct ManagedNetworkResourceSnapshot {
+    network: NetworkResources,
+    redundant_neurons: u64,
+    current_depth: u32,
+    desired_depth: u32,
+    desired_dt: f64,
+}
+
+fn managed_network_resource_snapshot(
+    network: &ManagedNetwork,
+    load_fingerprint: u64,
+) -> ManagedNetworkResourceSnapshot {
+    let reported_layers =
+        reported_layers_for_resources(&network.assigned_layers, &network.redundant_layers);
+    let mut layer_neuron_counts = HashMap::new();
+    let mut total_neurons = 0u64;
+    let mut redundant_neurons = 0u64;
+
+    for layer in reported_layers {
+        let size = if (layer as usize) < network.runner.net.num_hidden_layers {
+            network.runner.layer_size(layer as usize) as u64
+        } else if network.runner.net.io_channels_are_biological
+            && (layer as usize) == network.runner.net.num_hidden_layers
+        {
+            network.runner.net.num_output_neurons as u64
+        } else {
+            0
+        };
+        layer_neuron_counts.insert(layer, size);
+        if network.assigned_layers.contains(&layer) {
+            total_neurons += size;
+            if network.redundant_layers.contains(&layer) {
+                redundant_neurons += size;
+            }
+        }
+    }
+
+    ManagedNetworkResourceSnapshot {
+        network: NetworkResources {
+            num_neurons: total_neurons,
+            layer_neuron_counts,
+            avg_step_time_ms: network.avg_step_time_ms,
+            load_fingerprint,
+        },
+        redundant_neurons,
+        current_depth: network.runner.net.aarnn_layer_depth as u32,
+        desired_depth: network.desired_aarnn_depth,
+        desired_dt: network.runner.lif.dt,
+    }
 }
 
 fn bounded_worker_queue_capacity(name: &str, default: usize, maximum: usize) -> usize {
@@ -5262,6 +5325,7 @@ impl DistributedNode {
                     .with_cpu(CpuRefreshKind::everything())
                     .with_memory(MemoryRefreshKind::everything()),
             ))),
+            network_resource_cache: Arc::new(std::sync::RwLock::new(HashMap::new())),
             rebalance_gate: Arc::new(tokio::sync::Mutex::new(())),
             migration_executor_registry:
                 crate::migration_executor::MigrationExecutorRegistry::default(),
@@ -7450,14 +7514,28 @@ impl DistributedNode {
         // same state lock to resolve their ingress mailbox; on a busy worker,
         // nesting these locks turns a slow heartbeat snapshot into an input
         // admission outage.
-        let networks = self
-            .state
+        let (networks, load_fingerprints) = {
+            let state = self.state.read().await;
+            (
+                state
+                    .networks
+                    .iter()
+                    .map(|(network_id, network)| (network_id.clone(), network.clone()))
+                    .collect::<Vec<_>>(),
+                state.network_load_fingerprints.clone(),
+            )
+        };
+        let cached_snapshots = self
+            .network_resource_cache
             .read()
-            .await
-            .networks
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+            .ok()
+            .map(|cache| cache.clone())
+            .unwrap_or_default();
+        let current_network_ids = networks
+            .iter()
+            .map(|(network_id, _)| network_id.clone())
+            .collect::<HashSet<_>>();
+        let mut refreshed_snapshots = Vec::new();
         let mut total_node_neurons = 0u64;
         let mut redundant_node_neurons = 0u64;
         let mut max_current_depth = 0u32;
@@ -7466,32 +7544,37 @@ impl DistributedNode {
         let mut total_avg_step_time = 0.0f32;
         let mut count = 0;
 
-        for net_arc in networks {
-            let net = net_arc.read().await;
-            let mut net_neurons = 0u64;
-            let mut red_neurons = 0u64;
-            for &l in &net.assigned_layers {
-                let size = if (l as usize) < net.runner.net.num_hidden_layers {
-                    net.runner.layer_size(l as usize) as u64
-                } else if net.runner.net.io_channels_are_biological
-                    && (l as usize) == net.runner.net.num_hidden_layers
-                {
-                    net.runner.net.num_output_neurons as u64
-                } else {
-                    0
-                };
-                net_neurons += size;
-                if net.redundant_layers.contains(&l) {
-                    red_neurons += size;
+        for (network_id, net_arc) in networks {
+            let load_fingerprint = load_fingerprints
+                .get(&network_id)
+                .copied()
+                .unwrap_or_default();
+            let snapshot = match net_arc.try_read() {
+                Ok(net) => {
+                    let snapshot = managed_network_resource_snapshot(&net, load_fingerprint);
+                    refreshed_snapshots.push((network_id.clone(), snapshot.clone()));
+                    Some(snapshot)
                 }
-            }
-            total_node_neurons += net_neurons;
-            redundant_node_neurons += red_neurons;
-            max_current_depth = max_current_depth.max(net.runner.net.aarnn_layer_depth as u32);
-            max_desired_depth = max_desired_depth.max(net.desired_aarnn_depth);
-            total_desired_dt += net.runner.lif.dt;
-            total_avg_step_time += net.avg_step_time_ms;
+                // A worker can receive its first heartbeat while an active
+                // simulation step already owns the network lock. Do not let
+                // the empty default snapshot contribute a zero desired dt;
+                // report no neural sample until the next successful read.
+                Err(_) => cached_snapshots.get(&network_id).cloned(),
+            };
+            let Some(snapshot) = snapshot else {
+                continue;
+            };
+            total_node_neurons += snapshot.network.num_neurons;
+            redundant_node_neurons += snapshot.redundant_neurons;
+            max_current_depth = max_current_depth.max(snapshot.current_depth);
+            max_desired_depth = max_desired_depth.max(snapshot.desired_depth);
+            total_desired_dt += snapshot.desired_dt;
+            total_avg_step_time += snapshot.network.avg_step_time_ms;
             count += 1;
+        }
+        if let Ok(mut cache) = self.network_resource_cache.write() {
+            cache.retain(|network_id, _| current_network_ids.contains(network_id));
+            cache.extend(refreshed_snapshots);
         }
         let desired_dt = if count > 0 {
             total_desired_dt / count as f64
@@ -7870,50 +7953,42 @@ impl DistributedNode {
                 state.network_load_fingerprints.clone(),
             )
         };
-        let mut res = HashMap::new();
-        for (id, net_arc) in networks {
-            let net = net_arc.read().await;
-            let mut layer_neuron_counts = HashMap::new();
-            let mut total_neurons = 0u64;
-
-            // Heartbeats must describe the complete hosted placement shape,
-            // including redundant layers.  The orchestrator compares this
-            // set with active+backup placement; omitting backups makes every
-            // heartbeat look like a topology change and replays LoadNetwork,
-            // which discards biological growth.  Keep num_neurons as the
-            // active total so redundant_neurons remains a separate resource
-            // metric (REQ growth and placement stability).
-            let reported_layers =
-                reported_layers_for_resources(&net.assigned_layers, &net.redundant_layers);
-
-            for &l in &reported_layers {
-                let size = if (l as usize) < net.runner.net.num_hidden_layers {
-                    net.runner.layer_size(l as usize) as u64
-                } else if net.runner.net.io_channels_are_biological
-                    && (l as usize) == net.runner.net.num_hidden_layers
-                {
-                    net.runner.net.num_output_neurons as u64
-                } else {
-                    0
-                };
-                layer_neuron_counts.insert(l, size);
-                if net.assigned_layers.contains(&l) {
-                    total_neurons += size;
+        let cached_snapshots = self
+            .network_resource_cache
+            .read()
+            .ok()
+            .map(|cache| cache.clone())
+            .unwrap_or_default();
+        let current_network_ids = networks
+            .iter()
+            .map(|(network_id, _)| network_id.clone())
+            .collect::<HashSet<_>>();
+        let mut refreshed_snapshots = Vec::new();
+        let mut resources = HashMap::new();
+        for (network_id, net_arc) in networks {
+            let load_fingerprint = load_fingerprints
+                .get(&network_id)
+                .copied()
+                .unwrap_or_default();
+            let mut snapshot = match net_arc.try_read() {
+                Ok(net) => {
+                    let snapshot = managed_network_resource_snapshot(&net, load_fingerprint);
+                    refreshed_snapshots.push((network_id.clone(), snapshot.clone()));
+                    snapshot
                 }
-            }
-
-            let load_fingerprint = load_fingerprints.get(&id).copied().unwrap_or_default();
-            res.insert(
-                id,
-                NetworkResources {
-                    num_neurons: total_neurons,
-                    layer_neuron_counts,
-                    avg_step_time_ms: net.avg_step_time_ms,
-                    load_fingerprint,
-                },
-            );
+                Err(_) => cached_snapshots
+                    .get(&network_id)
+                    .cloned()
+                    .unwrap_or_default(),
+            };
+            snapshot.network.load_fingerprint = load_fingerprint;
+            resources.insert(network_id, snapshot.network);
         }
-        res
+        if let Ok(mut cache) = self.network_resource_cache.write() {
+            cache.retain(|network_id, _| current_network_ids.contains(network_id));
+            cache.extend(refreshed_snapshots);
+        }
+        resources
     }
 
     /// Report the local stable executor capabilities for authenticated
@@ -7933,7 +8008,13 @@ impl DistributedNode {
                 .map(|(network_id, network)| (network_id.clone(), network.clone()))
                 .collect::<Vec<_>>();
             for (network_id, network) in networks {
-                let network = network.read().await;
+                // A stable registration is a heartbeat observation, not an
+                // operation that may delay the control plane. Omit this
+                // sample while the simulation owns its network lock; the
+                // next heartbeat will publish a fresh authority view.
+                let Ok(network) = network.try_read() else {
+                    continue;
+                };
                 if let Some(executor) = network.stable_executor.as_ref() {
                     registrations.push(stable_registration_to_proto(
                         executor.registration_identity(network_id),
@@ -13702,7 +13783,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn heartbeat_resource_snapshots_do_not_hold_node_state_during_network_reads() {
+    async fn heartbeat_resource_snapshots_use_cached_values_while_network_is_busy() {
         let node = DistributedNode::new("resource-lock-test".to_string(), false);
         let mut config = NetworkConfig::default();
         config.num_sensory_neurons = 2;
@@ -13733,62 +13814,52 @@ mod tests {
             .clone();
         let network_writer = network.write().await;
 
-        let resource_node = node.clone();
-        let resources = tokio::spawn(async move { resource_node.get_resources().await });
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        let state_writer = tokio::time::timeout(Duration::from_millis(100), node.state.write())
+        let first_heartbeat = tokio::time::timeout(Duration::from_secs(2), node.get_resources())
             .await
-            .expect("get_resources must release node state before waiting for a network read");
-        drop(state_writer);
-        assert!(!resources.is_finished(), "the network read remains blocked");
-
-        let network_resources_node = node.clone();
-        let network_resources =
-            tokio::spawn(async move { network_resources_node.get_network_resources().await });
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        let state_writer = tokio::time::timeout(Duration::from_millis(100), node.state.write())
-            .await
-            .expect(
-                "get_network_resources must release node state before waiting for a network read",
-            );
-        drop(state_writer);
-        assert!(
-            !network_resources.is_finished(),
-            "the network read remains blocked"
-        );
+            .expect("an uncached heartbeat must not wait for the simulation's network lock");
+        assert_eq!(first_heartbeat.num_neurons, 0);
+        assert!(first_heartbeat.desired_dt.is_finite() && first_heartbeat.desired_dt > 0.0);
+        let first_network_resources =
+            tokio::time::timeout(Duration::from_secs(2), node.get_network_resources())
+                .await
+                .expect(
+                    "an uncached network sample must not wait for the simulation's network lock",
+                );
+        let unknown_network = first_network_resources
+            .get("resource-lock-test")
+            .expect("the loaded network remains identifiable while its sample is unknown");
+        assert!(unknown_network.layer_neuron_counts.is_empty());
 
         #[cfg(feature = "stable_executor_live")]
         {
-            let registrations_node = node.clone();
-            let registrations = tokio::spawn(async move {
-                registrations_node.get_stable_executor_registrations().await
-            });
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            let state_writer = tokio::time::timeout(Duration::from_millis(100), node.state.write())
-                .await
-                .expect("stable registrations must release node state before network reads");
-            drop(state_writer);
-            assert!(
-                !registrations.is_finished(),
-                "the stable network read remains blocked"
-            );
-            drop(network_writer);
-            resources.await.expect("resource snapshot task");
-            network_resources
-                .await
-                .expect("network resource snapshot task");
-            registrations
-                .await
-                .expect("stable registration snapshot task");
+            let registrations = tokio::time::timeout(
+                Duration::from_secs(2),
+                node.get_stable_executor_registrations(),
+            )
+            .await
+            .expect("stable registration reporting must not wait for a busy network");
+            assert!(registrations.is_empty());
         }
-        #[cfg(not(feature = "stable_executor_live"))]
-        {
-            drop(network_writer);
-            resources.await.expect("resource snapshot task");
-            network_resources
+        drop(network_writer);
+
+        let baseline_resources = node.get_resources().await;
+        let baseline_network_resources = node.get_network_resources().await;
+        assert!(baseline_resources.num_neurons > 0);
+        assert!(baseline_network_resources.contains_key("resource-lock-test"));
+        let network_writer = network.write().await;
+
+        let resources = tokio::time::timeout(Duration::from_secs(2), node.get_resources())
+            .await
+            .expect("get_resources must not wait for the simulation's network lock");
+        assert_eq!(resources.num_neurons, baseline_resources.num_neurons);
+
+        let network_resources =
+            tokio::time::timeout(Duration::from_secs(2), node.get_network_resources())
                 .await
-                .expect("network resource snapshot task");
-        }
+                .expect("get_network_resources must not wait for the simulation's network lock");
+        assert_eq!(network_resources, baseline_network_resources);
+
+        drop(network_writer);
     }
 
     #[tokio::test]
@@ -14154,6 +14225,10 @@ mod tests {
             layer_neuron_counts: HashMap::from([(0, 146)]),
             backup_layers: vec![1],
         };
+        assert!(
+            !network_resource_topology_changed(&range, &NetworkResources::default()),
+            "an empty cached heartbeat sample is unknown, not evidence to reload"
+        );
         let grown = NetworkResources {
             num_neurons: 151,
             layer_neuron_counts: HashMap::from([(0, 151), (1, 175)]),
