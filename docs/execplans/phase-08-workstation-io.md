@@ -181,6 +181,29 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
 
 ## Progress
 
+- [~] `2026-10-01 16:22Z` Read-only live diagnostics confirmed that
+  `GetNetworkActivity` is failing on the same lock path identified by the
+  worker logs. From `sm00`, authenticated GETs to `/api/activity` addressed
+  directly to `native-qc04` (`192.168.1.64:50051`), `native-qc03`
+  (`192.168.1.63:50051`), `native-qc02` (`192.168.1.62:50051`), `native-sm00`
+  (`192.168.1.66:50051`) and `native-sm01` (`192.168.1.68:50051`) all returned
+  retryable `network is busy; retry activity later`. This matches the prior
+  `try_read` observer path; `src/distributed.rs` now waits at most 250 ms for
+  the network read lock, copies the bounded activity snapshot, then releases
+  the guard before encoding. `cargo fmt --all -- --check` and
+  `cargo test --locked --lib activity -- --nocapture` pass (3 tests, 0 failed),
+  including the held-writer/read-release regression. The activity change is
+  local and not deployed. The sensory path still times out during prepare on
+  `native-qc04`; no sensory admission or motor application is verified.
+  Meanwhile `sm00` keeps the persistent world clock advancing at about 0.98x
+  wall time and records coalesced source frames. On `qc01`, the AARNN engine pod
+  has restarted four times (latest exit 137), and the orchestrator pod's last
+  termination was `OOMKilled`; native worker configs still use
+  `192.168.1.61:50051`, served by the `tenant-aarnn` orchestrator process.
+  Removing that tenant/service now cannot satisfy the user's zero-impact
+  condition, so it remains in place until a replacement coordinator is
+  independently deployed and every dependent product is verified.
+
 - [~] `2026-10-01 06:40Z` The ARM64 `Verify` leg of workflow run
   `36818861504` compiled on the only self-hosted ARM runner, which is live
   cluster node `qc01`. During that run the AARNN engine and orchestrator were
@@ -197,7 +220,7 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   `ubuntu-24.04`/`ubuntu-24.04-arm`; syntax validation passed with `yamllint`,
   while actionlint is unavailable. Commit `199d49f` moved verification,
   package, container and promotion jobs to architecture-matched hosted runners
-  and was pushed to this branch. All-feature build run `36826207197` is now
+  and was pushed to this branch. All-feature build run `36826210234` is now
   verifying; after its workload manifests pass, update Ansible pins and deploy.
   Before closing recovery, confirm live neural state and investigate the FPV
   worker crash loop.
@@ -211,7 +234,7 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   pass, and both hosts expose `libgpgme.so.11` plus OpenCV 4.6 video-I/O. The
   live broker health endpoint reports one healthy `shared-fleet` world. The
   AARNN ingress image rollout still awaits verified images from run
-  `36826207197`.
+  `36826210234`.
 
 - [~] `2026-10-01 04:59Z` Read-only source tracing found why managed Webots
   output polls can report no actuator spikes even while sensory ingress is

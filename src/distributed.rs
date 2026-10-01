@@ -12574,25 +12574,13 @@ impl DistributedNeuromorphic for DistributedNode {
             return Err(Status::not_found("network not hosted on this node"));
         };
 
-        let (
-            sensory,
-            hidden,
-            output,
-            output_history,
-            sim_step,
-            sim_time_ms,
-            output_source_layer,
-            output_stage_assigned,
-        ) = tokio::task::spawn_blocking(move || -> Result<_, Status> {
-            // Activity is an optional UI projection. Do not queue a
-            // blocking reader behind neural traversal: Tokio's fair
-            // RwLock can otherwise let this observer delay the next
-            // authoritative writer. A busy worker returns a retryable
-            // status and the display polls again later.
-            let net = net_arc
-                .try_read()
-                .map_err(|_| Status::unavailable("network is busy; retry activity later"))?;
-            let ts_us = (net.runner.t_ms * 1000.0) as u64;
+        // A single try_read races the continuously scheduled neural writer
+        // and can make live actuator polling report `busy` indefinitely. Queue
+        // this read for a short, bounded interval. The guard is held only while
+        // copying the bounded projection; encoding runs after it is dropped so
+        // no lock crosses an await or CPU-heavy conversion.
+        let raw_activity = tokio::time::timeout(Duration::from_millis(250), async {
+            let net = net_arc.read().await;
             let sim_step = net.runner.t as u64;
             let sim_time_ms = net.runner.t_ms;
             let sensory_vec: Vec<i8> = net
@@ -12601,25 +12589,11 @@ impl DistributedNeuromorphic for DistributedNode {
                 .front()
                 .map(|frame| frame.iter().copied().collect())
                 .unwrap_or_else(|| vec![0; net.runner.net.num_sensory_neurons]);
-            let exchange = encode_exchange(ts_us, 0, &sensory_vec);
-            let sensory = SpikeIndices {
-                indices: exchange.spike_indices,
-                aer_payload: exchange.aer_payload,
-                aer_base: exchange.aer_base,
-            };
-            let hidden = net
+            let hidden_vecs = net
                 .runner
                 .last_spk_h
                 .iter()
-                .map(|layer| {
-                    let layer_vec: Vec<i8> = layer.iter().copied().collect();
-                    let exchange = encode_exchange(ts_us, 0, &layer_vec);
-                    SpikeIndices {
-                        indices: exchange.spike_indices,
-                        aer_payload: exchange.aer_payload,
-                        aer_base: exchange.aer_base,
-                    }
-                })
+                .map(|layer| layer.iter().copied().collect::<Vec<i8>>())
                 .collect::<Vec<_>>();
             let output_source_layer = if net.runner.net.io_channels_are_biological {
                 net.runner.net.num_hidden_layers
@@ -12635,8 +12609,63 @@ impl DistributedNeuromorphic for DistributedNode {
             } else {
                 net.assigned_layers.contains(&output_source_layer_u32)
             };
+            let (output_vec, output_history_vecs) = if output_stage_assigned {
+                (
+                    net.runner.last_spk_o.iter().copied().collect::<Vec<i8>>(),
+                    net.runner
+                        .spk_hist_o
+                        .iter()
+                        .take(128)
+                        .map(|frame| frame.iter().copied().collect::<Vec<i8>>())
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            (
+                sensory_vec,
+                hidden_vecs,
+                output_vec,
+                output_history_vecs,
+                sim_step,
+                sim_time_ms,
+                output_source_layer_u32,
+                output_stage_assigned,
+            )
+        })
+        .await
+        .map_err(|_| Status::unavailable("network remained busy; retry activity later"))?;
+
+        let (
+            sensory_vec,
+            hidden_vecs,
+            output_vec,
+            output_history_vecs,
+            sim_step,
+            sim_time_ms,
+            output_source_layer,
+            output_stage_assigned,
+        ) = raw_activity;
+        let ts_us = (sim_time_ms * 1000.0) as u64;
+        let (sensory, hidden, output, output_history) = tokio::task::spawn_blocking(move || {
+            let sensory_exchange = encode_exchange(ts_us, 0, &sensory_vec);
+            let sensory = SpikeIndices {
+                indices: sensory_exchange.spike_indices,
+                aer_payload: sensory_exchange.aer_payload,
+                aer_base: sensory_exchange.aer_base,
+            };
+            let hidden = hidden_vecs
+                .iter()
+                .map(|layer_vec| {
+                    let exchange = encode_exchange(ts_us, 0, layer_vec);
+                    SpikeIndices {
+                        indices: exchange.spike_indices,
+                        aer_payload: exchange.aer_payload,
+                        aer_base: exchange.aer_base,
+                    }
+                })
+                .collect::<Vec<_>>();
             let output = if output_stage_assigned {
-                let output_vec: Vec<i8> = net.runner.last_spk_o.iter().copied().collect();
                 let exchange = encode_exchange(ts_us, 0, &output_vec);
                 SpikeIndices {
                     indices: exchange.spike_indices,
@@ -12646,37 +12675,21 @@ impl DistributedNeuromorphic for DistributedNode {
             } else {
                 SpikeIndices::default()
             };
-            let output_history = if output_stage_assigned {
-                net.runner
-                    .spk_hist_o
-                    .iter()
-                    .take(128)
-                    .map(|frame| {
-                        let frame_vec: Vec<i8> = frame.iter().copied().collect();
-                        let exchange = encode_exchange(ts_us, 0, &frame_vec);
-                        SpikeIndices {
-                            indices: exchange.spike_indices,
-                            aer_payload: exchange.aer_payload,
-                            aer_base: exchange.aer_base,
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
-            Ok((
-                sensory,
-                hidden,
-                output,
-                output_history,
-                sim_step,
-                sim_time_ms,
-                output_source_layer_u32,
-                output_stage_assigned,
-            ))
+            let output_history = output_history_vecs
+                .iter()
+                .map(|frame_vec| {
+                    let exchange = encode_exchange(ts_us, 0, frame_vec);
+                    SpikeIndices {
+                        indices: exchange.spike_indices,
+                        aer_payload: exchange.aer_payload,
+                        aer_base: exchange.aer_base,
+                    }
+                })
+                .collect::<Vec<_>>();
+            (sensory, hidden, output, output_history)
         })
         .await
-        .map_err(|e| Status::internal(format!("activity task failed: {}", e)))??;
+        .map_err(|error| Status::internal(format!("activity task failed: {error}")))?;
 
         Ok(Response::new(NetworkActivityResponse {
             network_id: req.network_id,
@@ -13791,14 +13804,28 @@ mod tests {
                 .expect("network loaded")
                 .clone()
         };
-        let _writer = network.write().await;
-        let busy = node
-            .get_network_activity(Request::new(NetworkActivityRequest {
-                network_id: "activity".to_string(),
-            }))
+        let writer = network.write().await;
+        let activity_node = node.clone();
+        let activity = tokio::spawn(async move {
+            activity_node
+                .get_network_activity(Request::new(NetworkActivityRequest {
+                    network_id: "activity".to_string(),
+                }))
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !activity.is_finished(),
+            "activity waits asynchronously for the current neural step"
+        );
+        drop(writer);
+        let response = tokio::time::timeout(Duration::from_millis(500), activity)
             .await
-            .expect_err("display polling must not wait behind neural traversal");
-        assert_eq!(busy.code(), tonic::Code::Unavailable);
+            .expect("activity read remains bounded")
+            .expect("activity task joins")
+            .expect("activity succeeds after the step lock is released")
+            .into_inner();
+        assert_eq!(response.sim_step, 7);
     }
 
     #[tokio::test]
