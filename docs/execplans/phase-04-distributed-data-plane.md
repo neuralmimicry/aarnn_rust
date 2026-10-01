@@ -93,6 +93,13 @@ Route only events implied by the ownership/route plan. Run local vs seven-proces
   frames; it does not apply events to shard state or publish durable receipts.
   No reorder/duplication/reconnect multi-process cutover evidence exists, so
   `causal_transport` remains disabled.
+- [~] `2026-10-01 22:00Z` The live Webots shared-SNN diagnostic found that the
+  compatibility `LoadNetwork` command was removed from the orchestrator queue
+  on first delivery, before the worker reported the assigned load fingerprint.
+  The heartbeat now retries until exact application evidence arrives, and the
+  worker deduplicates in-flight/queued retries. Targeted tests and formatting
+  pass locally; the new worker/orchestrator artifact and live AER/motor check
+  are still pending.
 
 ## Validation and acceptance
 
@@ -123,11 +130,22 @@ The additive causal service is a generated validation/echo seam only. Existing
 `SpikeBatch` peer streams still carry production traffic, and causal receipts
 are not restart-durable; this prevents cutover claims.
 
+The Webots shared-SNN deployment exposed the same delivery gap in the legacy
+load-command handoff: a successful heartbeat response was treated as command
+application even while the worker still reported fingerprint zero. The exact
+fingerprint is now the acknowledgement boundary for those idempotent loads.
+
 ## Decision Log
 
 - Initial decision: watermarks express per-route safe horizons; component termination proves cyclic closure. They are complementary, not interchangeable. Authority: Sections 6.3–6.4.
 - Initial decision: delivery is retried and deduplicated at authoritative application. Authority: Section 10.3.
 - Initial decision: transport switching resumes one logical stream. Authority: Sections 10.1–10.2 and `IT-DIST-002`.
+- `2026-10-01` Compatibility load commands remain queued and retry at least
+  once until a worker heartbeat reports the exact scheduler-authored load
+  fingerprint. Replays are deduplicated per network on the worker. A heartbeat
+  response is delivery evidence only, not application evidence. This preserves
+  strict ingress readiness during restart/rejoin; it does not claim that the
+  legacy layer-scheduler path satisfies the Phase 4 causal data-plane gate.
 
 ## Outcomes & Retrospective
 

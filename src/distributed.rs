@@ -11048,6 +11048,11 @@ impl DistributedNeuromorphic for DistributedNode {
             )?;
         }
         let now = std::time::Instant::now();
+        let reported_load_fingerprints = req
+            .network_resources
+            .iter()
+            .map(|(network_id, resources)| (network_id.clone(), resources.load_fingerprint))
+            .collect::<HashMap<_, _>>();
 
         // A worker can outlive its orchestrator membership record when a slow
         // startup heartbeat is pruned.  Do not acknowledge that worker forever:
@@ -11268,13 +11273,31 @@ impl DistributedNeuromorphic for DistributedNode {
                 .retain(|_, metrics| !metrics.is_empty());
 
             if let Some(pending) = state.pending_commands.get_mut(&req.node_id) {
-                // Legacy commands retain their existing one-shot heartbeat
-                // behaviour. Activation commands remain queued until a
-                // digest-bound result arrives, so a worker crash between
-                // receipt and bootstrap is retried after it rejoins.
+                // Legacy control commands retain their existing one-shot
+                // heartbeat behaviour. Load commands are idempotent and stay
+                // queued until a worker heartbeat proves the exact assignment
+                // was applied; this closes the loss window between command
+                // delivery and an asynchronous worker load. Stable activation
+                // commands retain their digest-bound result contract.
                 let mut retained = Vec::new();
                 for command in std::mem::take(pending) {
-                    if stable_activation_command_identity(&command).is_some() {
+                    if command.r#type == proto::network_command::CommandType::LoadNetwork as i32 {
+                        let expected_fingerprint = network_load_command_fingerprint(
+                            &command.config_json,
+                            &command.layers,
+                            &command.redundant_layers,
+                            command.desired_aarnn_depth,
+                            &command.neuron_model,
+                            &command.learning_rule,
+                        );
+                        let applied = reported_load_fingerprints
+                            .get(&command.network_id)
+                            .is_some_and(|reported| *reported == expected_fingerprint);
+                        if !applied {
+                            commands.push(command.clone());
+                            retained.push(command);
+                        }
+                    } else if stable_activation_command_identity(&command).is_some() {
                         commands.push(command.clone());
                         retained.push(command);
                     } else {
@@ -12964,6 +12987,111 @@ mod tests {
         .expect("registered worker heartbeat succeeds")
         .into_inner();
         assert!(response.acknowledged);
+    }
+
+    #[tokio::test]
+    async fn legacy_load_command_retries_until_exact_worker_fingerprint_is_reported() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("orch".to_string(), true);
+        let command = NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "alpha".to_owned(),
+            config_json: br#"{"net":{"num_hidden_layers":1}}"#.to_vec(),
+            layers: vec![0],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 3,
+            neuron_model: "aarnn".to_owned(),
+            learning_rule: "aarnn".to_owned(),
+        };
+        let expected_fingerprint = network_load_command_fingerprint(
+            &command.config_json,
+            &command.layers,
+            &command.redundant_layers,
+            command.desired_aarnn_depth,
+            &command.neuron_model,
+            &command.learning_rule,
+        );
+        {
+            let mut state = node.state.write().await;
+            state.nodes.insert(
+                "worker-a".to_owned(),
+                NodeStatus {
+                    node_id: "worker-a".to_owned(),
+                    address: "127.0.0.1:65534".to_owned(),
+                    ..Default::default()
+                },
+            );
+            state
+                .last_heartbeat
+                .insert("worker-a".to_owned(), std::time::Instant::now());
+            state.network_registry.insert(
+                "alpha".to_owned(),
+                NetworkStatus {
+                    network_id: "alpha".to_owned(),
+                    num_layers: 1,
+                    ..Default::default()
+                },
+            );
+            state
+                .pending_commands
+                .insert("worker-a".to_owned(), vec![command.clone()]);
+        }
+
+        let heartbeat = |reported_fingerprint: Option<u64>| HeartbeatRequest {
+            node_id: "worker-a".to_owned(),
+            resources: Some(Resources::default()),
+            network_resources: reported_fingerprint
+                .map(|load_fingerprint| {
+                    HashMap::from([(
+                        "alpha".to_owned(),
+                        NetworkResources {
+                            num_neurons: 1,
+                            layer_neuron_counts: HashMap::from([(0, 1)]),
+                            avg_step_time_ms: 1.0,
+                            load_fingerprint,
+                        },
+                    )])
+                })
+                .unwrap_or_default(),
+            ..Default::default()
+        };
+
+        // A delivered command stays queued across a missing resource report
+        // and a stale load report. Only the exact applied assignment consumes
+        // it, so reconnects cannot strand a worker at fingerprint zero.
+        for request in [heartbeat(None), heartbeat(Some(expected_fingerprint ^ 1))] {
+            let response = node
+                .heartbeat(Request::new(request))
+                .await
+                .expect("worker heartbeat")
+                .into_inner();
+            assert_eq!(response.commands, vec![command.clone()]);
+            assert_eq!(
+                node.state
+                    .read()
+                    .await
+                    .pending_commands
+                    .get("worker-a")
+                    .map(Vec::len),
+                Some(1)
+            );
+        }
+
+        let acknowledged = node
+            .heartbeat(Request::new(heartbeat(Some(expected_fingerprint))))
+            .await
+            .expect("matching load heartbeat")
+            .into_inner();
+        assert!(acknowledged.commands.is_empty());
+        assert!(
+            node.state
+                .read()
+                .await
+                .pending_commands
+                .get("worker-a")
+                .is_none_or(Vec::is_empty)
+        );
     }
 
     #[cfg(feature = "stable_executor_live")]

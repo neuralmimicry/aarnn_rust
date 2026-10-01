@@ -945,6 +945,33 @@ fn configured_tokio_worker_threads() -> Option<usize> {
         .filter(|threads| *threads > 0)
 }
 
+fn queue_received_worker_command(
+    pending: &mut std::collections::VecDeque<crate::distributed::proto::NetworkCommand>,
+    in_flight_loads: &std::collections::HashSet<String>,
+    command: crate::distributed::proto::NetworkCommand,
+) -> bool {
+    let is_load = command.r#type
+        == crate::distributed::proto::network_command::CommandType::LoadNetwork as i32;
+    if is_load {
+        if in_flight_loads.contains(&command.network_id) {
+            return false;
+        }
+        if let Some(existing) = pending.iter_mut().find(|existing| {
+            existing.r#type
+                == crate::distributed::proto::network_command::CommandType::LoadNetwork as i32
+                && existing.network_id == command.network_id
+        }) {
+            // The scheduler may revise an assignment while an older load is
+            // still waiting in the local command queue. Keep only its newest
+            // idempotent replacement rather than consuming queue capacity.
+            *existing = command;
+            return true;
+        }
+    }
+    pending.push_back(command);
+    true
+}
+
 #[derive(Debug, Deserialize)]
 struct OrchestratorNetworkSpec {
     network_id: String,
@@ -5073,10 +5100,14 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             // carrying an acknowledgement is lost, the orchestrator can
             // safely receive the identical digest-bound result again.
             let mut command_results: Vec<NetworkCommandResult> = Vec::new();
-            let mut pending_commands = std::collections::VecDeque::new();
+            let mut pending_commands: std::collections::VecDeque<NetworkCommand> =
+                std::collections::VecDeque::new();
+            let mut in_flight_loads = std::collections::HashSet::new();
             let (command_tx, mut command_rx) = tokio::sync::mpsc::channel::<NetworkCommand>(128);
             let (result_tx, mut result_rx) =
                 tokio::sync::mpsc::channel::<NetworkCommandResult>(128);
+            let (load_complete_tx, mut load_complete_rx) =
+                tokio::sync::mpsc::channel::<String>(128);
             let command_worker_node = node_inner.clone();
             let mut command_worker_shutdown = shutdown_rx_node.clone();
             tokio::spawn(async move {
@@ -5089,11 +5120,19 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                         }
                         command = command_rx.recv() => {
                             let Some(command) = command else { break; };
+                            let load_network_id = (command.r#type
+                                == crate::distributed::proto::network_command::CommandType::LoadNetwork as i32)
+                                .then(|| command.network_id.clone());
                             if let Some(result) = command_worker_node
                                 .handle_command_with_result(command)
                                 .await
                             {
                                 if result_tx.send(result).await.is_err() {
+                                    break;
+                                }
+                            }
+                            if let Some(network_id) = load_network_id {
+                                if load_complete_tx.send(network_id).await.is_err() {
                                     break;
                                 }
                             }
@@ -5179,9 +5218,26 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                             command_results.push(result);
                         }
                     }
+                    while let Ok(network_id) = load_complete_rx.try_recv() {
+                        in_flight_loads.remove(&network_id);
+                    }
                     while let Some(command) = pending_commands.pop_front() {
+                        let load_network_id = (command.r#type
+                            == crate::distributed::proto::network_command::CommandType::LoadNetwork
+                                as i32)
+                            .then(|| command.network_id.clone());
+                        if load_network_id
+                            .as_ref()
+                            .is_some_and(|network_id| in_flight_loads.contains(network_id))
+                        {
+                            continue;
+                        }
                         match command_tx.try_send(command) {
-                            Ok(()) => {}
+                            Ok(()) => {
+                                if let Some(network_id) = load_network_id {
+                                    in_flight_loads.insert(network_id);
+                                }
+                            }
                             Err(tokio::sync::mpsc::error::TrySendError::Full(command)) => {
                                 pending_commands.push_front(command);
                                 break;
@@ -5296,10 +5352,29 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                                 state.network_peers.clear();
                                 state.network_sensory_ingress_node.clear();
                             }
-                            pending_commands.extend(resp.commands);
+                            for command in resp.commands {
+                                queue_received_worker_command(
+                                    &mut pending_commands,
+                                    &in_flight_loads,
+                                    command,
+                                );
+                            }
                             while let Some(command) = pending_commands.pop_front() {
+                                let load_network_id = (command.r#type
+                                    == crate::distributed::proto::network_command::CommandType::LoadNetwork as i32)
+                                    .then(|| command.network_id.clone());
+                                if load_network_id
+                                    .as_ref()
+                                    .is_some_and(|network_id| in_flight_loads.contains(network_id))
+                                {
+                                    continue;
+                                }
                                 match command_tx.try_send(command) {
-                                    Ok(()) => {}
+                                    Ok(()) => {
+                                        if let Some(network_id) = load_network_id {
+                                            in_flight_loads.insert(network_id);
+                                        }
+                                    }
                                     Err(tokio::sync::mpsc::error::TrySendError::Full(command)) => {
                                         pending_commands.push_front(command);
                                         break;
@@ -5511,6 +5586,64 @@ mod management_startup_tests {
         assert!(apply_io_contract(&mut snapshot_cfg, &contract));
         assert_eq!(snapshot_cfg.num_sensory_neurons, 4);
         assert_eq!(snapshot_cfg.num_output_neurons, 12);
+    }
+}
+
+#[cfg(test)]
+mod worker_command_queue_tests {
+    use super::queue_received_worker_command;
+    use crate::distributed::proto::{NetworkCommand, network_command::CommandType};
+    use std::collections::{HashSet, VecDeque};
+
+    fn load_command(config_json: &'static [u8]) -> NetworkCommand {
+        NetworkCommand {
+            r#type: CommandType::LoadNetwork as i32,
+            network_id: "alpha".to_owned(),
+            config_json: config_json.to_vec(),
+            layers: vec![0, 1],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 3,
+            neuron_model: "aarnn".to_owned(),
+            learning_rule: "aarnn".to_owned(),
+        }
+    }
+
+    #[test]
+    fn repeated_load_delivery_is_bounded_and_pending_assignment_is_replaced() {
+        let mut pending = VecDeque::new();
+        let no_load_in_flight = HashSet::new();
+        let first = load_command(b"snapshot-a");
+
+        assert!(queue_received_worker_command(
+            &mut pending,
+            &no_load_in_flight,
+            first.clone()
+        ));
+        assert!(queue_received_worker_command(
+            &mut pending,
+            &no_load_in_flight,
+            first.clone()
+        ));
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.front(), Some(&first));
+
+        let revised = load_command(b"snapshot-b");
+        assert!(queue_received_worker_command(
+            &mut pending,
+            &no_load_in_flight,
+            revised.clone()
+        ));
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.front(), Some(&revised));
+
+        let load_in_flight = HashSet::from(["alpha".to_owned()]);
+        assert!(!queue_received_worker_command(
+            &mut pending,
+            &load_in_flight,
+            load_command(b"snapshot-c")
+        ));
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.front(), Some(&revised));
     }
 }
 
