@@ -4098,13 +4098,31 @@ fn sensory_ingress_owner_is_ready(
     owner_node_id: &str,
 ) -> bool {
     if owner_node_id == state.node_id {
-        return state.networks.contains_key(network_id);
+        return state
+            .sensory_ingress_mailboxes
+            .get(network_id)
+            .is_some_and(|ingress| {
+                let ingress = lock_external_sensory_ingress(ingress);
+                ingress.playing
+                    && (ingress.assigned_layers.is_empty()
+                        || ingress
+                            .assigned_layers
+                            .contains(&ingress.sensory_target_layer))
+            });
     }
+    let Some(expected_load_fingerprint) = state
+        .network_expected_load_fingerprints
+        .get(network_id)
+        .and_then(|workers| workers.get(owner_node_id))
+    else {
+        return false;
+    };
     state.peers.contains_key(owner_node_id)
         && state
             .network_runtime_metrics
             .get(network_id)
-            .is_some_and(|workers| workers.contains_key(owner_node_id))
+            .and_then(|workers| workers.get(owner_node_id))
+            .is_some_and(|metrics| metrics.load_fingerprint == *expected_load_fingerprint)
 }
 
 fn validate_external_sensory_gateway_request<T>(request: &Request<T>) -> Result<(), Status> {
@@ -4911,6 +4929,10 @@ pub struct NodeState {
     /// is coordination metadata, not biological time.
     pub consistent_cut_epochs: HashMap<String, u64>,
     pub network_runtime_metrics: HashMap<String, HashMap<String, NetworkResources>>,
+    /// Scheduler-authored fingerprint for the exact load command each
+    /// distributed worker is expected to have applied. Heartbeat presence
+    /// alone is not sufficient evidence for sensory ingress readiness.
+    network_expected_load_fingerprints: HashMap<String, HashMap<String, u64>>,
     /// Last successfully applied legacy load command fingerprint per local
     /// network. Reported in NetworkResources so the orchestrator can avoid
     /// retransmitting an unchanged large snapshot without mistaking a changed
@@ -5305,6 +5327,7 @@ impl DistributedNode {
                 network_snapshots: HashMap::new(),
                 consistent_cut_epochs: HashMap::new(),
                 network_runtime_metrics: HashMap::new(),
+                network_expected_load_fingerprints: HashMap::new(),
                 network_load_fingerprints: HashMap::new(),
                 last_heartbeat: HashMap::new(),
                 pending_commands: HashMap::new(),
@@ -9098,17 +9121,24 @@ impl DistributedNode {
         let runtime_metrics_snapshot = state.network_runtime_metrics.clone();
         let node_statuses_snapshot = state.nodes.clone();
         let transport_stats_snapshot = state.spike_transport_stats.clone();
-        let (network_registry, network_snapshots, pending_commands) = {
+        let (
+            network_registry,
+            network_snapshots,
+            pending_commands,
+            network_expected_load_fingerprints,
+        ) = {
             let state = &mut *state;
             (
                 &mut state.network_registry,
                 &mut state.network_snapshots,
                 &mut state.pending_commands,
+                &mut state.network_expected_load_fingerprints,
             )
         };
 
         for (net_id, net_status) in network_registry.iter_mut() {
             if stable_network_ids.contains(net_id) {
+                network_expected_load_fingerprints.remove(net_id);
                 // Stable workers own a complete virtual-shard fabric. The
                 // compatibility layer scheduler must leave its placement and
                 // commands untouched until an explicit migration transaction
@@ -9124,6 +9154,10 @@ impl DistributedNode {
                 }
                 continue;
             }
+            // Rebuild this table from the same load commands as placement.
+            // Until each worker reports the resulting fingerprint, sensory
+            // ingress remains unavailable for its desired assignment.
+            network_expected_load_fingerprints.remove(net_id);
             let mut snapshot_layers: Option<u32> = None;
             let mut config_payload: Option<String> = None;
             let mut configured_counts: Option<HashMap<u32, u64>> = None;
@@ -9356,6 +9390,10 @@ impl DistributedNode {
                     &net_status.neuron_model,
                     &net_status.learning_rule,
                 );
+                network_expected_load_fingerprints
+                    .entry(net_id.clone())
+                    .or_default()
+                    .insert(node_id.clone(), expected_load_fingerprint);
                 net_status.distribution.insert(
                     node_id.clone(),
                     LayerRange {
@@ -9482,6 +9520,10 @@ impl DistributedNode {
                         &net_status.neuron_model,
                         &net_status.learning_rule,
                     );
+                    network_expected_load_fingerprints
+                        .entry(net_id.clone())
+                        .or_default()
+                        .insert(node_id.clone(), expected_load_fingerprint);
                     net_status.distribution.insert(
                         node_id.clone(),
                         LayerRange {
@@ -14851,6 +14893,14 @@ mod tests {
         assert!(distribution.contains_key("node-a"));
         assert!(distribution.contains_key("node-b"));
         assert!(distribution.contains_key("node-c"));
+        let expected_fingerprints = state
+            .network_expected_load_fingerprints
+            .get("shared")
+            .expect("scheduler records the expected load for every assigned worker");
+        assert_eq!(
+            expected_fingerprints.keys().collect::<HashSet<_>>(),
+            distribution.keys().collect::<HashSet<_>>()
+        );
     }
 
     #[tokio::test]
@@ -16071,6 +16121,10 @@ mod tests {
                     ..Default::default()
                 },
             );
+            state.network_expected_load_fingerprints.insert(
+                "audio-brain".to_owned(),
+                HashMap::from([("worker-b".to_owned(), 0)]),
+            );
         }
         assert_eq!(
             orchestrator.has_external_sensory_ingress("audio-brain"),
@@ -16280,6 +16334,10 @@ mod tests {
                     ..Default::default()
                 },
             );
+            state.network_expected_load_fingerprints.insert(
+                "audio-brain".to_owned(),
+                HashMap::from([("worker-a".to_owned(), 0)]),
+            );
         }
 
         let request = || {
@@ -16323,6 +16381,46 @@ mod tests {
             Some("worker-a"),
             "the loaded bridge is advertised after its heartbeat"
         );
+    }
+
+    #[tokio::test]
+    async fn sensory_bridge_readiness_rejects_stale_worker_load_fingerprint() {
+        let orchestrator = DistributedNode::new("orchestrator-a".to_owned(), true);
+        {
+            let mut state = orchestrator.state.write().await;
+            state
+                .peers
+                .insert("worker-a".to_owned(), "http://127.0.0.1:50075".to_owned());
+            state.network_expected_load_fingerprints.insert(
+                "audio-brain".to_owned(),
+                HashMap::from([("worker-a".to_owned(), 22)]),
+            );
+            state.network_runtime_metrics.insert(
+                "audio-brain".to_owned(),
+                HashMap::from([(
+                    "worker-a".to_owned(),
+                    NetworkResources {
+                        load_fingerprint: 21,
+                        ..Default::default()
+                    },
+                )]),
+            );
+            assert!(
+                !sensory_ingress_owner_is_ready(&state, "audio-brain", "worker-a"),
+                "a heartbeat for an older applied assignment must not open ingress"
+            );
+            state
+                .network_runtime_metrics
+                .get_mut("audio-brain")
+                .expect("network metrics")
+                .get_mut("worker-a")
+                .expect("worker metrics")
+                .load_fingerprint = 22;
+            assert!(
+                sensory_ingress_owner_is_ready(&state, "audio-brain", "worker-a"),
+                "the route becomes ready once the worker applies the scheduled load"
+            );
+        }
     }
 
     #[tokio::test]

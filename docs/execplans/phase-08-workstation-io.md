@@ -181,6 +181,33 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
 
 ## Progress
 
+- [~] `2026-10-01 17:02Z` A fresh authenticated `/api/status` read shows
+  `neuralmimicry-shared-snn` distributed across five workers with layer 0
+  assigned to `native-qc04`, layer 1 to `native-qc02`, and layer 2 to
+  `native-sm01`. `qc04` still reports changing layer assignments, and the
+  persistent Webots controller has a frame retrying after the owner rejects it
+  for not owning layer 0. Added a scheduler-authored expected-load fingerprint
+  per worker and require the worker heartbeat fingerprint to match before the
+  orchestrator publishes or accepts sensory ingress. Local mailbox readiness
+  also checks that the target layer is assigned and the network is playing.
+  `cargo test --locked --all-features --lib sensory` passes 37 tests, including
+  stale-fingerprint rejection; `sharded_rebalance_expands_beyond_existing_affinity`
+  passes with an assertion that every assignment receives an expected
+  fingerprint; formatting and `git diff --check` pass. These source changes
+  are not deployed, so the shared-SNN sensory/motor verification remains open.
+
+- [~] `2026-10-01 17:02Z` Live status still lists `tenant-aarnn` as playing
+  alongside `neuralmimicry-shared-snn`, though the five current worker records
+  list only the shared SNN under `active_networks`. The Gail
+  Ansible role requires its AARNN bridge network to match
+  `continuum_tenant_aarnn_startup_network_id`, whose deployed default is
+  `tenant-aarnn`. Keep that network until Gail is migrated and verified against
+  an equivalent separate brain. All five worker journals also show recent
+  8-second heartbeat timeouts; the orchestrator pod's last termination was
+  `OOMKilled` at 16:39Z and its current memory is about 4.9 GiB. Investigate
+  control-plane lock/memory pressure alongside the ingress rollout; a current
+  `Running` pod and advancing world clock do not establish neural I/O health.
+
 - [~] `2026-10-01 16:22Z` Read-only live diagnostics confirmed that
   `GetNetworkActivity` is failing on the same lock path identified by the
   worker logs. From `sm00`, authenticated GETs to `/api/activity` addressed
@@ -1037,6 +1064,18 @@ Enable modality capabilities independently by deployment/browser/OS profile. Sta
 - Optimisation can alter ordering/numerics. Gate every change against the reference interpreter/digests or named tolerance profile.
 
 ## Surprises & Discoveries
+
+- Live authorization and placement evidence confirms that `tenant-aarnn` is
+  still an external product dependency: Gail's rollout asserts bridge/network
+  alignment with the startup network, currently named `tenant-aarnn`. Live
+  cluster status also lists it as a playing network. Its removal would change
+  Gail behavior unless the bridge is explicitly migrated and independently
+  verified, so it remains untouched.
+- `aarnn-orchestrator` recently terminated with `OOMKilled` and all five
+  native workers logged 8-second heartbeat timeouts. This may drive placement
+  churn as well as stale route advertisement; test the fingerprint gate and
+  separately identify the control-plane memory/lock cause before treating the
+  shared SNN as operational.
 
 The previous worktree summary said no Codex branches remained, but repository
 inspection found `codex/webots-api-ingress-20260929` both locally and at
