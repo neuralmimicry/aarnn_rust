@@ -6584,6 +6584,24 @@ impl DistributedNode {
                 ));
             };
             if !sensory_ingress_owner_is_ready(&state, network_id, &bridge_node_id) {
+                let expected_load_fingerprint = state
+                    .network_expected_load_fingerprints
+                    .get(network_id)
+                    .and_then(|workers| workers.get(&bridge_node_id))
+                    .copied();
+                let reported_load_fingerprint = state
+                    .network_runtime_metrics
+                    .get(network_id)
+                    .and_then(|workers| workers.get(&bridge_node_id))
+                    .map(|metrics| metrics.load_fingerprint);
+                nm_log!(
+                    "[warn] Rejecting sensory ingress network={} owner={} expected_load_fingerprint={:?} reported_load_fingerprint={:?} peer_connected={}",
+                    network_id,
+                    bridge_node_id,
+                    expected_load_fingerprint,
+                    reported_load_fingerprint,
+                    state.peers.contains_key(&bridge_node_id)
+                );
                 return Err(format!(
                     "sensory I/O bridge {bridge_node_id} has not reported network {network_id} as loaded"
                 ));
