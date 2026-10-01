@@ -430,7 +430,10 @@ jobs:
       group: >-
         aarnn-build-runner-${{ matrix.runner_arch }}-${{ matrix.ubuntu_label }}-${{ github.ref }}
       cancel-in-progress: false
-    timeout-minutes: 120
+    # The all-feature ARM64 release package can exceed two hours on the shared
+    # production runner while its native dependencies and binaries compile.
+    # Allow the serialized package job to finish and run its artifact checks.
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       # The architecture concurrency group below remains the resource lock;
