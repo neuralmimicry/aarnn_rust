@@ -68,8 +68,8 @@ in `src/management.rs`, `src/peripheral.rs`, `src/bin/web_ui.rs`,
 protobuf sources into Cargo's build output. No `CONTRIBUTING` file or
 deployment reference to `NM_PERIPHERAL_INPUT_GRANTS_JSON` was found. CI's
 authoritative host checks include formatting, Clippy, all-feature check, the
-library/web-UI tests and integration tests; the ARM runner executes the
-all-feature check/build and its focused runner suite. Android is a Gradle
+library/web-UI tests and integration tests; architecture-matched GitHub-hosted
+X64 and ARM64 runners execute the build and focused runner suite. Android is a Gradle
 reference shell with no signing credentials; iOS currently has Swift sources
 but no Xcode project, signing configuration or generated XCFramework.
 
@@ -180,6 +180,21 @@ Profile causal critical paths, allocator/state layout, queues, batching, GPU tra
 Provide persisted-state/config/deployment migrations, rolling-upgrade and rollback rehearsal. Close all deferred tests, publish project/architecture/protocol/security/scientific/runbook documentation, remove layer-group fallback and temporary flags, and prove no old direct-worker/layer-broadcast path is reachable.
 
 ## Progress
+
+- [~] `2026-10-01 07:40Z` The ARM64 `Verify` leg of workflow run
+  `36818861504` compiled on the only self-hosted ARM runner, which is live
+  cluster node `qc01`. During that run the AARNN engine and orchestrator were
+  OOM-killed; the run was cancelled before release or image publication. The
+  last cluster observation showed both pods Ready after restart, with restart
+  counts of 2 and 5 and `OOMKilled` as their last termination reason. The
+  current workstation has no Kubernetes context, so recovery has not been
+  rechecked from this session. Move verification, package, container, and
+  promotion jobs onto architecture-matched GitHub-hosted runners before
+  dispatching the all-features build again. The workflow edits now select
+  `ubuntu-24.04`/`ubuntu-24.04-arm`; syntax validation passed with `yamllint`,
+  while actionlint is unavailable. Still review dispatch behavior, publish the
+  workflow change, rebuild the cancelled `node` workload, and verify live pod
+  health before updating Ansible image pins.
 
 - [~] `2026-10-01 04:59Z` Read-only source tracing found why managed Webots
   output polls can report no actuator spikes even while sensory ingress is
