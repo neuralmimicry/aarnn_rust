@@ -3783,14 +3783,18 @@ async fn api_auth_middleware(
         req.extensions_mut().insert(user);
         return next.run(req).await;
     }
-    if let Some(user) = bearer_auth_user(&state, req.headers()).await {
-        if let Some(requirement) = access_requirement {
-            if !user.can_access(requirement) {
-                return insufficient_service_access_response(&user, requirement);
+    match bearer_auth_user(&state, req.headers()).await {
+        Ok(Some(user)) => {
+            if let Some(requirement) = access_requirement {
+                if !user.can_access(requirement) {
+                    return insufficient_service_access_response(&user, requirement);
+                }
             }
+            req.extensions_mut().insert(user);
+            return next.run(req).await;
         }
-        req.extensions_mut().insert(user);
-        return next.run(req).await;
+        Ok(None) => {}
+        Err(_) => return central_auth_unavailable_response(),
     }
     (
         StatusCode::UNAUTHORIZED,
@@ -3848,8 +3852,10 @@ async fn me(
     if let Some(user) = session_auth_user(&state, &jar).await {
         return Json(authenticated_identity_payload(&user)).into_response();
     }
-    if let Some(user) = bearer_auth_user(&state, &headers).await {
-        return Json(authenticated_identity_payload(&user)).into_response();
+    match bearer_auth_user(&state, &headers).await {
+        Ok(Some(user)) => return Json(authenticated_identity_payload(&user)).into_response(),
+        Ok(None) => {}
+        Err(_) => return central_auth_unavailable_response(),
     }
     (
         StatusCode::UNAUTHORIZED,
@@ -5603,14 +5609,39 @@ async fn session_auth_user(state: &AppState, jar: &CookieJar) -> Option<AuthUser
     None
 }
 
-async fn bearer_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> {
-    let central = state.auth.central.as_ref()?;
-    let access_token = extract_bearer_token(headers)?;
-    let session = central.session(&access_token).await.ok()?;
+async fn bearer_auth_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<AuthUser>, CentralApiError> {
+    let Some(central) = state.auth.central.as_ref() else {
+        return Ok(None);
+    };
+    let Some(access_token) = extract_bearer_token(headers) else {
+        return Ok(None);
+    };
+    let session = match central.session(&access_token).await {
+        Ok(session) => session,
+        Err(error) if error.status == Some(StatusCode::UNAUTHORIZED.as_u16()) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
     if !session.authenticated {
-        return None;
+        return Ok(None);
     }
-    AuthUser::from_central_session(&session, Some(access_token))
+    Ok(AuthUser::from_central_session(&session, Some(access_token)))
+}
+
+fn central_auth_unavailable_response() -> Response {
+    let mut response = (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"error": "authentication_service_unavailable"})),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+    response
 }
 
 fn fpv_error_response(error: FpvRenderError) -> Response {
@@ -9654,6 +9685,19 @@ fn network_activity_candidate_index(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn central_auth_outage_is_retryable_and_not_reported_as_bad_credentials() {
+        let response = central_auth_unavailable_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("5")
+        );
+    }
 
     #[test]
     fn peripheral_session_token_headers_are_supported_for_cors_clients() {

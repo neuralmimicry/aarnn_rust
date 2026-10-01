@@ -9666,9 +9666,18 @@ impl DistributedNode {
             );
             return;
         }
-        let mut state = self.state.write().await;
+        let state = self.state.read().await;
         match cmd_type {
             CommandType::LoadNetwork => {
+                // Snapshot map and node metadata while holding the cluster
+                // lock briefly. Loading or updating a network can wait for a
+                // simulation step and must not hold up status/heartbeat RPCs.
+                let (existing_network, _node_id, workspace_binding) = (
+                    state.networks.get(&cmd.network_id).cloned(),
+                    state.node_id.clone(),
+                    state.workspace_bindings.get(&cmd.network_id).cloned(),
+                );
+                drop(state);
                 let load_fingerprint = network_load_command_fingerprint(
                     &cmd.config_json,
                     &cmd.layers,
@@ -9677,7 +9686,7 @@ impl DistributedNode {
                     &cmd.neuron_model,
                     &cmd.learning_rule,
                 );
-                if let Some(net_arc) = state.networks.get(&cmd.network_id).cloned() {
+                if let Some(net_arc) = existing_network {
                     let mut net = net_arc.write().await;
                     #[cfg(feature = "stable_executor_live")]
                     if net.stable_executor_registered() {
@@ -9723,6 +9732,8 @@ impl DistributedNode {
                         && !model_changed
                         && !learning_changed
                     {
+                        drop(net);
+                        let mut state = self.state.write().await;
                         state
                             .network_load_fingerprints
                             .insert(cmd.network_id.clone(), load_fingerprint);
@@ -9837,7 +9848,9 @@ impl DistributedNode {
                     }
                     lock_external_sensory_ingress(&net.external_sensory_ingress)
                         .sync_network_metadata(&net);
+                    drop(net);
                     if config_applied {
+                        let mut state = self.state.write().await;
                         state
                             .network_load_fingerprints
                             .insert(cmd.network_id.clone(), load_fingerprint);
@@ -9954,10 +9967,9 @@ impl DistributedNode {
 
                     let network_id = cmd.network_id.clone();
                     let initial_config = runner.net.clone();
-                    let workspace_binding = state.workspace_bindings.get(&network_id).cloned();
                     #[cfg(feature = "replicated_durability")]
                     let durable_owner =
-                        open_managed_durability(&network_id, &state.node_id, &mut runner);
+                        open_managed_durability(&network_id, &_node_id, &mut runner);
                     #[cfg(feature = "replicated_durability")]
                     if crate::managed_durability::configured_root().is_some()
                         && durable_owner.is_none()
@@ -10013,7 +10025,7 @@ impl DistributedNode {
                         let evidence = crate::managed_shard_runtime::RuntimeShardEvidence {
                             shard_id: crate::managed_durability::managed_shard_id(&network_id),
                             brain_id: crate::managed_durability::managed_brain_id(&network_id),
-                            node_id: state.node_id.clone(),
+                            node_id: _node_id.clone(),
                             device_id: "cpu".to_owned(),
                             topology_generation: owner.topology_generation(),
                             partition_generation: owner.partition_generation(),
@@ -10045,6 +10057,7 @@ impl DistributedNode {
                             playing,
                             recovered_channel.external_sensory_spikes.is_some(),
                         )));
+                    let mut state = self.state.write().await;
                     state
                         .sensory_ingress_mailboxes
                         .insert(network_id.clone(), sensory_ingress.clone());
@@ -10102,7 +10115,10 @@ impl DistributedNode {
             }
             CommandType::UnloadNetwork => {
                 #[cfg(feature = "stable_executor_live")]
-                if let Some(net_arc) = state.networks.get(&cmd.network_id) {
+                let net_arc = state.networks.get(&cmd.network_id).cloned();
+                drop(state);
+                #[cfg(feature = "stable_executor_live")]
+                if let Some(net_arc) = net_arc {
                     if net_arc.read().await.stable_executor_registered() {
                         nm_err!(
                             "[warn] Ignoring legacy unload for stable network {}",
@@ -10111,6 +10127,7 @@ impl DistributedNode {
                         return;
                     }
                 }
+                let mut state = self.state.write().await;
                 if state.networks.remove(&cmd.network_id).is_some() {
                     state.sensory_ingress_mailboxes.remove(&cmd.network_id);
                     nm_log!("[info] Unloaded network {} from local node", cmd.network_id);
@@ -10118,7 +10135,9 @@ impl DistributedNode {
                 state.network_load_fingerprints.remove(&cmd.network_id);
             }
             CommandType::Start | CommandType::Stop | CommandType::Repeat | CommandType::Reset => {
-                if let Some(net_arc) = state.networks.get(&cmd.network_id) {
+                let net_arc = state.networks.get(&cmd.network_id).cloned();
+                drop(state);
+                if let Some(net_arc) = net_arc {
                     let mut net = net_arc.write().await;
                     if let Some(action) = control_action_from_command(cmd_type) {
                         apply_control_to_managed_network(&mut net, action);
@@ -13860,6 +13879,79 @@ mod tests {
         assert_eq!(network_resources, baseline_network_resources);
 
         drop(network_writer);
+    }
+
+    #[tokio::test]
+    async fn system_status_stays_responsive_while_load_waits_for_network_lock() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("command-lock-test".to_string(), false);
+        let mut config = NetworkConfig::default();
+        config.num_sensory_neurons = 2;
+        config.num_hidden_layers = 1;
+        config.num_hidden_per_layer_initial = 3;
+        config.num_output_neurons = 2;
+        let config_json = serde_json::to_vec(&config).expect("serialize initial config");
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "command-lock-test".to_string(),
+            config_json,
+            layers: vec![0, 1],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "lif".to_string(),
+            learning_rule: "stdp".to_string(),
+        })
+        .await;
+
+        let network = node
+            .state
+            .read()
+            .await
+            .networks
+            .get("command-lock-test")
+            .expect("network loaded")
+            .clone();
+        let network_writer = network.write().await;
+        config.num_sensory_neurons = 3;
+        let node_for_command = node.clone();
+        let command = tokio::spawn(async move {
+            node_for_command
+                .handle_command(NetworkCommand {
+                    r#type: proto::network_command::CommandType::LoadNetwork as i32,
+                    network_id: "command-lock-test".to_string(),
+                    config_json: serde_json::to_vec(&config).expect("serialize updated config"),
+                    layers: vec![0, 1],
+                    redundant_layers: Vec::new(),
+                    desired_aarnn_depth: 1,
+                    neuron_model: "lif".to_string(),
+                    learning_rule: "stdp".to_string(),
+                })
+                .await;
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !command.is_finished(),
+            "load waits for the held network lock"
+        );
+        assert!(
+            node.state.try_read().is_ok(),
+            "a blocked load must not hold the cluster-wide state lock"
+        );
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            node.get_system_status(Request::new(StatusRequest {})),
+        )
+        .await
+        .expect("status RPC responds while the load is waiting")
+        .expect("status RPC succeeds");
+
+        drop(network_writer);
+        tokio::time::timeout(Duration::from_secs(2), command)
+            .await
+            .expect("load completes after the network lock is released")
+            .expect("load task joins");
     }
 
     #[tokio::test]

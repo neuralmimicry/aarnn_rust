@@ -4288,7 +4288,9 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     use crate::causal_transport::proto::causal_data_plane_server::CausalDataPlaneServer;
     use crate::distributed::proto::distributed_neuromorphic_client::DistributedNeuromorphicClient;
     use crate::distributed::proto::stable_checkpoint_transfer_server::StableCheckpointTransferServer;
-    use crate::distributed::proto::{HeartbeatRequest, JoinRequest, NetworkCommandResult};
+    use crate::distributed::proto::{
+        HeartbeatRequest, JoinRequest, NetworkCommand, NetworkCommandResult,
+    };
     use crate::distributed::{
         DistributedNode, ManagedNetwork,
         proto::distributed_neuromorphic_server::DistributedNeuromorphicServer,
@@ -5071,6 +5073,34 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             // carrying an acknowledgement is lost, the orchestrator can
             // safely receive the identical digest-bound result again.
             let mut command_results: Vec<NetworkCommandResult> = Vec::new();
+            let mut pending_commands = std::collections::VecDeque::new();
+            let (command_tx, mut command_rx) = tokio::sync::mpsc::channel::<NetworkCommand>(128);
+            let (result_tx, mut result_rx) =
+                tokio::sync::mpsc::channel::<NetworkCommandResult>(128);
+            let command_worker_node = node_inner.clone();
+            let mut command_worker_shutdown = shutdown_rx_node.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        changed = command_worker_shutdown.changed() => {
+                            if changed.is_err() || *command_worker_shutdown.borrow() {
+                                break;
+                            }
+                        }
+                        command = command_rx.recv() => {
+                            let Some(command) = command else { break; };
+                            if let Some(result) = command_worker_node
+                                .handle_command_with_result(command)
+                                .await
+                            {
+                                if result_tx.send(result).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
 
             'connection_manager: loop {
                 if *shutdown_rx_node.borrow() {
@@ -5140,6 +5170,28 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                     }
                     if *shutdown_rx_node.borrow() {
                         return;
+                    }
+                    while let Ok(result) = result_rx.try_recv() {
+                        if !command_results.iter().any(|existing| {
+                            existing.network_id == result.network_id
+                                && existing.request_id == result.request_id
+                        }) {
+                            command_results.push(result);
+                        }
+                    }
+                    while let Some(command) = pending_commands.pop_front() {
+                        match command_tx.try_send(command) {
+                            Ok(()) => {}
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(command)) => {
+                                pending_commands.push_front(command);
+                                break;
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(command)) => {
+                                pending_commands.push_front(command);
+                                nm_err!("[error] network command worker queue closed");
+                                break;
+                            }
+                        }
                     }
                     {
                         let mut state = node_inner.state.write().await;
@@ -5244,16 +5296,20 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                                 state.network_peers.clear();
                                 state.network_sensory_ingress_node.clear();
                             }
-                            let commands = resp.commands;
-                            for cmd in commands {
-                                if let Some(result) =
-                                    node_inner.handle_command_with_result(cmd).await
-                                {
-                                    if !command_results.iter().any(|existing| {
-                                        existing.network_id == result.network_id
-                                            && existing.request_id == result.request_id
-                                    }) {
-                                        command_results.push(result);
+                            pending_commands.extend(resp.commands);
+                            while let Some(command) = pending_commands.pop_front() {
+                                match command_tx.try_send(command) {
+                                    Ok(()) => {}
+                                    Err(tokio::sync::mpsc::error::TrySendError::Full(command)) => {
+                                        pending_commands.push_front(command);
+                                        break;
+                                    }
+                                    Err(tokio::sync::mpsc::error::TrySendError::Closed(
+                                        command,
+                                    )) => {
+                                        pending_commands.push_front(command);
+                                        nm_err!("[error] network command worker queue closed");
+                                        break;
                                     }
                                 }
                             }
