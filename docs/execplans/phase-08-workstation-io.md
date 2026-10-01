@@ -181,6 +181,62 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
 
 ## Progress
 
+- [~] `2026-10-01 04:59Z` Read-only source tracing found why managed Webots
+  output polls can report no actuator spikes even while sensory ingress is
+  admitted. `src/bin/web_ui.rs::resolve_network_addrs` ranks active workers by
+  largest shard, and `/api/activity` returns the first successful
+  `GetNetworkActivity` response; that is not necessarily the worker owning the
+  configured output-source layer. `send_aer_inference` also polls the same
+  target used for sensory delivery. `src/runner.rs::get_io_layers` and the
+  deployment `NetworkStatus` provide the authoritative output-layer rule and
+  active layer assignment needed to select the owner without probing backups.
+  No live brain state, snapshot or credentials were read or changed in this
+  pass. Before editing, inspect the network-payload decoding and API test
+  seams, then add a deterministic regression proving output polling selects
+  the active output-layer owner while display/snapshot ranking stays unchanged.
+  Evidence: `rg`/`sed` inspection of `src/bin/web_ui.rs` lines 6907–6970 and
+  9429–9580, `src/distributed.rs` lines 1530–1554, `src/runner.rs` lines
+  1958–2009, and `proto/distributed.proto` lines 637–670. Relevant authority:
+  Sections 16.16–16.19, 17.4, 20.9 and 21.13; `INV-002`, `INV-007`,
+  `INV-015`–`INV-017`.
+
+- [~] `2026-10-01 05:02Z` Confirmed `NetworkActivityResponse` has no output-owner
+  provenance, while the live `Runner` supplies the exact source layer and
+  `ManagedNetwork` carries the active assignment. The chosen compatibility fix
+  is additive: report the output-source layer and whether this worker owns it;
+  only that worker returns output indices/history. `/api/activity` checks the
+  status resolver's bounded active-node candidates and selects the
+  output-owning response, failing retryably when no owner is available.
+  Explicit node selection remains available for diagnostics.
+  This avoids guessing the source from shard size or parsing large checkpoint
+  JSON on every activity poll. The Webots C++ controller consumes only output
+  indices/history, so the added JSON provenance is backward-compatible. No
+  biological state, checkpoint, actuator output or permission is changed by
+  this display/API resolver. Validation will cover an earlier larger non-output
+  shard, the correct output owner, no active owner, and the worker response's
+  ownership flag. Evidence: `src/runner.rs` lines 1958–2009 and
+  `src/bin/web_ui.rs` lines 9429–9590/10120–10165; `webots_world/controllers/
+  nm_api_robot_controller/nm_api_robot_controller.cpp` lines 321–386.
+
+- [~] `2026-10-01 05:09Z` The first ownership regression exposed that
+  `Runner::layer_range` can include a warm compatibility copy and is not by
+  itself active ownership evidence. Refined the runtime marker to use
+  `ManagedNetwork.assigned_layers`; an empty set is a complete local network
+  only when its Runner is unsliced. Warm-only copies now return no output
+  authority. The initial API selector tests passed; rerun them with this tighter
+  active-owner rule before publishing. No live state changed.
+
+- [~] `2026-10-01 05:13Z` Applied active output-owner selection to both the
+  browser `/api/activity` projection and the AER inference poller. Inference
+  now checks the candidate workers returned by current cluster status and only
+  accepts activity from the worker that reports active ownership of the
+  configured output-source layer; a non-owner response with spikes is ignored.
+  Added a regression for this fail-closed behavior. Verification passed:
+  `cargo test --locked --bin web_ui activity_selection_ -- --nocapture`,
+  `cargo test --locked --bin web_ui recent_output_ -- --nocapture`,
+  `cargo test --locked --lib network_activity_ -- --nocapture`, formatting and
+  `git diff --check`. This remains local and is not yet deployed.
+
 - [~] `2026-09-30 09:45Z` Compared the deployed AARNN contract with this source
   branch. The source at `src/bin/web_ui.rs` requires an
   `X-AARNN-Peripheral-Session` header for `/api/aer/inject` and checks a
@@ -1134,6 +1190,17 @@ route's exact `PeripheralInput` policy and active local session. Hosted Webots
 acceptance and Phase 7 replicated session authority remain unverified.
 
 ## Decision Log
+
+- `2026-10-01 / DEC-WEBOTS-OUTPUT-ACTIVITY`: a Webots output/activity response
+  must identify its configured output-source layer and prove that the active
+  worker assignment owns it. Largest-shard and highest-capacity ranking are
+  not valid substitutes for biological output ownership. The HTTP activity
+  route selects only an output-owning response unless a diagnostic node was
+  explicitly requested; absence/busy ownership remains retryable and must not
+  be presented as an empty actuator frame. This response is a read-only
+  activity projection and does not assert output commitment or authorise an
+  effectful actuator. Authority: Sections 16.16, 16.19 and 18.1; `INV-007`,
+  `INV-016`, plus the observed Webots output-resolution defect.
 
 - `2026-09-30 / DEC-INV017-SESSION-GATE`: workstation sensory ingress requires
   both a deployment-provisioned peripheral grant scoped to the authenticated

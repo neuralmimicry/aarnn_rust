@@ -6942,6 +6942,8 @@ async fn activity(
             Err(resp) => return resp.into_response(),
         };
 
+    let require_output_owner = query.node_id.is_none();
+    let mut activity_candidates = Vec::new();
     let mut last_error = String::from("no candidate target attempted");
     for target_addr in target_addrs {
         let mut client = match connect_cluster_client(target_addr.clone()).await {
@@ -6952,16 +6954,31 @@ async fn activity(
             }
         };
 
-        match client
-            .get_network_activity(authenticated_grpc_request(NetworkActivityRequest {
-                network_id: network_id.clone(),
-            }))
-            .await
-        {
-            Ok(resp) => {
-                let resp = resp.into_inner();
+        let mut request = authenticated_grpc_request(NetworkActivityRequest {
+            network_id: network_id.clone(),
+        });
+        request.set_timeout(Duration::from_secs(2));
+        match client.get_network_activity(request).await {
+            Ok(response) => {
+                activity_candidates.push((target_addr.clone(), response.into_inner()));
+                let Some(candidate_index) =
+                    network_activity_candidate_index(&activity_candidates, require_output_owner)
+                else {
+                    let output_layer = activity_candidates
+                        .last()
+                        .map(|(_, response)| response.output_source_layer)
+                        .unwrap_or_default();
+                    last_error = format!(
+                        "activity candidate {} does not own output-source layer {}; checking other active shards",
+                        target_addr, output_layer
+                    );
+                    continue;
+                };
+                let (target_addr, resp) = activity_candidates.swap_remove(candidate_index);
                 let sim_step = resp.sim_step;
                 let sim_time_ms = resp.sim_time_ms;
+                let output_source_layer = resp.output_source_layer;
+                let output_stage_assigned = resp.output_stage_assigned;
                 let sensory = resp.sensory.map(|s| s.indices).unwrap_or_default();
                 let hidden: Vec<Vec<u32>> = resp.hidden.into_iter().map(|h| h.indices).collect();
                 let output = resp.output.map(|o| o.indices).unwrap_or_default();
@@ -6987,6 +7004,8 @@ async fn activity(
                         "hidden": hidden.into_iter().map(|indices| json!({ "indices": indices })).collect::<Vec<_>>(),
                         "output": { "indices": output },
                         "output_history": output_history,
+                        "output_source_layer": output_source_layer,
+                        "output_stage_assigned": output_stage_assigned,
                         "source": target_addr,
                     })),
                 )
@@ -6996,6 +7015,17 @@ async fn activity(
                 last_error = format!("activity failed via {}: {}", target_addr, e);
             }
         }
+    }
+
+    if require_output_owner && !activity_candidates.is_empty() {
+        let output_source_layer = activity_candidates
+            .iter()
+            .map(|(_, response)| response.output_source_layer)
+            .next()
+            .unwrap_or_default();
+        last_error = format!(
+            "no available active worker owns output-source layer {output_source_layer}; retry activity later"
+        );
     }
 
     (
@@ -7884,30 +7914,25 @@ struct MirrorInferenceOutput {
 /// inference output.
 async fn send_aer_inference(
     target_addr: String,
+    activity_target_addrs: Vec<String>,
     batch: SpikeBatch,
     requested_timeout_ms: Option<u64>,
 ) -> Result<MirrorInferenceOutput, ApiError> {
     let network_id = batch.network_id.clone();
-    let mut activity_client =
-        connect_cluster_client(target_addr.clone())
-            .await
-            .map_err(|error| {
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({ "error": format!("connect failed: {error}") })),
-                )
-            })?;
+    let mut activity_clients = Vec::new();
+    for address in activity_target_addrs {
+        if let Ok(client) = connect_cluster_client(address.clone()).await {
+            activity_clients.push((address, client));
+        }
+    }
     let accepted_batches = send_aer_batches(target_addr, vec![batch]).await?;
     // Capture the simulator position only after the transport handler accepted
     // the sensory frame. Returning a later step avoids mislabelling unrelated
-    // output that happened while the frame was still in transit.
-    let injected_at_step = activity_client
-        .get_network_activity(authenticated_grpc_request(NetworkActivityRequest {
-            network_id: network_id.clone(),
-        }))
+    // output that happened while the frame was still in transit. The output
+    // owner can be a different worker from the sensory ingress target.
+    let injected_at_step = output_owner_activity(&mut activity_clients, &network_id)
         .await
-        .ok()
-        .map(|response| response.into_inner().sim_step);
+        .map(|(_, activity)| activity.sim_step);
     let Some(injected_at_step) = injected_at_step else {
         return Ok(MirrorInferenceOutput {
             accepted_batches,
@@ -7930,14 +7955,9 @@ async fn send_aer_inference(
             });
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
-        let activity = match activity_client
-            .get_network_activity(authenticated_grpc_request(NetworkActivityRequest {
-                network_id: network_id.clone(),
-            }))
-            .await
-        {
-            Ok(response) => response.into_inner(),
-            Err(_) => continue,
+        let Some((_, activity)) = output_owner_activity(&mut activity_clients, &network_id).await
+        else {
+            continue;
         };
         if let Some((output_step_index, output)) =
             recent_output_after_step(&activity, injected_at_step)
@@ -7951,6 +7971,28 @@ async fn send_aer_inference(
             });
         }
     }
+}
+
+async fn output_owner_activity(
+    candidates: &mut [(
+        String,
+        DistributedNeuromorphicClient<tonic::transport::Channel>,
+    )],
+    network_id: &str,
+) -> Option<(String, NetworkActivityResponse)> {
+    for (address, client) in candidates {
+        let mut request = authenticated_grpc_request(NetworkActivityRequest {
+            network_id: network_id.to_owned(),
+        });
+        request.set_timeout(Duration::from_millis(500));
+        if let Ok(response) = client.get_network_activity(request).await {
+            let activity = response.into_inner();
+            if activity.output_stage_assigned {
+                return Some((address.clone(), activity));
+            }
+        }
+    }
+    None
 }
 
 /// Browser/WebGL inference adapter. The browser sends sensory values or an
@@ -8291,15 +8333,22 @@ async fn aer_infer(
         Ok(addr) => addr,
         Err(err) => return err.into_response(),
     };
-    let target_addr = match resolve_network_addr(
+    let activity_target_addrs = match resolve_network_addrs(
         orchestrator_addr,
         &payload.network_id,
         payload.node_id.clone(),
     )
     .await
     {
-        Ok(addr) => addr,
+        Ok(addrs) => addrs,
         Err(err) => return err.into_response(),
+    };
+    let Some(target_addr) = activity_target_addrs.first().cloned() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "no candidate target address resolved" })),
+        )
+            .into_response();
     };
 
     let batch = match build_aer_batch(
@@ -8321,7 +8370,14 @@ async fn aer_infer(
         Err(err) => return err.into_response(),
     };
 
-    match send_aer_inference(target_addr.clone(), batch, payload.timeout_ms).await {
+    match send_aer_inference(
+        target_addr.clone(),
+        activity_target_addrs,
+        batch,
+        payload.timeout_ms,
+    )
+    .await
+    {
         Ok(output) => (
             StatusCode::OK,
             Json(json!({
@@ -8350,7 +8406,7 @@ fn recent_output_after_step(
     activity: &NetworkActivityResponse,
     injected_at_step: u64,
 ) -> Option<(u64, SpikeIndices)> {
-    if activity.sim_step <= injected_at_step {
+    if !activity.output_stage_assigned || activity.sim_step <= injected_at_step {
         return None;
     }
 
@@ -8846,14 +8902,24 @@ async fn stimulate_llm_mirror(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let target_addr = if node_id.is_some() {
-        match resolve_network_addr(orchestrator_addr.clone(), &network_id, node_id).await {
-            Ok(addr) => addr,
+    let activity_target_addrs = if node_id.is_some() {
+        match resolve_network_addrs(orchestrator_addr.clone(), &network_id, node_id.clone()).await {
+            Ok(addrs) => addrs,
             Err(err) => {
                 response.error = Some(api_error_message(err));
                 return response;
             }
         }
+    } else {
+        resolve_network_addrs(orchestrator_addr.clone(), &network_id, None)
+            .await
+            .unwrap_or_else(|_| vec![orchestrator_addr.clone()])
+    };
+    let target_addr = if node_id.is_some() {
+        activity_target_addrs
+            .first()
+            .cloned()
+            .unwrap_or_else(|| orchestrator_addr.clone())
     } else {
         orchestrator_addr
     };
@@ -8881,7 +8947,7 @@ async fn stimulate_llm_mirror(
         }
     };
 
-    match send_aer_inference(target_addr, batch, None).await {
+    match send_aer_inference(target_addr, activity_target_addrs, batch, None).await {
         Ok(inference) => {
             response.accepted_batches = inference.accepted_batches;
             response.output_step_index = inference.output_step_index;
@@ -9570,6 +9636,21 @@ async fn resolve_network_addr(
     }
 }
 
+fn network_activity_candidate_index(
+    candidates: &[(String, NetworkActivityResponse)],
+    require_output_owner: bool,
+) -> Option<usize> {
+    if require_output_owner {
+        candidates
+            .iter()
+            .position(|(_, response)| response.output_stage_assigned)
+    } else if candidates.is_empty() {
+        None
+    } else {
+        Some(0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9588,6 +9669,48 @@ mod tests {
             .and_then(|value| value.to_str().ok())
             .expect("allow methods");
         assert!(allowed_methods.contains("DELETE"));
+    }
+
+    #[test]
+    fn activity_selection_uses_the_output_layer_owner_not_the_largest_shard() {
+        let candidates = vec![
+            (
+                "largest-shard".to_owned(),
+                NetworkActivityResponse {
+                    output_source_layer: 3,
+                    output_stage_assigned: false,
+                    ..NetworkActivityResponse::default()
+                },
+            ),
+            (
+                "output-owner".to_owned(),
+                NetworkActivityResponse {
+                    output_source_layer: 3,
+                    output_stage_assigned: true,
+                    ..NetworkActivityResponse::default()
+                },
+            ),
+        ];
+
+        assert_eq!(network_activity_candidate_index(&candidates, true), Some(1));
+        assert_eq!(
+            network_activity_candidate_index(&candidates, false),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn activity_selection_fails_closed_without_an_active_output_owner() {
+        let candidates = vec![(
+            "hidden-shard".to_owned(),
+            NetworkActivityResponse {
+                output_source_layer: 2,
+                output_stage_assigned: false,
+                ..NetworkActivityResponse::default()
+            },
+        )];
+
+        assert_eq!(network_activity_candidate_index(&candidates, true), None);
     }
 
     #[test]
@@ -10125,6 +10248,7 @@ mod tests {
     fn recent_output_uses_non_empty_history_after_injection() {
         let activity = NetworkActivityResponse {
             network_id: "network".to_string(),
+            output_stage_assigned: true,
             output: Some(SpikeIndices::default()),
             sim_step: 12,
             output_history: vec![
@@ -10148,6 +10272,7 @@ mod tests {
     fn recent_output_ignores_history_before_injection() {
         let activity = NetworkActivityResponse {
             network_id: "network".to_string(),
+            output_stage_assigned: true,
             output: Some(SpikeIndices::default()),
             sim_step: 12,
             output_history: vec![
@@ -10161,6 +10286,22 @@ mod tests {
         };
 
         assert!(recent_output_after_step(&activity, 11).is_none());
+    }
+
+    #[test]
+    fn recent_output_ignores_non_owner_activity_even_when_it_has_spikes() {
+        let activity = NetworkActivityResponse {
+            network_id: "network".to_string(),
+            output_stage_assigned: false,
+            sim_step: 12,
+            output_history: vec![SpikeIndices {
+                indices: vec![2],
+                ..SpikeIndices::default()
+            }],
+            ..NetworkActivityResponse::default()
+        };
+
+        assert!(recent_output_after_step(&activity, 10).is_none());
     }
 
     #[test]

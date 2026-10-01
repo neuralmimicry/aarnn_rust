@@ -12445,54 +12445,80 @@ impl DistributedNeuromorphic for DistributedNode {
             return Err(Status::not_found("network not hosted on this node"));
         };
 
-        let (sensory, hidden, output, output_history, sim_step, sim_time_ms) =
-            tokio::task::spawn_blocking(move || -> Result<_, Status> {
-                // Activity is an optional UI projection. Do not queue a
-                // blocking reader behind neural traversal: Tokio's fair
-                // RwLock can otherwise let this observer delay the next
-                // authoritative writer. A busy worker returns a retryable
-                // status and the display polls again later.
-                let net = net_arc
-                    .try_read()
-                    .map_err(|_| Status::unavailable("network is busy; retry activity later"))?;
-                let ts_us = (net.runner.t_ms * 1000.0) as u64;
-                let sim_step = net.runner.t as u64;
-                let sim_time_ms = net.runner.t_ms;
-                let sensory_vec: Vec<i8> = net
-                    .runner
-                    .spk_hist_s
-                    .front()
-                    .map(|frame| frame.iter().copied().collect())
-                    .unwrap_or_else(|| vec![0; net.runner.net.num_sensory_neurons]);
-                let exchange = encode_exchange(ts_us, 0, &sensory_vec);
-                let sensory = SpikeIndices {
-                    indices: exchange.spike_indices,
-                    aer_payload: exchange.aer_payload,
-                    aer_base: exchange.aer_base,
-                };
-                let hidden = net
-                    .runner
-                    .last_spk_h
-                    .iter()
-                    .map(|layer| {
-                        let layer_vec: Vec<i8> = layer.iter().copied().collect();
-                        let exchange = encode_exchange(ts_us, 0, &layer_vec);
-                        SpikeIndices {
-                            indices: exchange.spike_indices,
-                            aer_payload: exchange.aer_payload,
-                            aer_base: exchange.aer_base,
-                        }
-                    })
-                    .collect::<Vec<_>>();
+        let (
+            sensory,
+            hidden,
+            output,
+            output_history,
+            sim_step,
+            sim_time_ms,
+            output_source_layer,
+            output_stage_assigned,
+        ) = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+            // Activity is an optional UI projection. Do not queue a
+            // blocking reader behind neural traversal: Tokio's fair
+            // RwLock can otherwise let this observer delay the next
+            // authoritative writer. A busy worker returns a retryable
+            // status and the display polls again later.
+            let net = net_arc
+                .try_read()
+                .map_err(|_| Status::unavailable("network is busy; retry activity later"))?;
+            let ts_us = (net.runner.t_ms * 1000.0) as u64;
+            let sim_step = net.runner.t as u64;
+            let sim_time_ms = net.runner.t_ms;
+            let sensory_vec: Vec<i8> = net
+                .runner
+                .spk_hist_s
+                .front()
+                .map(|frame| frame.iter().copied().collect())
+                .unwrap_or_else(|| vec![0; net.runner.net.num_sensory_neurons]);
+            let exchange = encode_exchange(ts_us, 0, &sensory_vec);
+            let sensory = SpikeIndices {
+                indices: exchange.spike_indices,
+                aer_payload: exchange.aer_payload,
+                aer_base: exchange.aer_base,
+            };
+            let hidden = net
+                .runner
+                .last_spk_h
+                .iter()
+                .map(|layer| {
+                    let layer_vec: Vec<i8> = layer.iter().copied().collect();
+                    let exchange = encode_exchange(ts_us, 0, &layer_vec);
+                    SpikeIndices {
+                        indices: exchange.spike_indices,
+                        aer_payload: exchange.aer_payload,
+                        aer_base: exchange.aer_base,
+                    }
+                })
+                .collect::<Vec<_>>();
+            let output_source_layer = if net.runner.net.io_channels_are_biological {
+                net.runner.net.num_hidden_layers
+            } else {
+                net.runner.get_io_layers().1
+            };
+            let output_source_layer_u32 = output_source_layer.min(u32::MAX as usize) as u32;
+            let output_stage_assigned = if net.assigned_layers.is_empty() {
+                // Empty active ownership is a complete local network only
+                // when its Runner is unsliced. A warm compatibility copy
+                // retains a layer range but owns no active effects.
+                net.runner.layer_range.is_none()
+            } else {
+                net.assigned_layers.contains(&output_source_layer_u32)
+            };
+            let output = if output_stage_assigned {
                 let output_vec: Vec<i8> = net.runner.last_spk_o.iter().copied().collect();
                 let exchange = encode_exchange(ts_us, 0, &output_vec);
-                let output = SpikeIndices {
+                SpikeIndices {
                     indices: exchange.spike_indices,
                     aer_payload: exchange.aer_payload,
                     aer_base: exchange.aer_base,
-                };
-                let output_history = net
-                    .runner
+                }
+            } else {
+                SpikeIndices::default()
+            };
+            let output_history = if output_stage_assigned {
+                net.runner
                     .spk_hist_o
                     .iter()
                     .take(128)
@@ -12505,18 +12531,23 @@ impl DistributedNeuromorphic for DistributedNode {
                             aer_base: exchange.aer_base,
                         }
                     })
-                    .collect::<Vec<_>>();
-                Ok((
-                    sensory,
-                    hidden,
-                    output,
-                    output_history,
-                    sim_step,
-                    sim_time_ms,
-                ))
-            })
-            .await
-            .map_err(|e| Status::internal(format!("activity task failed: {}", e)))??;
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            Ok((
+                sensory,
+                hidden,
+                output,
+                output_history,
+                sim_step,
+                sim_time_ms,
+                output_source_layer_u32,
+                output_stage_assigned,
+            ))
+        })
+        .await
+        .map_err(|e| Status::internal(format!("activity task failed: {}", e)))??;
 
         Ok(Response::new(NetworkActivityResponse {
             network_id: req.network_id,
@@ -12526,6 +12557,8 @@ impl DistributedNeuromorphic for DistributedNode {
             sim_step,
             sim_time_ms,
             output_history,
+            output_source_layer,
+            output_stage_assigned,
         }))
     }
 }
@@ -13596,6 +13629,10 @@ mod tests {
             network.runner.last_spk_o[0] = 1;
             network.runner.t = 7;
             network.runner.t_ms = 7.0;
+            // This test reads the complete local network, not one distributed
+            // layer shard; make that ownership explicit for the readout.
+            network.assigned_layers.clear();
+            network.runner.layer_range = None;
         }
 
         let response = node
@@ -13609,7 +13646,13 @@ mod tests {
         assert_eq!(response.sim_step, 7);
         assert_eq!(response.sensory.expect("sensory envelope").indices, vec![1]);
         assert_eq!(response.hidden[0].indices, vec![2]);
+        assert!(
+            response.output_stage_assigned,
+            "output source layer {} must be assigned",
+            response.output_source_layer
+        );
         assert_eq!(response.output.expect("output envelope").indices, vec![0]);
+        assert!(response.output_source_layer > 0);
 
         let network = {
             let state = node.state.read().await;
@@ -13627,6 +13670,139 @@ mod tests {
             .await
             .expect_err("display polling must not wait behind neural traversal");
         assert_eq!(busy.code(), tonic::Code::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn network_activity_hides_output_from_a_worker_without_the_output_layer() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("non-output-worker".to_string(), false);
+        let mut config = NetworkConfig::default();
+        config.num_sensory_neurons = 2;
+        config.num_hidden_layers = 3;
+        config.num_hidden_per_layer_initial = 3;
+        config.num_output_neurons = 2;
+        config.io_channels_are_biological = false;
+        config.output_source_layer = Some(2);
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "activity-non-owner".to_string(),
+            config_json: serde_json::to_string(&config)
+                .expect("serialize activity test config")
+                .into_bytes(),
+            layers: vec![0],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "lif".to_string(),
+            learning_rule: "stdp".to_string(),
+        })
+        .await;
+
+        {
+            let state = node.state.read().await;
+            let network = state
+                .networks
+                .get("activity-non-owner")
+                .expect("network loaded");
+            let mut network = network.write().await;
+            network.runner.last_spk_o[0] = 1;
+            network.runner.spk_hist_o[0][0] = 1;
+            assert_eq!(network.runner.layer_range, Some(0..1));
+        }
+
+        let response = node
+            .get_network_activity(Request::new(NetworkActivityRequest {
+                network_id: "activity-non-owner".to_string(),
+            }))
+            .await
+            .expect("activity response")
+            .into_inner();
+
+        assert_eq!(response.output_source_layer, 2);
+        assert!(!response.output_stage_assigned);
+        assert!(response.output.expect("output envelope").indices.is_empty());
+        assert!(response.output_history.is_empty());
+
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "activity-output-owner".to_string(),
+            config_json: serde_json::to_string(&config)
+                .expect("serialize output-owner test config")
+                .into_bytes(),
+            layers: vec![2],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "lif".to_string(),
+            learning_rule: "stdp".to_string(),
+        })
+        .await;
+        {
+            let state = node.state.read().await;
+            let network = state
+                .networks
+                .get("activity-output-owner")
+                .expect("output-owner network loaded");
+            let mut network = network.write().await;
+            network.runner.last_spk_o[0] = 1;
+            network.runner.spk_hist_o[0][0] = 1;
+        }
+        let owner_response = node
+            .get_network_activity(Request::new(NetworkActivityRequest {
+                network_id: "activity-output-owner".to_string(),
+            }))
+            .await
+            .expect("output-owner activity response")
+            .into_inner();
+        assert_eq!(owner_response.output_source_layer, 2);
+        assert!(owner_response.output_stage_assigned);
+        assert_eq!(
+            owner_response
+                .output
+                .expect("owner output envelope")
+                .indices,
+            vec![0]
+        );
+
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "activity-warm-output-copy".to_string(),
+            config_json: serde_json::to_string(&config)
+                .expect("serialize warm-copy test config")
+                .into_bytes(),
+            layers: vec![2],
+            redundant_layers: vec![2],
+            desired_aarnn_depth: 1,
+            neuron_model: "lif".to_string(),
+            learning_rule: "stdp".to_string(),
+        })
+        .await;
+        {
+            let state = node.state.read().await;
+            let network = state
+                .networks
+                .get("activity-warm-output-copy")
+                .expect("warm-copy network loaded");
+            let mut network = network.write().await;
+            network.runner.last_spk_o[0] = 1;
+            network.runner.spk_hist_o[0][0] = 1;
+            assert!(network.assigned_layers.is_empty());
+            assert!(network.runner.layer_range.is_some());
+        }
+        let warm_response = node
+            .get_network_activity(Request::new(NetworkActivityRequest {
+                network_id: "activity-warm-output-copy".to_string(),
+            }))
+            .await
+            .expect("warm-copy activity response")
+            .into_inner();
+        assert!(!warm_response.output_stage_assigned);
+        assert!(
+            warm_response
+                .output
+                .expect("warm output envelope")
+                .indices
+                .is_empty()
+        );
     }
 
     #[tokio::test]
