@@ -306,6 +306,14 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   step from `230a4ee`. Push and verify a fresh run after consolidation; then
   remove the reviewed Codex branches and worktrees.
 
+- [~] `2026-09-30 10:51Z` Actions run `36689171325` built the Ubuntu 24.04
+  X64 package, then failed its metadata-probe container with exit 126:
+  rootless Podman's `pasta` helper could not open its network namespace under
+  the isolated `/var/tmp` runroot (`Permission denied`). The build and smoke
+  install already use host networking; the metadata-only probe did not. Added
+  `--network host` to that probe. Validate the workflow and rerun the complete
+  release workflow before closing this CI recovery item.
+
 - [~] `2026-09-30 08:20Z` The fresh run `36684684809` confirmed the X64 build
   and lint checks, then exposed 13 test-only `NetworkResources` initializers
   missing the new `load_fingerprint` field. Added neutral zero fingerprints
@@ -868,6 +876,28 @@ Provide persisted-state/config/deployment migrations, rolling-upgrade and rollba
   --bin web_ui`, `cargo fmt --all -- --check` and `git diff --check` pass with
   repository warnings. Live desktop/cluster Start verification is outstanding;
   the Phase 8 gate remains open.
+
+- [~] `2026-10-01 04:22Z` Read-only production inspection found the persisted
+  `neuralmimicry-shared-snn` snapshot has 32 sensory channels and zero saved
+  output channels, while the deployed Webots profile declares a 32/16 I/O
+  contract. Startup specs loaded the snapshot without that contract, leaving
+  robot actuator output unavailable. Added optional
+  `NM_ORCHESTRATOR_STARTUP_IO_CONTRACT` handling and deterministic startup
+  snapshot alignment, with the simulation Ansible profile pointing it at the
+  mounted `default-network.json` and checking readability before deployment.
+  The deployment also scopes that fallback to the two configured Webots
+  network IDs so unrelated orchestrator networks retain their own contracts.
+  The focused zero-to-16-output deterministic alignment regression passes.
+  Running the complete startup-alignment test group exposed a pre-existing
+  build-profile bug: sensory spike-history frames were resized only under
+  `growth3d`; moving that state resize into the common Runner path makes all
+  five startup-alignment tests pass in the default build. No production rollout
+  has occurred. A fresh backup completed at `2026-10-01T04:30:58Z`:
+  `/var/lib/aarnn-backup/neuralmimicry-shared-snn-20261001T043058Z.snapshot.json`
+  (271,640,404 bytes, with a SHA-256 sidecar). Rollback is the prior image and
+  removal of the environment variable; the source snapshot is not modified by
+  this startup transform. Verify live sensory admission/output mapping after
+  rollout. The Phase 8 gate remains open.
 
 ## Validation and acceptance
 

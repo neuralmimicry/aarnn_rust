@@ -7842,6 +7842,10 @@ impl Runner {
         self.stp_u_s = stp_u_s;
         self.stp_x_s = stp_x_s;
         self.net.num_sensory_neurons = n_s_new;
+        // Keep persisted spike-history frames aligned in every build profile;
+        // snapshot resizing must not leave stale-width sensory history when
+        // the morphology feature is disabled.
+        self.extend_sensory_history(n_s_new);
         #[cfg(feature = "opencl")]
         self.mark_all_weights_dirty();
         #[cfg(feature = "growth3d")]
@@ -7857,8 +7861,6 @@ impl Runner {
         }
         #[cfg(feature = "growth3d")]
         {
-            // Ensure sensory history frames match new sensory count
-            self.extend_sensory_history(n_s_new);
             // Update topology nodes
             let s_count = n_s_new;
             let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
@@ -17032,7 +17034,6 @@ impl Runner {
         }
     }
 
-    #[cfg(feature = "growth3d")]
     fn extend_sensory_history(&mut self, new_len: usize) {
         for fr in self.spk_hist_s.iter_mut() {
             if fr.len() != new_len {
