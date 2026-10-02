@@ -100,6 +100,41 @@ Route only events implied by the ownership/route plan. Run local vs seven-proces
   worker deduplicates in-flight/queued retries. Targeted tests and formatting
   pass locally; the new worker/orchestrator artifact and live AER/motor check
   are still pending.
+- [x] `2026-10-02 00:45Z` Rechecked the live report: `/api/status` still shows
+  `native-sm00` as the sole layer-0 owner, while orchestrator diagnostics reject
+  sensory admission because the expected worker load fingerprint is nonzero
+  and the reported fingerprint remains `0`. The serial rollout-order preflight
+  passed in check mode and ordered workers `qc03`, `qc04`, `sm01`, `qc02`, then
+  the ingress owner `sm00`; no worker was changed. `cargo test --locked --lib
+  distributed::tests::heartbeat_resource_snapshots_use_cached_values_while_network_is_busy`
+  passed (1 test). The display-projection snapshot request returned no bytes
+  within its 40-second client timeout, so it is not accepted as snapshot
+  validation evidence.
+- [x] `2026-10-02 01:24Z` Confirmed with the saved 271,558,070-byte worker
+  checkpoint that `runtime_state.morph` is present. The import path generated
+  morphology from weights before reset, generated it again inside reset, then
+  replaced it with the persisted morphology. Snapshot import now skips those
+  throwaway rebuilds only when persisted morphology exists; the ordinary
+  `reset()` path and checkpoints without morphology still rebuild as before.
+  `cargo test --locked --no-default-features --features node_workload --lib
+  import_network_json -- --nocapture` passed (3 tests).
+- [x] `2026-10-02 01:33Z` The bounded release reproduction exercised both a
+  fresh `LoadNetwork` and the existing-network update path using the saved
+  checkpoint and `node_workload` features. Both completed in 11.2 seconds; the
+  update reported fingerprint `12572908152654746700`, 2,053 managed neurons,
+  and layer counts `{0: 137, 1: 1916, 2: 16}`. Peak RSS was 2.32 GiB. This
+  supports the import-path diagnosis but does not prove it is the only live
+  cause; sm00 has not yet acknowledged a post-deploy load.
+- [x] `2026-10-02 01:37Z` Built the production x86_64 `node_workload` binary
+  at `target/release/aarnn_rust` (SHA-256
+  `caf2ea5140e903f3dae7ed650859ae1758b4af209879bcf1b2d872e967af05ec`). The
+  serial rollout-order preflight passed in check mode with order `qc02`,
+  `qc03`, `qc04`, `sm01`, `sm00`; all five hosts were reachable and no files or
+  services changed.
+- [~] `2026-10-02 01:37Z` Preparing the authorized worker rollout. Afterward,
+  require the exact live load acknowledgement and the separate shared-world
+  sensory, neural response, motor and advancing-clock checks before calling the
+  maintenance window ready.
 
 ## Validation and acceptance
 
@@ -134,6 +169,27 @@ The Webots shared-SNN deployment exposed the same delivery gap in the legacy
 load-command handoff: a successful heartbeat response was treated as command
 application even while the worker still reported fingerprint zero. The exact
 fingerprint is now the acknowledgement boundary for those idempotent loads.
+
+The worker heartbeat obtains network resources through
+`DistributedNode::get_network_resources`, which copies the current
+`network_load_fingerprints` value onto cached resource snapshots. The existing
+lock-contention regression test passes locally, so stale cached snapshot data
+alone does not explain the live zero fingerprint. The active worker's applied
+load state or the load payload remains to be diagnosed; do not weaken sensory
+admission or treat neuron counts as load acknowledgement.
+
+The local `handle_command` reproduction from the prior session was interrupted
+after it remained CPU-bound at roughly 2.2 GiB RSS; it did not produce an
+application result. On sm00, `aarnn-node.service` remained active at 01:24Z at
+about 2.1 GiB RSS and 105% CPU, with no recent load-completion log. The worker
+checkpoint does contain morphology, so redundant morphology construction is a
+concrete avoidable cost. The bounded release reproduction completed the exact
+existing-network update path and returned a nonzero fingerprint in 11.2s; this
+narrows the diagnosis to the old live artifact/state but does not isolate the
+sole cause. `/api/status` confirms the shared SNN is playing on `native-sm00`
+but does not publish worker fingerprints. Keep the sensory gate strict until
+deployment yields an exact live acknowledgement and the end-to-end I/O checks
+pass.
 
 ## Decision Log
 

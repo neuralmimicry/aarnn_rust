@@ -6347,6 +6347,12 @@ impl Runner {
         let snapshot_time_ms = snap.t_ms.max(0.0);
         let snapshot_rng_seed = snap.rng_seed;
         let snapshot_runtime_state = snap.runtime_state.take();
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        let has_snapshot_morphology = snapshot_runtime_state
+            .as_ref()
+            .is_some_and(|state| state.morph.is_some());
+        #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
+        let has_snapshot_morphology = false;
         #[cfg(feature = "growth3d")]
         let snapshot_procedural_reconstruction = snap.procedural_reconstruction.take();
         #[cfg(feature = "growth3d")]
@@ -6553,7 +6559,9 @@ impl Runner {
                 + self.w_hh_rec.iter().map(|m| m.len()).sum::<usize>();
             let rt_force_morpho_off = rt_policy.enabled
                 && morpho_synapse_upper_bound > rt_policy.morpho_safe_max_synapses;
-            if rt_policy.disable_morpho || rt_force_morpho_off {
+            if has_snapshot_morphology {
+                nm_log!("[info] Import morphology rebuild skipped; restoring persisted morphology");
+            } else if rt_policy.disable_morpho || rt_force_morpho_off {
                 nm_log!(
                     "[info] Import morphology rebuild skipped for realtime IPC \
                      (upper_bound_synapses={} safe_max={})",
@@ -6575,7 +6583,7 @@ impl Runner {
         }
 
         // Clear all runtime state after structural update
-        self.reset();
+        self.reset_with_morphology_rebuild(!has_snapshot_morphology);
         #[cfg(feature = "growth3d")]
         // reset clears dynamic values but does not rebuild per-neuron biology;
         // restore it from the authoritative imported topology before applying
@@ -6729,6 +6737,11 @@ impl Runner {
     }
 
     pub fn reset(&mut self) {
+        self.reset_with_morphology_rebuild(true);
+    }
+
+    #[allow(unused_variables)]
+    fn reset_with_morphology_rebuild(&mut self, rebuild_morphology: bool) {
         self.t = 0;
         self.t_ms = 0.0;
         self.theta_phase = 0.0;
@@ -6846,7 +6859,11 @@ impl Runner {
                 + self.w_hh_rec.iter().map(|m| m.len()).sum::<usize>();
             let rt_force_morpho_off = rt_policy.enabled
                 && morpho_synapse_upper_bound > rt_policy.morpho_safe_max_synapses;
-            if rt_policy.disable_morpho || rt_force_morpho_off {
+            if !rebuild_morphology {
+                // Snapshot import restores its authoritative Morphology after
+                // reset. Building a throwaway morphology here duplicates the
+                // import rebuild and can dominate large checkpoint loads.
+            } else if rt_policy.disable_morpho || rt_force_morpho_off {
                 nm_log!(
                     "[info] Reset morphology rebuild skipped for realtime IPC \
                      (upper_bound_synapses={} safe_max={})",
@@ -24470,6 +24487,29 @@ mod tests {
             "point-only imported topology should receive procedural route reconstruction: {:?}",
             r.procedural_reconstruction_error
         );
+    }
+
+    #[test]
+    #[cfg(feature = "morpho")]
+    fn import_network_json_restores_persisted_morphology() {
+        let mut runner = mk_aarnn_growth_runner();
+        let mut snapshot = runner.snapshot();
+        let persisted_soma_x = 0.314159;
+        snapshot
+            .runtime_state
+            .as_mut()
+            .and_then(|state| state.morph.as_mut())
+            .expect("snapshot should include persisted morphology")
+            .somas[0][0]
+            .pos
+            .x = persisted_soma_x;
+
+        let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
+        runner
+            .import_network_json(&json)
+            .expect("import snapshot with persisted morphology");
+
+        assert_eq!(runner.morph.somas[0][0].pos.x, persisted_soma_x);
     }
 
     #[test]
