@@ -135,6 +135,15 @@ Route only events implied by the ownership/route plan. Run local vs seven-proces
   require the exact live load acknowledgement and the separate shared-world
   sensory, neural response, motor and advancing-clock checks before calling the
   maintenance window ready.
+- [~] `2026-10-02 02:51Z` The active Webots controller still admits 12-spike
+  frames, but output-owner activity on `native-sm00` remains empty. A near-
+  simultaneous activity sample measured the sensory owner `native-qc04` at
+  2,849,682 ms and output owner `native-sm00` at 2,866,937 ms of local Runner
+  time. The Webots client sends common-world `time_ms`/`dt_ms`, while the sparse
+  simulation ingress frame carries only sequence and step index; shard Runner
+  clocks therefore remain local. The diagnostic worker build is awaiting
+  package artifacts; live sensory consumption, nonzero motor output and the
+  power-cycle gate remain unverified.
 
 ## Validation and acceptance
 
