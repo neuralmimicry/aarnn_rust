@@ -192,15 +192,21 @@ impl RunnerEngine {
         let mut activity = self.last_activity.clone();
         let step = self.runner.t as u64;
         let frames = |history: &std::collections::VecDeque<ndarray::Array1<i8>>| {
-            history.iter().take(128).enumerate()
-                .filter_map(|(offset, frame)| step.checked_sub(offset as u64).map(|frame_step| {
-                    EngineSpikeHistoryFrame {
-                        step: frame_step,
-                        indices: frame.iter().enumerate()
-                            .filter_map(|(index, &spike)| (spike != 0).then_some(index))
-                            .collect(),
-                    }
-                }))
+            history
+                .iter()
+                .take(128)
+                .enumerate()
+                .filter_map(|(offset, frame)| {
+                    step.checked_sub(offset as u64)
+                        .map(|frame_step| EngineSpikeHistoryFrame {
+                            step: frame_step,
+                            indices: frame
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, &spike)| (spike != 0).then_some(index))
+                                .collect(),
+                        })
+                })
                 .collect()
         };
         activity.sensory_history = frames(&self.runner.spk_hist_s);

@@ -7007,7 +7007,9 @@ async fn activity(
                 activity_candidates.push((target_addr.clone(), response.into_inner()));
                 if network_activity_candidate_index(&activity_candidates, require_output_owner)
                     .is_some()
-                    && activity_candidates.iter().any(|(_, response)| response.sensory_stage_assigned)
+                    && activity_candidates
+                        .iter()
+                        .any(|(_, response)| response.sensory_stage_assigned)
                 {
                     break;
                 }
@@ -7028,12 +7030,19 @@ async fn activity(
             .map(|frame| frame.indices.clone())
             .unwrap_or_default();
         let sensory_history = sensory_owner
-            .map(|(_, response)| response.sensory_history.iter().enumerate()
-                .map(|(offset, frame)| json!({
-                    "step": response.sim_step.saturating_sub(offset as u64),
-                    "indices": frame.indices,
-                }))
-                .collect::<Vec<_>>())
+            .map(|(_, response)| {
+                response
+                    .sensory_history
+                    .iter()
+                    .enumerate()
+                    .map(|(offset, frame)| {
+                        json!({
+                            "step": response.sim_step.saturating_sub(offset as u64),
+                            "indices": frame.indices,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         let sensory_source = sensory_owner.map(|(addr, _)| addr.clone());
         let sensory_target_layer = sensory_owner.map(|(_, response)| response.sensory_target_layer);
@@ -7041,11 +7050,16 @@ async fn activity(
         let sim_step = resp.sim_step;
         let hidden: Vec<Vec<u32>> = resp.hidden.into_iter().map(|h| h.indices).collect();
         let output = resp.output.map(|o| o.indices).unwrap_or_default();
-        let output_history = resp.output_history.into_iter().enumerate()
-            .map(|(offset, frame)| json!({
-                "step": sim_step.saturating_sub(offset as u64),
-                "indices": frame.indices,
-            }))
+        let output_history = resp
+            .output_history
+            .into_iter()
+            .enumerate()
+            .map(|(offset, frame)| {
+                json!({
+                    "step": sim_step.saturating_sub(offset as u64),
+                    "indices": frame.indices,
+                })
+            })
             .collect::<Vec<_>>();
         return (StatusCode::OK, Json(json!({
             "network_id": resp.network_id,
@@ -9684,7 +9698,9 @@ async fn resolve_network_addr(
 }
 
 fn network_sensory_owner_index(candidates: &[(String, NetworkActivityResponse)]) -> Option<usize> {
-    candidates.iter().position(|(_, response)| response.sensory_stage_assigned)
+    candidates
+        .iter()
+        .position(|(_, response)| response.sensory_stage_assigned)
 }
 
 fn network_activity_candidate_index(
@@ -9780,19 +9796,34 @@ mod tests {
     #[test]
     fn activity_selection_keeps_sensory_and_output_owners_distinct() {
         let candidates = vec![
-            ("output-owner".to_owned(), NetworkActivityResponse {
-                output_stage_assigned: true,
-                ..NetworkActivityResponse::default()
-            }),
-            ("sensory-owner".to_owned(), NetworkActivityResponse {
-                sensory_stage_assigned: true,
-                sensory_history: vec![SpikeIndices { indices: vec![2], ..SpikeIndices::default() }],
-                ..NetworkActivityResponse::default()
-            }),
+            (
+                "output-owner".to_owned(),
+                NetworkActivityResponse {
+                    output_stage_assigned: true,
+                    ..NetworkActivityResponse::default()
+                },
+            ),
+            (
+                "sensory-owner".to_owned(),
+                NetworkActivityResponse {
+                    sensory_stage_assigned: true,
+                    sensory_history: vec![SpikeIndices {
+                        indices: vec![2],
+                        ..SpikeIndices::default()
+                    }],
+                    ..NetworkActivityResponse::default()
+                },
+            ),
         ];
         assert_eq!(network_activity_candidate_index(&candidates, true), Some(0));
         assert_eq!(network_sensory_owner_index(&candidates), Some(1));
-        assert_eq!(candidates[network_sensory_owner_index(&candidates).unwrap()].1.sensory_history[0].indices, vec![2]);
+        assert_eq!(
+            candidates[network_sensory_owner_index(&candidates).unwrap()]
+                .1
+                .sensory_history[0]
+                .indices,
+            vec![2]
+        );
     }
 
     #[test]

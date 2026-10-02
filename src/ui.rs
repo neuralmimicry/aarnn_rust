@@ -1152,36 +1152,59 @@ mod ipc_service_tests {
         for (robot, sensory_count, output_count, profile) in robots {
             let server_path = unique_socket(&format!("{robot}-server"));
             let client_path = unique_socket(&format!("{robot}-client"));
-            let service = IpcUdsServer::bind(&server_path, sensory_count, output_count, 4096, 16384)
-                .expect("bind Webots sensory ingress")
-                .start_with_capacity(2);
+            let service =
+                IpcUdsServer::bind(&server_path, sensory_count, output_count, 4096, 16384)
+                    .expect("bind Webots sensory ingress")
+                    .start_with_capacity(2);
             let client = UnixDatagram::bind(&client_path).expect("bind Webots controller socket");
-            let handshake = format!("{{\"sensory\":{sensory_count},\"output\":{output_count},\"dt_ms\":32}}");
-            client.send_to(handshake.as_bytes(), &server_path).expect("send Webots handshake");
+            let handshake =
+                format!("{{\"sensory\":{sensory_count},\"output\":{output_count},\"dt_ms\":32}}");
+            client
+                .send_to(handshake.as_bytes(), &server_path)
+                .expect("send Webots handshake");
             assert!(matches!(next_event(&service), IpcEvent::Config(_, _)));
 
             let stimulated_index = sensory_count / 2;
             let mut frame = Vec::with_capacity(4 * (sensory_count + 1));
             frame.extend_from_slice(&32.0f32.to_le_bytes());
             for index in 0..sensory_count {
-                frame.extend_from_slice(&(if index == stimulated_index { 1.0f32 } else { 0.0f32 }).to_le_bytes());
+                frame.extend_from_slice(
+                    &(if index == stimulated_index {
+                        1.0f32
+                    } else {
+                        0.0f32
+                    })
+                    .to_le_bytes(),
+                );
             }
-            client.send_to(&frame, &server_path).expect("send Webots sensory frame");
+            client
+                .send_to(&frame, &server_path)
+                .expect("send Webots sensory frame");
             let inputs = match next_event(&service) {
                 IpcEvent::Data { inputs, .. } => inputs,
                 IpcEvent::Config(_, _) => panic!("Webots frame was not decoded"),
             };
             let mut spikes = vec![0i8; sensory_count];
-            encode_profile_inputs_with(profile, &inputs, &mut spikes, || 0.5, &ProfileInputEncoding::default());
+            encode_profile_inputs_with(
+                profile,
+                &inputs,
+                &mut spikes,
+                || 0.5,
+                &ProfileInputEncoding::default(),
+            );
             let mut spec = crate::engine::EngineSpec::default();
             spec.net.num_sensory_neurons = sensory_count;
             spec.net.num_output_neurons = output_count;
             spec.net.num_hidden_layers = 1;
             spec.net.num_hidden_per_layer_initial = 4;
-            let mut engine = crate::engine::RunnerEngine::new(spec).expect("create matching runner");
+            let mut engine =
+                crate::engine::RunnerEngine::new(spec).expect("create matching runner");
             engine.step(Some(&spikes));
-            assert_eq!(engine.activity().sensory_history[0].indices, vec![stimulated_index],
-                "{robot} stimulus missed its neural sensory input");
+            assert_eq!(
+                engine.activity().sensory_history[0].indices,
+                vec![stimulated_index],
+                "{robot} stimulus missed its neural sensory input"
+            );
 
             drop(service);
             drop(client);
@@ -2061,11 +2084,15 @@ async fn poll_cluster_display_activity(
             if output_history.last().map(|(step, _)| *step) != Some(sim_step) {
                 output_history.push((sim_step, output_indices.clone()));
             }
-            let mut sensory_history = response.sensory_history
+            let mut sensory_history = response
+                .sensory_history
                 .into_iter()
                 .enumerate()
-                .filter_map(|(offset, activity)| sim_step.checked_sub(offset as u64)
-                    .map(|step| (step, activity.indices)))
+                .filter_map(|(offset, activity)| {
+                    sim_step
+                        .checked_sub(offset as u64)
+                        .map(|step| (step, activity.indices))
+                })
                 .collect::<Vec<_>>();
             sensory_history.reverse();
             Some(ClusterDisplayActivitySample {
@@ -4416,8 +4443,8 @@ impl App {
         let sim_remote_only = remote_only;
         let sim_distributed_input_tx = distributed_input_tx.clone();
         #[cfg(all(feature = "robot_io", unix))]
-        let sim_ipc_managed_network = (distributed_node.is_some() && ipc_bound_early)
-            .then(|| brain_id.clone());
+        let sim_ipc_managed_network =
+            (distributed_node.is_some() && ipc_bound_early).then(|| brain_id.clone());
         let sim_throttle = sim_throttle_ms.clone();
         let sim_idle_sleep_ms = std::env::var("NM_SIM_IDLE_SLEEP_MS")
             .ok()
@@ -6661,7 +6688,8 @@ impl App {
                             networks = previous.networks.clone();
                         }
                     }
-                    let first_network = if let Some(preferred) = self.requested_startup_network_id() {
+                    let first_network = if let Some(preferred) = self.requested_startup_network_id()
+                    {
                         networks.contains_key(&preferred).then_some(preferred)
                     } else {
                         networks.keys().min().cloned()
@@ -8692,7 +8720,9 @@ impl App {
             // A Webots launch names its brain before workers finish joining.
             // Wait for that inventory entry; selecting a larger pre-existing
             // network here would pin both rasters to the wrong brain.
-            return registry.contains_key(preferred).then(|| preferred.to_owned());
+            return registry
+                .contains_key(preferred)
+                .then(|| preferred.to_owned());
         }
 
         let mut network_ids: Vec<String> = registry.keys().cloned().collect();
@@ -9883,7 +9913,11 @@ impl App {
                             network_id,
                             sample.node_id,
                             sample.sim_step,
-                            sample.sensory_history.iter().map(|(_, indices)| indices.len()).sum::<usize>(),
+                            sample
+                                .sensory_history
+                                .iter()
+                                .map(|(_, indices)| indices.len())
+                                .sum::<usize>(),
                         );
                     }
                     self.cluster_activity_last_sensory_owner_step = Some(sampled_at);
@@ -9895,7 +9929,11 @@ impl App {
                             network_id,
                             sample.node_id,
                             sample.sim_step,
-                            sample.output_history.iter().map(|(_, indices)| indices.len()).sum::<usize>(),
+                            sample
+                                .output_history
+                                .iter()
+                                .map(|(_, indices)| indices.len())
+                                .sum::<usize>(),
                         );
                     }
                     self.cluster_activity_last_output_owner_step = Some(sampled_at);
@@ -9914,11 +9952,13 @@ impl App {
                 // this view. Do not rewind the shared raster cursor for that
                 // stale read; actual simulation resets are handled above.
                 let last_rendered_step = self.last_activity_rendered_step;
-                let raster_frames =
-                    cluster_activity_output_raster_frames(accepted_samples.iter().copied(), output_count)
-                        .into_iter()
-                        .filter(|(step, _)| last_rendered_step.is_none_or(|last| *step > last))
-                        .collect();
+                let raster_frames = cluster_activity_output_raster_frames(
+                    accepted_samples.iter().copied(),
+                    output_count,
+                )
+                .into_iter()
+                .filter(|(step, _)| last_rendered_step.is_none_or(|last| *step > last))
+                .collect();
                 self.append_output_raster_step_frames(raster_frames);
                 let input_frames = cluster_activity_sensory_raster_frames(
                     accepted_samples,
@@ -10106,7 +10146,10 @@ impl App {
         }
         let mut appended = 0;
         for (step, indices) in frames {
-            if self.last_input_activity_rendered_step.is_some_and(|last| step <= last) {
+            if self
+                .last_input_activity_rendered_step
+                .is_some_and(|last| step <= last)
+            {
                 continue;
             }
             self.raster_inputs.push_back(indices);
@@ -10281,24 +10324,44 @@ impl App {
         // the raster cursor past intermittent spikes in the worker display
         // history. A single-process cluster without an assigned worker still
         // needs its local snapshot as a bounded raster fallback.
-        let snapshot_only = self.dist_network_registry.get(network_id)
+        let snapshot_only = self
+            .dist_network_registry
+            .get(network_id)
             .is_none_or(|status| status.distribution.is_empty());
         if snapshot_only {
             let fallback_frames = self.cluster_snapshot_cache.as_ref().and_then(|snapshot| {
                 let runtime = snapshot.runtime_state.as_ref()?;
-                let input_frames = runtime.spk_hist_s.iter().take(self.raster_cols)
+                let input_frames = runtime
+                    .spk_hist_s
+                    .iter()
+                    .take(self.raster_cols)
                     .enumerate()
-                    .filter_map(|(offset, frame)| sim_step.checked_sub(offset as u64).map(|step| {
-                        (step, frame.iter().enumerate()
-                            .filter_map(|(index, &spike)| (spike != 0).then_some(index as u32))
-                            .collect::<Vec<_>>())
-                    }))
+                    .filter_map(|(offset, frame)| {
+                        sim_step.checked_sub(offset as u64).map(|step| {
+                            (
+                                step,
+                                frame
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(index, &spike)| {
+                                        (spike != 0).then_some(index as u32)
+                                    })
+                                    .collect::<Vec<_>>(),
+                            )
+                        })
+                    })
                     .rev()
                     .collect::<Vec<_>>();
-                let output_frames = runtime.spk_hist_o.iter().take(self.raster_cols)
+                let output_frames = runtime
+                    .spk_hist_o
+                    .iter()
+                    .take(self.raster_cols)
                     .enumerate()
-                    .filter_map(|(offset, frame)| sim_step.checked_sub(offset as u64)
-                        .map(|step| (step, frame.clone())))
+                    .filter_map(|(offset, frame)| {
+                        sim_step
+                            .checked_sub(offset as u64)
+                            .map(|step| (step, frame.clone()))
+                    })
                     .rev()
                     .collect::<Vec<_>>();
                 Some((input_frames, output_frames))
@@ -11655,9 +11718,18 @@ mod topology_presentation_tests {
         assert!(cluster_activity_poll_is_current(&poll, "brain-a", 42));
         assert!(!cluster_activity_poll_is_current(&poll, "brain-b", 42));
         assert!(!cluster_activity_poll_is_current(&poll, "brain-a", 43));
-        assert_eq!(cluster_activity_poll_interval(2, 2), CLUSTER_DISPLAY_ACTIVITY_POLL_INTERVAL);
-        assert_eq!(cluster_activity_poll_interval(2, 1), CLUSTER_DISPLAY_ACTIVITY_RETRY_INTERVAL);
-        assert_eq!(cluster_activity_poll_interval(2, 0), CLUSTER_DISPLAY_ACTIVITY_RETRY_INTERVAL);
+        assert_eq!(
+            cluster_activity_poll_interval(2, 2),
+            CLUSTER_DISPLAY_ACTIVITY_POLL_INTERVAL
+        );
+        assert_eq!(
+            cluster_activity_poll_interval(2, 1),
+            CLUSTER_DISPLAY_ACTIVITY_RETRY_INTERVAL
+        );
+        assert_eq!(
+            cluster_activity_poll_interval(2, 0),
+            CLUSTER_DISPLAY_ACTIVITY_RETRY_INTERVAL
+        );
     }
 
     #[test]
@@ -13136,7 +13208,12 @@ fn cluster_activity_sensory_raster_frames<'a>(
         }
         for (step, indices) in &sample.sensory_history {
             let frame = frames_by_step.entry(*step).or_default();
-            frame.extend(indices.iter().copied().filter(|&index| (index as usize) < sensory_count));
+            frame.extend(
+                indices
+                    .iter()
+                    .copied()
+                    .filter(|&index| (index as usize) < sensory_count),
+            );
         }
     }
     for indices in frames_by_step.values_mut() {
@@ -17034,17 +17111,27 @@ impl eframe::App for App {
                 } else {
                     snap.sensory_spike_frames.clone()
                 };
-                let first_sensory_step = snap.sim_step
+                let first_sensory_step = snap
+                    .sim_step
                     .saturating_sub(sensory_frames.len().saturating_sub(1) as u64);
-                self.append_input_raster_step_frames(sensory_frames.into_iter()
-                    .enumerate()
-                    .map(|(offset, frame)| {
-                        (first_sensory_step.saturating_add(offset as u64),
-                         frame.iter().enumerate()
-                             .filter_map(|(index, &spike)| (spike != 0).then_some(index as u32))
-                             .collect())
-                    })
-                    .collect());
+                self.append_input_raster_step_frames(
+                    sensory_frames
+                        .into_iter()
+                        .enumerate()
+                        .map(|(offset, frame)| {
+                            (
+                                first_sensory_step.saturating_add(offset as u64),
+                                frame
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(index, &spike)| {
+                                        (spike != 0).then_some(index as u32)
+                                    })
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                );
                 // Connection statistics (refreshed every 100 steps in sim thread).
                 if snap.total_conn > 0 || snap.longterm_conn > 0 {
                     self.longterm_conn = snap.longterm_conn;
@@ -26385,11 +26472,11 @@ impl eframe::App for App {
 #[cfg(all(test, feature = "ui"))]
 mod sensory_input_route_tests {
     use super::{
-        distributed_input_provider_width, managed_input_inactive_message,
-        managed_input_waits_without_local_simulation, managed_sensory_delivery_error_is_retryable,
-        ipc_managed_sensory_startup_error_is_retryable, resolve_audio_provider_sensory_count,
-        resolve_distributed_input_route_target,
-        resolve_managed_playing_state, resolve_view_input_sensory_count,
+        distributed_input_provider_width, ipc_managed_sensory_startup_error_is_retryable,
+        managed_input_inactive_message, managed_input_waits_without_local_simulation,
+        managed_sensory_delivery_error_is_retryable, resolve_audio_provider_sensory_count,
+        resolve_distributed_input_route_target, resolve_managed_playing_state,
+        resolve_view_input_sensory_count,
     };
 
     #[test]

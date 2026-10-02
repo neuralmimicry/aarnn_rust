@@ -945,9 +945,17 @@ mod tests {
                 || 0.5,
                 &ProfileInputEncoding::default(),
             );
-            assert_eq!(spikes[stimulated_index], 1, "{profile:?} input was not encoded");
-            assert!(spikes.iter().enumerate().all(|(index, &spike)| index == stimulated_index || spike == 0),
-                "{profile:?} input mapped to the wrong neural channel");
+            assert_eq!(
+                spikes[stimulated_index], 1,
+                "{profile:?} input was not encoded"
+            );
+            assert!(
+                spikes
+                    .iter()
+                    .enumerate()
+                    .all(|(index, &spike)| index == stimulated_index || spike == 0),
+                "{profile:?} input mapped to the wrong neural channel"
+            );
         }
     }
 

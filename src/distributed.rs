@@ -4266,14 +4266,14 @@ impl DisplayActivityHistory {
         let step = runner.t as u64;
         let sensory = DisplayActivityFrame::from_dense(
             step,
-            runner.spk_hist_s.front().into_iter().flat_map(|frame| {
-                frame.iter().copied().enumerate()
-            }),
+            runner
+                .spk_hist_s
+                .front()
+                .into_iter()
+                .flat_map(|frame| frame.iter().copied().enumerate()),
         );
-        let output = DisplayActivityFrame::from_dense(
-            step,
-            runner.last_spk_o.iter().copied().enumerate(),
-        );
+        let output =
+            DisplayActivityFrame::from_dense(step, runner.last_spk_o.iter().copied().enumerate());
         (sensory, output)
     }
 }
@@ -12754,19 +12754,37 @@ impl DistributedNeuromorphic for DistributedNode {
                 net.assigned_layers.contains(&sensory_target_layer_u32)
             };
             let (sensory_vec, sensory_history_vecs) = if sensory_stage_assigned {
-                let history = if net.display_activity.sensory.front()
+                let history = if net
+                    .display_activity
+                    .sensory
+                    .front()
                     .is_some_and(|frame| frame.step == sim_step)
                 {
-                    net.display_activity.sensory.iter().cloned().collect::<Vec<_>>()
+                    net.display_activity
+                        .sensory
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
                 } else {
-                    net.runner.spk_hist_s.iter().take(DISPLAY_ACTIVITY_HISTORY_STEPS)
+                    net.runner
+                        .spk_hist_s
+                        .iter()
+                        .take(DISPLAY_ACTIVITY_HISTORY_STEPS)
                         .enumerate()
-                        .filter_map(|(offset, frame)| sim_step.checked_sub(offset as u64)
-                            .map(|step| DisplayActivityFrame::from_dense(
-                                step, frame.iter().copied().enumerate())))
+                        .filter_map(|(offset, frame)| {
+                            sim_step.checked_sub(offset as u64).map(|step| {
+                                DisplayActivityFrame::from_dense(
+                                    step,
+                                    frame.iter().copied().enumerate(),
+                                )
+                            })
+                        })
                         .collect::<Vec<_>>()
                 };
-                let current = net.runner.spk_hist_s.front()
+                let current = net
+                    .runner
+                    .spk_hist_s
+                    .front()
                     .map(|frame| frame.iter().copied().collect::<Vec<i8>>())
                     .unwrap_or_else(|| vec![0; net.runner.net.num_sensory_neurons]);
                 (current, history)
@@ -12794,16 +12812,31 @@ impl DistributedNeuromorphic for DistributedNode {
                 net.assigned_layers.contains(&output_source_layer_u32)
             };
             let (output_vec, output_history_vecs) = if output_stage_assigned {
-                let history = if net.display_activity.output.front()
+                let history = if net
+                    .display_activity
+                    .output
+                    .front()
                     .is_some_and(|frame| frame.step == sim_step)
                 {
-                    net.display_activity.output.iter().cloned().collect::<Vec<_>>()
+                    net.display_activity
+                        .output
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
                 } else {
-                    net.runner.spk_hist_o.iter().take(DISPLAY_ACTIVITY_HISTORY_STEPS)
+                    net.runner
+                        .spk_hist_o
+                        .iter()
+                        .take(DISPLAY_ACTIVITY_HISTORY_STEPS)
                         .enumerate()
-                        .filter_map(|(offset, frame)| sim_step.checked_sub(offset as u64)
-                            .map(|step| DisplayActivityFrame::from_dense(
-                                step, frame.iter().copied().enumerate())))
+                        .filter_map(|(offset, frame)| {
+                            sim_step.checked_sub(offset as u64).map(|step| {
+                                DisplayActivityFrame::from_dense(
+                                    step,
+                                    frame.iter().copied().enumerate(),
+                                )
+                            })
+                        })
                         .collect::<Vec<_>>()
                 };
                 (
@@ -12844,44 +12877,47 @@ impl DistributedNeuromorphic for DistributedNode {
             sensory_stage_assigned,
         ) = raw_activity;
         let ts_us = (sim_time_ms * 1000.0) as u64;
-        let (sensory, sensory_history, hidden, output, output_history) = tokio::task::spawn_blocking(move || {
-            let sensory_exchange = encode_exchange(ts_us, 0, &sensory_vec);
-            let sensory = SpikeIndices {
-                indices: sensory_exchange.spike_indices,
-                aer_payload: sensory_exchange.aer_payload,
-                aer_base: sensory_exchange.aer_base,
-            };
-            let sensory_history = sensory_history_vecs.into_iter()
-                .map(|frame| frame.into_proto(ts_us))
-                .collect::<Vec<_>>();
-            let hidden = hidden_vecs
-                .iter()
-                .map(|layer_vec| {
-                    let exchange = encode_exchange(ts_us, 0, layer_vec);
+        let (sensory, sensory_history, hidden, output, output_history) =
+            tokio::task::spawn_blocking(move || {
+                let sensory_exchange = encode_exchange(ts_us, 0, &sensory_vec);
+                let sensory = SpikeIndices {
+                    indices: sensory_exchange.spike_indices,
+                    aer_payload: sensory_exchange.aer_payload,
+                    aer_base: sensory_exchange.aer_base,
+                };
+                let sensory_history = sensory_history_vecs
+                    .into_iter()
+                    .map(|frame| frame.into_proto(ts_us))
+                    .collect::<Vec<_>>();
+                let hidden = hidden_vecs
+                    .iter()
+                    .map(|layer_vec| {
+                        let exchange = encode_exchange(ts_us, 0, layer_vec);
+                        SpikeIndices {
+                            indices: exchange.spike_indices,
+                            aer_payload: exchange.aer_payload,
+                            aer_base: exchange.aer_base,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let output = if output_stage_assigned {
+                    let exchange = encode_exchange(ts_us, 0, &output_vec);
                     SpikeIndices {
                         indices: exchange.spike_indices,
                         aer_payload: exchange.aer_payload,
                         aer_base: exchange.aer_base,
                     }
-                })
-                .collect::<Vec<_>>();
-            let output = if output_stage_assigned {
-                let exchange = encode_exchange(ts_us, 0, &output_vec);
-                SpikeIndices {
-                    indices: exchange.spike_indices,
-                    aer_payload: exchange.aer_payload,
-                    aer_base: exchange.aer_base,
-                }
-            } else {
-                SpikeIndices::default()
-            };
-            let output_history = output_history_vecs.into_iter()
-                .map(|frame| frame.into_proto(ts_us))
-                .collect::<Vec<_>>();
-            (sensory, sensory_history, hidden, output, output_history)
-        })
-        .await
-        .map_err(|error| Status::internal(format!("activity task failed: {error}")))?;
+                } else {
+                    SpikeIndices::default()
+                };
+                let output_history = output_history_vecs
+                    .into_iter()
+                    .map(|frame| frame.into_proto(ts_us))
+                    .collect::<Vec<_>>();
+                (sensory, sensory_history, hidden, output, output_history)
+            })
+            .await
+            .map_err(|error| Status::internal(format!("activity task failed: {error}")))?;
 
         Ok(Response::new(NetworkActivityResponse {
             network_id: req.network_id,
@@ -12911,11 +12947,19 @@ mod tests {
         for step in 1..=140 {
             let sensory = DisplayActivityFrame {
                 step,
-                spikes: if step % 10 == 0 { vec![(3, 1)] } else { Vec::new() },
+                spikes: if step % 10 == 0 {
+                    vec![(3, 1)]
+                } else {
+                    Vec::new()
+                },
             };
             let output = DisplayActivityFrame {
                 step,
-                spikes: if step % 17 == 0 { vec![(1, 1)] } else { Vec::new() },
+                spikes: if step % 17 == 0 {
+                    vec![(1, 1)]
+                } else {
+                    Vec::new()
+                },
             };
             history.record(sensory, output);
         }
@@ -12923,15 +12967,42 @@ mod tests {
         assert_eq!(history.output.len(), DISPLAY_ACTIVITY_HISTORY_STEPS);
         assert_eq!(history.sensory.front().unwrap().step, 140);
         assert_eq!(history.sensory.back().unwrap().step, 13);
-        assert_eq!(history.sensory.iter().find(|frame| frame.step == 130).unwrap().spikes, vec![(3, 1)]);
-        assert_eq!(history.output.iter().find(|frame| frame.step == 136).unwrap().spikes, vec![(1, 1)]);
+        assert_eq!(
+            history
+                .sensory
+                .iter()
+                .find(|frame| frame.step == 130)
+                .unwrap()
+                .spikes,
+            vec![(3, 1)]
+        );
+        assert_eq!(
+            history
+                .output
+                .iter()
+                .find(|frame| frame.step == 136)
+                .unwrap()
+                .spikes,
+            vec![(1, 1)]
+        );
         let encoded = history.sensory.front().unwrap().clone().into_proto(140_000);
         assert_eq!(encoded.indices, vec![3]);
-        assert_eq!(crate::aer::decode_events(&encoded.aer_payload).unwrap()[0].addr, 3);
+        assert_eq!(
+            crate::aer::decode_events(&encoded.aer_payload).unwrap()[0].addr,
+            3
+        );
 
         // A reset or imported step discontinuity starts a new presentation trace.
-        history.record(DisplayActivityFrame { step: 7, spikes: vec![(2, 1)] },
-            DisplayActivityFrame { step: 7, spikes: Vec::new() });
+        history.record(
+            DisplayActivityFrame {
+                step: 7,
+                spikes: vec![(2, 1)],
+            },
+            DisplayActivityFrame {
+                step: 7,
+                spikes: Vec::new(),
+            },
+        );
         assert_eq!(history.sensory.len(), 1);
         assert_eq!(history.sensory.front().unwrap().step, 7);
     }
@@ -14178,8 +14249,16 @@ mod tests {
             desired_aarnn_depth: 1,
             neuron_model: "lif".to_owned(),
             learning_rule: "stdp".to_owned(),
-        }).await;
-        let network = node.state.read().await.networks.get("sparse-activity").unwrap().clone();
+        })
+        .await;
+        let network = node
+            .state
+            .read()
+            .await
+            .networks
+            .get("sparse-activity")
+            .unwrap()
+            .clone();
         {
             let mut network = network.write().await;
             assert!(network.runner.spk_hist_s.len() < DISPLAY_ACTIVITY_HISTORY_STEPS);
@@ -14189,18 +14268,47 @@ mod tests {
             network.runner.layer_range = None;
             for step in 13..=140 {
                 network.display_activity.record(
-                    DisplayActivityFrame { step, spikes: if step % 10 == 0 { vec![(1, 1)] } else { Vec::new() } },
-                    DisplayActivityFrame { step, spikes: if step % 17 == 0 { vec![(0, 1)] } else { Vec::new() } },
+                    DisplayActivityFrame {
+                        step,
+                        spikes: if step % 10 == 0 {
+                            vec![(1, 1)]
+                        } else {
+                            Vec::new()
+                        },
+                    },
+                    DisplayActivityFrame {
+                        step,
+                        spikes: if step % 17 == 0 {
+                            vec![(0, 1)]
+                        } else {
+                            Vec::new()
+                        },
+                    },
                 );
             }
         }
-        let response = node.get_network_activity(Request::new(NetworkActivityRequest {
-            network_id: "sparse-activity".to_owned(),
-        })).await.unwrap().into_inner();
+        let response = node
+            .get_network_activity(Request::new(NetworkActivityRequest {
+                network_id: "sparse-activity".to_owned(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
         assert_eq!(response.sim_step, 140);
-        assert_eq!(response.sensory_history.len(), DISPLAY_ACTIVITY_HISTORY_STEPS);
-        assert_eq!(response.sensory_history[10].indices, vec![1], "step 130 survives a two-step biological ring");
-        assert_eq!(response.output_history[4].indices, vec![0], "step 136 survives a two-step biological ring");
+        assert_eq!(
+            response.sensory_history.len(),
+            DISPLAY_ACTIVITY_HISTORY_STEPS
+        );
+        assert_eq!(
+            response.sensory_history[10].indices,
+            vec![1],
+            "step 130 survives a two-step biological ring"
+        );
+        assert_eq!(
+            response.output_history[4].indices,
+            vec![0],
+            "step 136 survives a two-step biological ring"
+        );
     }
 
     #[tokio::test]
@@ -14444,7 +14552,13 @@ mod tests {
         assert_eq!(owner_response.output_source_layer, 2);
         assert!(owner_response.output_stage_assigned);
         assert!(!owner_response.sensory_stage_assigned);
-        assert!(owner_response.sensory.expect("sensory envelope").indices.is_empty());
+        assert!(
+            owner_response
+                .sensory
+                .expect("sensory envelope")
+                .indices
+                .is_empty()
+        );
         assert!(owner_response.sensory_history.is_empty());
         assert_eq!(
             owner_response
