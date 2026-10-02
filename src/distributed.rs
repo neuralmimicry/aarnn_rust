@@ -4656,7 +4656,10 @@ fn managed_spike_batches(net: &ManagedNetwork, step_index: i64) -> Vec<SpikeBatc
     let ts_us = (net.runner.t_ms * 1000.0) as u64;
     let num_hidden = net.runner.net.num_hidden_layers as u32;
     let mut batches = Vec::new();
-    for &layer in &net.redundant_layers {
+    // Publish the state produced by layers this worker actively owns. Warm
+    // backup layers are not stepped by this Runner and cannot carry the causal
+    // output of the active shard to its downstream owners.
+    for &layer in &net.assigned_layers {
         if layer >= num_hidden {
             continue;
         }
@@ -15273,6 +15276,101 @@ mod tests {
             }
         }
         assert_eq!(hosted_layers_for_assignment(&[0], &[1]), vec![0, 1]);
+    }
+
+    #[test]
+    fn managed_spike_batches_publish_active_layers_not_warm_backups() {
+        let mut config = NetworkConfig::default();
+        config.num_sensory_neurons = 2;
+        config.num_hidden_layers = 2;
+        config.num_hidden_per_layer_initial = 2;
+        config.num_output_neurons = 1;
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let model = NeuronModel::Lif;
+        let learning = Learning::Stdp;
+        let runner = Runner::new(lif.clone(), stdp.clone(), config.clone(), model, learning);
+        let mut network = ManagedNetwork::new(
+            "sharded-spikes".to_owned(),
+            runner,
+            config,
+            model,
+            learning,
+            lif,
+            stdp,
+        );
+        network.assigned_layers = vec![0];
+        network.redundant_layers = vec![1];
+        network.runner.last_spk_h[0][0] = 1;
+        network.runner.last_spk_h[1][1] = 1;
+
+        let batches = managed_spike_batches(&network, 42);
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].layer_index, 0);
+        assert_eq!(batches[0].step_index, 42);
+        assert_eq!(batches[0].spike_indices, vec![0]);
+    }
+
+    #[tokio::test]
+    async fn active_layer_spike_batch_reaches_the_next_layer_owner() {
+        let mut config = NetworkConfig::default();
+        config.num_sensory_neurons = 2;
+        config.num_hidden_layers = 2;
+        config.num_hidden_per_layer_initial = 2;
+        config.num_output_neurons = 1;
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let model = NeuronModel::Lif;
+        let learning = Learning::Stdp;
+
+        let source_runner = Runner::new(lif.clone(), stdp.clone(), config.clone(), model, learning);
+        let mut source = ManagedNetwork::new(
+            "sharded-spikes".to_owned(),
+            source_runner,
+            config.clone(),
+            model,
+            learning,
+            lif.clone(),
+            stdp.clone(),
+        );
+        source.assigned_layers = vec![0];
+        source.redundant_layers = vec![1];
+        source.runner.last_spk_h[0][1] = 1;
+
+        let mut target_runner =
+            Runner::new(lif.clone(), stdp.clone(), config.clone(), model, learning);
+        target_runner.layer_range = Some(1..2);
+        let mut target = ManagedNetwork::new(
+            "sharded-spikes".to_owned(),
+            target_runner,
+            config,
+            model,
+            learning,
+            lif,
+            stdp,
+        );
+        target.assigned_layers = vec![1];
+        target.redundant_layers = vec![0];
+
+        let source_batches = managed_spike_batches(&source, 42);
+        assert_eq!(source_batches.len(), 1);
+        assert_eq!(source_batches[0].layer_index, 0);
+
+        let node = DistributedNode::new("native-next".to_owned(), false);
+        node.state
+            .write()
+            .await
+            .networks
+            .insert("sharded-spikes".to_owned(), Arc::new(RwLock::new(target)));
+        node.handle_incoming_spike_batch(source_batches[0].clone(), None)
+            .await;
+
+        let state = node.state.read().await;
+        let network = state.networks.get("sharded-spikes").expect("loaded target");
+        let network = network.read().await;
+        assert_eq!(network.remote_spikes_fwd.get(&0), Some(&vec![0, 1]));
+        assert_eq!(network.remote_spike_steps_fwd.get(&0), Some(&42));
     }
 
     #[test]
