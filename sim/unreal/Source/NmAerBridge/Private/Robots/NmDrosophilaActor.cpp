@@ -218,19 +218,55 @@ void UNmDrosophilaComponent::ApplyActuators(const TArray<float>& Actuators)
         }
     }
     Activity = FMath::Clamp(Activity / (NumActuators * .25f), 0.f, 1.f);
+    const float Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+    if (Activity > 0.f)
+    {
+        LastFlightDrive = Activity;
+        LastFlightSpikeTime = Now;
+    }
+    else if (LastFlightSpikeTime >= 0.f && Now - LastFlightSpikeTime <= .2f)
+    {
+        Activity = LastFlightDrive;
+    }
     const float Dt = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.f;
     const float Alpha = 1.f - FMath::Exp(-FMath::Max(0.f, Dt) / .055f);
     FlightActivity += Alpha * (Activity - FlightActivity);
+    if (FlightActivity < .01f) FlightHeightIntegral = 0.f;
     if (Thorax && Thorax->IsSimulatingPhysics() && GetWorld() && FlightActivity > .001f)
     {
-        // Unreal force units are kg·cm/s². Acceleration mode lets the native
-        // gravity and articulated body mass continue to determine the result.
+        // The wing force acts at the thorax, but gravity acts on every dynamic
+        // articulated leg. Account for the measured whole-rig/root mass ratio
+        // rather than calibrating against only the thorax mass.
+        if (FlightMassRatio <= 0.f)
+        {
+            const float RootMass = FMath::Max(.001f, Thorax->GetMass());
+            float RigMass = RootMass;
+            for (UStaticMeshComponent* Leg : LegSegmentMeshes)
+            {
+                if (Leg && Leg->IsSimulatingPhysics()) RigMass += Leg->GetMass();
+            }
+            FlightMassRatio = FMath::Clamp(RigMass / RootMass, 1.f, 8.f);
+        }
         const float HeightCm = Thorax->GetComponentLocation().Z - HabitatCentre.Z;
         const float SpeedCmS = Thorax->GetPhysicsLinearVelocity().Z;
         const float HoverAccel = -GetWorld()->GetGravityZ();
-        const float Requested = FMath::Clamp(HoverAccel +
-            3.2f * (32.f - HeightCm) - 1.5f * SpeedCmS, 0.f, 1430.f);
-        Thorax->AddForce(FVector(0.f, 0.f, FlightActivity * Requested), NAME_None, true);
+        const float ErrorCm = 32.f - HeightCm;
+        if (FlightActivity > .8f && FMath::Abs(ErrorCm) < 15.f)
+        {
+            FlightHeightIntegral = FMath::Clamp(
+                FlightHeightIntegral + ErrorCm * Dt, -100.f, 100.f);
+        }
+        const float Requested = FMath::Clamp(HoverAccel / FMath::Max(.5f, FlightActivity) +
+            24.f * ErrorCm - 8.5f * SpeedCmS + 5.f * FlightHeightIntegral,
+            0.f, 1430.f);
+        Thorax->AddForce(FVector(0.f, 0.f, FlightMassRatio * FlightActivity * Requested), NAME_None, true);
+        if (++FlightDiagFrames >= 600)
+        {
+            FlightDiagFrames = 0;
+            UE_LOG(LogTemp, Log, TEXT("NmFlyFlight: drive=%.3f height_cm=%.2f vz_cm_s=%.2f root_accel_cm_s2=%.2f mass_ratio=%.2f"),
+                   FlightActivity, HeightCm, SpeedCmS, FlightMassRatio * FlightActivity * Requested,
+                   FlightMassRatio);
+        }
     }
 }
 

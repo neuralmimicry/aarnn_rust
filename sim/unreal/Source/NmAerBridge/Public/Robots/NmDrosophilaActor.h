@@ -79,6 +79,11 @@ public:
     FVector PrevLinearVel  = FVector::ZeroVector;
     FVector PrevAngularVel = FVector::ZeroVector;
     float FlightActivity = 0.f;
+    float LastFlightDrive = 0.f;
+    float LastFlightSpikeTime = -1.f;
+    int32 FlightDiagFrames = 0;
+    float FlightMassRatio = 0.f;
+    float FlightHeightIntegral = 0.f;
 
     // Previous eye luminance for event-delta encoding.
     TArray<float> PrevEyeLeftLum;

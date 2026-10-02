@@ -52,7 +52,9 @@ are installed; Unity editor availability is to be verified.
 
 The initial tree contains user changes in runtime, launchers, simulator README,
 WebGL assets, C. elegans config, Cargo.lock and the cross-review plan. Preserve them.
-Work branch: codex/simulator-content-parity. No commits or deployment requested.
+The cross-engine follow-up is on `main` after merge commit `19fb394` and adapter
+commit `1d765ba`; the earlier `codex/simulator-content-parity` entry below is
+historical. The user's commit/push instruction applies to this follow-up.
 
 ## Architecture and safety constraints
 
@@ -108,6 +110,15 @@ compatibility sensor/transport discrepancies are recorded instead of claimed equ
 - [x] `2026-10-02 20:58Z` Rebuilt Unreal after the collision and fly activity
   edits and reran the simulator-content contract: both pass. Final evidence is
   `target/qa/simulator-content/contract-j5mhxutv/`; `git diff --check` passes.
+- [x] `2026-10-02 21:10Z` Single-fly Unreal mock-AER probe exposed insufficient
+  effective lift in the first revision. A silent-output control settled near
+  22 cm. With 12 output spikes per response, the revised bounded force and
+  measured rig/root mass compensation held near 35 cm (diagnostic sample
+  38.665 cm, 13,552 frames). The revised Unreal Editor target builds and
+  `cargo xtask qa run --suite simulator-content` passes eight checks in
+  `target/qa/simulator-content/contract-qbu22ssi/`; `git diff --check` passes. This
+  validates engine output-to-force response with one robot, not a live committed
+  brain or cross-engine physics equivalence.
 - [ ] `2026-10-02 20:56Z` Unity Editor/play-mode and native one-robot movement,
   contact, and raster observation remain unverified on this host; Unity Editor
   is not installed. Minecraft remains a kinematic sensory/visual reference, not
@@ -377,6 +388,14 @@ Old native I/O maps differ: verify by names, do not infer equivalence from vecto
   different from the shared insect-style three-left/three-right contract even
   though the motor names and counts were correct. The corrected PROTO keeps the
   body’s +X front direction and uses fixed ±Y side rows.
+- A single-fly Unreal mock-AER control was necessary because source parity and
+  a successful Editor build did not show whether sparse output sustained actual
+  lift. The first lift revision lost height with the articulated rig; measured
+  dynamic body mass, a short spike hold and bounded height feedback improved
+  the active run. Unreal's native fly rig uses much larger effective mass and
+  dimensions than Unity or Webots, so the numeric force is an engine calibration,
+  not a shared biological measurement. The headless probe required SIGKILL after
+  Unreal ignored SIGTERM; no matching process remained afterward.
 
 ## Decision Log
 
@@ -388,6 +407,12 @@ Old native I/O maps differ: verify by names, do not infer equivalence from vecto
   response; retain existing explicit exceptions for opposing muscle groups.
   This is sandbox actuator behavior only. Native dynamics remain a sequential
   one-robot acceptance gate under Sections 16.17/16.19 and `INV-015`–`INV-017`.
+- `2026-10-02 SIM-009`: Bound Unreal and Unity fly lift to fresh sparse output
+  with a 200 ms hold, measured articulated/root mass compensation and bounded
+  height feedback. Preserve world gravity and zero-drive descent. The one-fly
+  Unreal mock-AER comparison supports the correction; Unity Editor physics and
+  live committed-brain response remain acceptance gates. Cap compensation and
+  force for stability; changing these gains needs another one-robot probe.
 
 - `2026-09-15 SIM-001`: Use repository-native procedural geometry and shared authored
   content rather than external raster/asset dependencies. Reference dimensions and

@@ -125,6 +125,10 @@ namespace NeuralMimicry
 
         private bool _bodyBuilt;
         private float _flightActivity;
+        private float _lastFlightDrive;
+        private float _lastFlightSpikeTime = -1f;
+        private float _flightMassRatio = 1f;
+        private float _flightHeightIntegral;
 
         // Cached sensor names (computed once).
         private string[] _sensorNamesCache;
@@ -346,6 +350,11 @@ namespace NeuralMimicry
             _eyeReadback     = new Texture2D(_retinaWidth, _retinaHeight,
                                              TextureFormat.RGB24, false);
 
+            float dynamicMass = _thorax.mass;
+            foreach (var leg in _legJoints) dynamicMass += leg.mass;
+            foreach (var wing in _wingJoints) dynamicMass += wing.mass;
+            _flightMassRatio = Mathf.Clamp(dynamicMass / Mathf.Max(_thorax.mass, .000001f), 1f, 8f);
+
             _bodyBuilt = true;
         }
 
@@ -501,17 +510,36 @@ namespace NeuralMimicry
             // ForceMode.Acceleration keeps gravity active and scales with rig mass.
             float activity = 0f;
             for (int i = 0; i < Mathf.Min(TotalActuators, outputs.Length); i++)
-                activity += Mathf.Clamp01((outputs[i] - .5f) * 2f);
+            {
+                if (!float.IsNaN(outputs[i]) && !float.IsInfinity(outputs[i]))
+                    activity += Mathf.Clamp01((outputs[i] - .5f) * 2f);
+            }
             activity = Mathf.Clamp01(activity / (TotalActuators * .25f));
+            if (activity > 0f)
+            {
+                _lastFlightDrive = activity;
+                _lastFlightSpikeTime = Time.fixedTime;
+            }
+            else if (_lastFlightSpikeTime >= 0f && Time.fixedTime - _lastFlightSpikeTime <= .2f)
+            {
+                activity = _lastFlightDrive;
+            }
             float alpha = 1f - Mathf.Exp(-Time.fixedDeltaTime / .055f);
             _flightActivity += alpha * (activity - _flightActivity);
+            if (_flightActivity < .01f) _flightHeightIntegral = 0f;
             if (_thorax != null && _flightActivity > .001f)
             {
                 float floor = Habitat != null ? Habitat.transform.position.y : 0f;
                 float lane = (Habitat != null ? Habitat.Radius : 1f) * .32f;
                 float height = _thorax.transform.position.y - floor;
-                float acceleration = Mathf.Clamp(-Physics.gravity.y +
-                    3.2f * (lane - height) - 1.5f * _thorax.velocity.y, 0f, 14.3f);
+                float error = lane - height;
+                if (_flightActivity > .8f && Mathf.Abs(error) < .15f)
+                    _flightHeightIntegral = Mathf.Clamp(
+                        _flightHeightIntegral + error * Time.fixedDeltaTime, -1f, 1f);
+                float acceleration = _flightMassRatio * Mathf.Clamp(
+                    -Physics.gravity.y / Mathf.Max(.5f, _flightActivity) +
+                    24f * error - 8.5f * _thorax.velocity.y +
+                    5f * _flightHeightIntegral, 0f, 14.3f);
                 _thorax.AddForce(Vector3.up * (_flightActivity * acceleration), ForceMode.Acceleration);
             }
         }
