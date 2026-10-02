@@ -1,7 +1,7 @@
 #VRML_SIM R2025a utf8
 # Generated shared habitat; source sim/content/catalog.json; 4d0d506e80f146acf04e34ee781f67ab465c6d1f336b73c799bc3e3904a6b2d8
 EXTERNPROTO "../protos/DrosophilaBancRobot.proto"
-WorldInfo { basicTimeStep 32 }
+WorldInfo { basicTimeStep 8 }
 Viewpoint { orientation 1 0 0 0.64 position 0 -3.00000 2.40000 }
 Background { skyColor [ 0.12 0.17 0.2 ] }
 DirectionalLight { direction -0.35 -0.5 -1 intensity 1 ambientIntensity 0.35 castShadows TRUE }

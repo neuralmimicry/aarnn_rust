@@ -108,9 +108,13 @@ const LAYOUT_SIZE_QUANTUM: f32 = 4.0;
 #[cfg(feature = "ui")]
 const CLUSTER_DISPLAY_ACTIVITY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 #[cfg(feature = "ui")]
-const CLUSTER_DISPLAY_ACTIVITY_RPC_TIMEOUT: Duration = Duration::from_millis(700);
+const CLUSTER_DISPLAY_ACTIVITY_RPC_TIMEOUT: Duration = Duration::from_secs(7);
+#[cfg(feature = "ui")]
+const CLUSTER_DISPLAY_ACTIVITY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 #[cfg(feature = "ui")]
 const CLUSTER_DISPLAY_ACTIVITY_MAX_TARGETS: usize = 16;
+#[cfg(feature = "ui")]
+const CLUSTER_TOPOLOGY_SNAPSHOT_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
 
 #[cfg(feature = "ui")]
 fn add_fixed_control_label(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
@@ -1134,6 +1138,80 @@ mod ipc_service_tests {
         let _ = std::fs::remove_file(&server_path);
         let _ = std::fs::remove_file(&client_path);
     }
+
+    #[test]
+    fn six_webots_sensory_frames_reach_the_matching_runner_inputs() {
+        let robots = [
+            ("worm", 24, 96, NetworkIoProfile::Celegans),
+            ("banc", 418, 48, NetworkIoProfile::Drosophila),
+            ("fafb", 418, 48, NetworkIoProfile::Drosophila),
+            ("hex", 34, 18, NetworkIoProfile::Hexapod),
+            ("nao", 250, 40, NetworkIoProfile::Nao),
+            ("fish", 32, 32, NetworkIoProfile::ZebraFish),
+        ];
+        for (robot, sensory_count, output_count, profile) in robots {
+            let server_path = unique_socket(&format!("{robot}-server"));
+            let client_path = unique_socket(&format!("{robot}-client"));
+            let service =
+                IpcUdsServer::bind(&server_path, sensory_count, output_count, 4096, 16384)
+                    .expect("bind Webots sensory ingress")
+                    .start_with_capacity(2);
+            let client = UnixDatagram::bind(&client_path).expect("bind Webots controller socket");
+            let handshake =
+                format!("{{\"sensory\":{sensory_count},\"output\":{output_count},\"dt_ms\":32}}");
+            client
+                .send_to(handshake.as_bytes(), &server_path)
+                .expect("send Webots handshake");
+            assert!(matches!(next_event(&service), IpcEvent::Config(_, _)));
+
+            let stimulated_index = sensory_count / 2;
+            let mut frame = Vec::with_capacity(4 * (sensory_count + 1));
+            frame.extend_from_slice(&32.0f32.to_le_bytes());
+            for index in 0..sensory_count {
+                frame.extend_from_slice(
+                    &(if index == stimulated_index {
+                        1.0f32
+                    } else {
+                        0.0f32
+                    })
+                    .to_le_bytes(),
+                );
+            }
+            client
+                .send_to(&frame, &server_path)
+                .expect("send Webots sensory frame");
+            let inputs = match next_event(&service) {
+                IpcEvent::Data { inputs, .. } => inputs,
+                IpcEvent::Config(_, _) => panic!("Webots frame was not decoded"),
+            };
+            let mut spikes = vec![0i8; sensory_count];
+            encode_profile_inputs_with(
+                profile,
+                &inputs,
+                &mut spikes,
+                || 0.5,
+                &ProfileInputEncoding::default(),
+            );
+            let mut spec = crate::engine::EngineSpec::default();
+            spec.net.num_sensory_neurons = sensory_count;
+            spec.net.num_output_neurons = output_count;
+            spec.net.num_hidden_layers = 1;
+            spec.net.num_hidden_per_layer_initial = 4;
+            let mut engine =
+                crate::engine::RunnerEngine::new(spec).expect("create matching runner");
+            engine.step(Some(&spikes));
+            assert_eq!(
+                engine.activity().sensory_history[0].indices,
+                vec![stimulated_index],
+                "{robot} stimulus missed its neural sensory input"
+            );
+
+            drop(service);
+            drop(client);
+            let _ = std::fs::remove_file(&server_path);
+            let _ = std::fs::remove_file(&client_path);
+        }
+    }
 }
 
 #[cfg(feature = "ui")]
@@ -1300,11 +1378,40 @@ fn managed_sensory_delivery_error_is_retryable(error: &str) -> bool {
         || error.contains("operation was canceled")
 }
 
+/// The Webots socket can receive its first frame while cluster placement is
+/// loading and before the simulator launcher sends Start. These are bounded
+/// startup waits for the IPC producer, but an audio source selected on an
+/// already-paused brain must retain its existing fail-closed behavior.
+#[cfg(feature = "ui")]
+fn ipc_managed_sensory_startup_error_is_retryable(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("no published sensory i/o bridge")
+        || error.contains("no connected sensory ingress owner")
+        || error.contains("has not reported network")
+        || error.contains("managed network is paused")
+        || error.contains("sensory network is not loaded on this worker")
+}
+
 /// Bound transient bridge retries; expiry closes this input generation visibly.
 const MANAGED_SENSORY_BACKPRESSURE_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(120);
 const MANAGED_SENSORY_BACKPRESSURE_RETRY_DELAY: std::time::Duration =
     std::time::Duration::from_millis(50);
+
+/// A Webots IPC frame can arrive while a large managed snapshot is still
+/// loading. The launcher supplies a finite startup budget for that producer;
+/// ordinary workstation input keeps the existing 120-second bound.
+fn managed_sensory_backpressure_window(ipc_source: bool) -> std::time::Duration {
+    if !ipc_source {
+        return MANAGED_SENSORY_BACKPRESSURE_WINDOW;
+    }
+    std::env::var("NM_WEBOTS_IPC_STARTUP_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| (1..=3600).contains(seconds))
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(MANAGED_SENSORY_BACKPRESSURE_WINDOW)
+}
 
 /// A selected managed view owns provider progress. While its sensory bridge
 /// is unavailable, the workstation must wait without advancing its unrelated
@@ -1723,6 +1830,9 @@ struct DistributedSensoryFrame {
     frame_sequence: u64,
     step_index: i64,
     spikes: Vec<i8>,
+    /// The Webots lockstep caller must know whether the selected managed
+    /// network accepted this frame before it advances its local motor reply.
+    ipc_ack: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
 }
 
 /// Latest bridge-acknowledged sensory sample for the visualisation path.
@@ -1865,7 +1975,11 @@ struct ClusterDisplayActivitySample {
     node_id: String,
     owned_layers: Vec<u32>,
     sim_step: u64,
+    sensory_owner: bool,
+    output_owner: bool,
     sensory_indices: Vec<u32>,
+    /// Recent sensory-owner input history, oldest first.
+    sensory_history: Vec<(u64, Vec<u32>)>,
     hidden_indices: Vec<Vec<u32>>,
     output_indices: Vec<u32>,
     /// Recent worker output history, oldest first, for the dashboard raster.
@@ -1886,6 +2000,15 @@ fn cluster_activity_poll_is_current(
     current_assignment_digest: u64,
 ) -> bool {
     poll.network_id == selected_network_id && poll.assignment_digest == current_assignment_digest
+}
+
+#[cfg(feature = "ui")]
+fn cluster_activity_poll_interval(expected_targets: usize, successful_targets: usize) -> Duration {
+    if successful_targets < expected_targets {
+        CLUSTER_DISPLAY_ACTIVITY_RETRY_INTERVAL
+    } else {
+        CLUSTER_DISPLAY_ACTIVITY_POLL_INTERVAL
+    }
 }
 
 /// Query every assigned layer owner concurrently with a strict aggregate
@@ -1937,6 +2060,12 @@ async fn poll_cluster_display_activity(
                 return None;
             }
             let sim_step = response.sim_step;
+            // A reachable worker is not proof that either I/O owner replied.
+            // Both the worker and the orchestrator assignment must agree.
+            let sensory_owner = response.sensory_stage_assigned
+                && owned_layers.contains(&response.sensory_target_layer);
+            let output_owner = response.output_stage_assigned
+                && owned_layers.contains(&response.output_source_layer);
             let output_indices = response
                 .output
                 .map(|activity| activity.indices)
@@ -1955,14 +2084,28 @@ async fn poll_cluster_display_activity(
             if output_history.last().map(|(step, _)| *step) != Some(sim_step) {
                 output_history.push((sim_step, output_indices.clone()));
             }
+            let mut sensory_history = response
+                .sensory_history
+                .into_iter()
+                .enumerate()
+                .filter_map(|(offset, activity)| {
+                    sim_step
+                        .checked_sub(offset as u64)
+                        .map(|step| (step, activity.indices))
+                })
+                .collect::<Vec<_>>();
+            sensory_history.reverse();
             Some(ClusterDisplayActivitySample {
                 node_id,
                 owned_layers,
                 sim_step,
+                sensory_owner,
+                output_owner,
                 sensory_indices: response
                     .sensory
                     .map(|activity| activity.indices)
                     .unwrap_or_default(),
+                sensory_history,
                 hidden_indices: response
                     .hidden
                     .into_iter()
@@ -2630,10 +2773,14 @@ struct App {
     cluster_activity_assignment_digest: Option<u64>,
     cluster_activity_last_steps: HashMap<String, u64>,
     cluster_activity_last_success: Option<Instant>,
+    cluster_activity_last_sensory_owner_step: Option<Instant>,
+    cluster_activity_last_output_owner_step: Option<Instant>,
     cluster_activity_last_active_count: usize,
-    // Raster inset (recent output spikes)
+    // Bounded, display-only sensory and output raster histories.
     raster_cols: usize,
+    raster_inputs: std::collections::VecDeque<Vec<u32>>,
     raster_outputs: std::collections::VecDeque<Vec<i8>>, // time-major columns, each length = num_output_neurons
+    last_input_activity_rendered_step: Option<u64>,
     last_activity_rendered_step: Option<u64>,
     // View (camera) controls
     camera_zoom: f32,
@@ -3696,6 +3843,8 @@ impl App {
         }
         self.edge_shapes.clear();
         self.edge_shapes.shrink_to_fit();
+        self.raster_inputs.clear();
+        self.last_input_activity_rendered_step = None;
         self.raster_outputs.clear();
         self.last_activity_rendered_step = None;
         self.sensory_activity.clear();
@@ -4136,8 +4285,11 @@ impl App {
             runtime_handle.spawn(async move {
                 let mut uncertain_session: Option<String> = None;
                 let mut last_error: Option<String> = None;
-                while let Some(frame) = distributed_input_rx.recv().await {
+                while let Some(mut frame) = distributed_input_rx.recv().await {
                     if uncertain_session.as_deref() == Some(frame.session_id.as_str()) {
+                        if let Some(ack) = frame.ipc_ack.take() {
+                            let _ = ack.send(Err("sensory session stopped after an earlier admission failure".to_owned()));
+                        }
                         continue;
                     }
                     // Keep the provider cursor behind this frame until the
@@ -4146,6 +4298,8 @@ impl App {
                     // The bounded producer channel then naturally pauses the
                     // provider without holding a Runner or UI lock.
                     let retry_started = tokio::time::Instant::now();
+                    let backpressure_window =
+                        managed_sensory_backpressure_window(frame.ipc_ack.is_some());
                     let admission = loop {
                         match node
                             .inject_external_sensory_frame(
@@ -4159,9 +4313,10 @@ impl App {
                         {
                             Ok(()) => break Ok(()),
                             Err(error)
-                                if managed_sensory_delivery_error_is_retryable(&error)
-                                    && retry_started.elapsed()
-                                        < MANAGED_SENSORY_BACKPRESSURE_WINDOW =>
+                                if (managed_sensory_delivery_error_is_retryable(&error)
+                                    || (frame.ipc_ack.is_some()
+                                        && ipc_managed_sensory_startup_error_is_retryable(&error)))
+                                    && retry_started.elapsed() < backpressure_window =>
                             {
                                 let waiting = format!(
                                     "Waiting for the cluster to consume sensory input; retrying frame {}",
@@ -4204,6 +4359,9 @@ impl App {
                                     frame.spikes.len()
                                 );
                             }
+                            if let Some(ack) = frame.ipc_ack.take() {
+                                let _ = ack.send(Ok(()));
+                            }
                             if let Ok(mut status) = delivery_status.try_write() {
                                 *status = format!(
                                     "I/O bridge accepted audio/sensory frame {} for {}",
@@ -4227,12 +4385,16 @@ impl App {
                             // failure: their source sequence would otherwise
                             // conceal a gap. Require a fresh Start after the
                             // displayed error so the bridge gets a new session.
-                            uncertain_session = Some(frame.session_id.clone());
-                            let _ = sim_control.send(SimControl::SetDistributedInput {
-                                target: None,
-                                provider_sensory_count: None,
-                                managed_view_active: None,
-                            });
+                            if let Some(ack) = frame.ipc_ack.take() {
+                                let _ = ack.send(Err(error));
+                            } else {
+                                uncertain_session = Some(frame.session_id.clone());
+                                let _ = sim_control.send(SimControl::SetDistributedInput {
+                                    target: None,
+                                    provider_sensory_count: None,
+                                    managed_view_active: None,
+                                });
+                            }
                         }
                     }
                 }
@@ -4280,6 +4442,9 @@ impl App {
         let sim_t_ms_bits_thread = sim_t_ms_bits.clone();
         let sim_remote_only = remote_only;
         let sim_distributed_input_tx = distributed_input_tx.clone();
+        #[cfg(all(feature = "robot_io", unix))]
+        let sim_ipc_managed_network =
+            (distributed_node.is_some() && ipc_bound_early).then(|| brain_id.clone());
         let sim_throttle = sim_throttle_ms.clone();
         let sim_idle_sleep_ms = std::env::var("NM_SIM_IDLE_SLEEP_MS")
             .ok()
@@ -4584,6 +4749,12 @@ impl App {
                 let mut distributed_input_step: i64 = 0;
                 let mut distributed_input_session =
                     format!("{:016x}", rand::random::<u64>());
+                #[cfg(all(feature = "robot_io", unix))]
+                let ipc_input_session = format!("webots-{:016x}", rand::random::<u64>());
+                #[cfg(all(feature = "robot_io", unix))]
+                let mut ipc_input_sequence = 0u64;
+                #[cfg(all(feature = "robot_io", unix))]
+                let mut ipc_managed_input_failed = false;
                 loop {
                     // 1. Process all pending control messages
                     while let Ok(msg) = sim_rx.try_recv() {
@@ -4754,6 +4925,7 @@ impl App {
                             frame_sequence: distributed_input_step as u64,
                             step_index: distributed_input_step,
                             spikes,
+                            ipc_ack: None,
                         };
                         distributed_input_step = distributed_input_step.saturating_add(1);
                         if sim_distributed_input_tx.blocking_send(frame).is_err() {
@@ -4898,6 +5070,37 @@ impl App {
                                     }
                                     let encoded_nonzero_after =
                                         spk.iter().filter(|&&v| v != 0).count();
+                                    if let Some(network_id) = sim_ipc_managed_network.as_ref() {
+                                        if ipc_managed_input_failed {
+                                            // Do not acknowledge or advance a robot frame after
+                                            // its managed sensory session has failed. Webots may
+                                            // retry when this IPC owner is restarted.
+                                            continue;
+                                        }
+                                        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+                                        let frame = DistributedSensoryFrame {
+                                            network_id: network_id.clone(),
+                                            session_id: ipc_input_session.clone(),
+                                            frame_sequence: ipc_input_sequence,
+                                            step_index: ipc_input_sequence.min(i64::MAX as u64) as i64,
+                                            spikes: spk.clone(),
+                                            ipc_ack: Some(ack_tx),
+                                        };
+                                        let admitted = sim_distributed_input_tx
+                                            .blocking_send(frame)
+                                            .map_err(|error| error.to_string())
+                                            .and_then(|()| ack_rx.blocking_recv()
+                                                .map_err(|error| error.to_string())?);
+                                        if let Err(error) = admitted {
+                                            ipc_managed_input_failed = true;
+                                            nm_err!(
+                                                "[IPC managed input] brain={} frame={} rejected: {}; stopping Webots replies until restart",
+                                                network_id, ipc_input_sequence, error
+                                            );
+                                            continue;
+                                        }
+                                        ipc_input_sequence = ipc_input_sequence.saturating_add(1);
+                                    }
                                     if ipc_input_debug_interval > 0 {
                                         ipc_input_debug_counter =
                                             ipc_input_debug_counter.saturating_add(1);
@@ -5401,6 +5604,11 @@ impl App {
                                     snap.output_spike_frames.clear();
                                     snap.output_spike_frames
                                         .extend(ipc_output_spike_frames.iter().cloned());
+                                    snap.sensory_spike_frames = r.spk_hist_s.iter()
+                                        .take(snap.output_spike_frames.len().max(1))
+                                        .rev()
+                                        .map(|frame| frame.iter().copied().collect())
+                                        .collect();
                                     snap.num_sensory = r.net.num_sensory_neurons;
                                     snap.num_hidden_layers = r.net.num_hidden_layers;
                                     snap.num_output = r.net.num_output_neurons;
@@ -5554,6 +5762,11 @@ impl App {
                                         let output_spikes = snap.output_spikes.clone();
                                         snap.output_spike_frames.push(output_spikes);
                                     }
+                                    snap.sensory_spike_frames = r.spk_hist_s.iter()
+                                        .take(snap.output_spike_frames.len().max(1))
+                                        .rev()
+                                        .map(|frame| frame.iter().copied().collect())
+                                        .collect();
                                     snap.num_sensory = r.net.num_sensory_neurons;
                                     snap.num_hidden_layers = r.net.num_hidden_layers;
                                     snap.num_output = r.net.num_output_neurons;
@@ -5978,9 +6191,13 @@ impl App {
             cluster_activity_assignment_digest: None,
             cluster_activity_last_steps: HashMap::new(),
             cluster_activity_last_success: None,
+            cluster_activity_last_sensory_owner_step: None,
+            cluster_activity_last_output_owner_step: None,
             cluster_activity_last_active_count: 0,
             raster_cols: 240,
+            raster_inputs: std::collections::VecDeque::new(),
             raster_outputs: std::collections::VecDeque::new(),
+            last_input_activity_rendered_step: None,
             last_activity_rendered_step: None,
             camera_zoom: 1.0,
             camera_yaw_degrees: 0.0,
@@ -6471,7 +6688,12 @@ impl App {
                             networks = previous.networks.clone();
                         }
                     }
-                    let first_network = networks.keys().min().cloned();
+                    let first_network = if let Some(preferred) = self.requested_startup_network_id()
+                    {
+                        networks.contains_key(&preferred).then_some(preferred)
+                    } else {
+                        networks.keys().min().cloned()
+                    };
                     let stage = self
                         .remote_statuses
                         .get(&addr)
@@ -7860,6 +8082,8 @@ impl App {
         self.output_activity = vec![0.0; n_o];
         self.previous_hidden_spikes = (0..n_l).map(|_| Vec::new()).collect();
         self.last_sensory_spikes = vec![0; n_s];
+        self.raster_inputs.clear();
+        self.last_input_activity_rendered_step = None;
         self.raster_outputs.clear();
         self.last_activity_rendered_step = None;
     }
@@ -8102,7 +8326,17 @@ impl App {
             }
         }
         if changed {
+            // Layout is presentation state. Keep the selected brain's raster
+            // history and cursors when rebuilding positions for a new layout.
+            let raster_inputs = std::mem::take(&mut self.raster_inputs);
+            let last_input_step = self.last_input_activity_rendered_step;
+            let raster_outputs = std::mem::take(&mut self.raster_outputs);
+            let last_output_step = self.last_activity_rendered_step;
             self.refresh_ui_buffers();
+            self.raster_inputs = raster_inputs;
+            self.last_input_activity_rendered_step = last_input_step;
+            self.raster_outputs = raster_outputs;
+            self.last_activity_rendered_step = last_output_step;
         }
     }
 
@@ -8446,21 +8680,59 @@ impl App {
             .unwrap_or(true)
     }
 
+    fn requested_startup_network_id(&self) -> Option<String> {
+        std::env::var("NM_UI_PREFERRED_NETWORK_ID")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                let brain_id = self.brain_id.trim();
+                (!brain_id.is_empty() && brain_id != "orchestrator" && brain_id != "default")
+                    .then(|| brain_id.to_owned())
+            })
+    }
+
     fn preferred_cluster_network_id(&self) -> Option<String> {
-        if let ViewSource::ClusterGlobal(id) = &self.view_source {
-            if self.dist_network_registry.contains_key(id) {
-                return Some(id.clone());
+        let current = match &self.view_source {
+            ViewSource::ClusterGlobal(id) => Some(id.as_str()),
+            _ => None,
+        };
+        let requested = self.requested_startup_network_id();
+        Self::preferred_cluster_network_id_for_inventory(
+            &self.dist_network_registry,
+            current,
+            requested.as_deref(),
+        )
+    }
+
+    fn preferred_cluster_network_id_for_inventory(
+        registry: &HashMap<String, NetworkStatus>,
+        current: Option<&str>,
+        requested: Option<&str>,
+    ) -> Option<String> {
+        if let Some(current) = current {
+            if registry.contains_key(current) {
+                return Some(current.to_owned());
             }
         }
 
-        let mut network_ids: Vec<String> = self.dist_network_registry.keys().cloned().collect();
+        if let Some(preferred) = requested {
+            // A Webots launch names its brain before workers finish joining.
+            // Wait for that inventory entry; selecting a larger pre-existing
+            // network here would pin both rasters to the wrong brain.
+            return registry
+                .contains_key(preferred)
+                .then(|| preferred.to_owned());
+        }
+
+        let mut network_ids: Vec<String> = registry.keys().cloned().collect();
         network_ids.sort();
 
         let preferred = |require_playing: bool, require_distribution: bool| {
             network_ids
                 .iter()
                 .filter(|id| {
-                    self.dist_network_registry
+                    registry
                         .get(*id)
                         .map(|status| {
                             (!require_playing || status.playing)
@@ -8469,7 +8741,7 @@ impl App {
                         .unwrap_or(false)
                 })
                 .max_by_key(|id| {
-                    self.dist_network_registry
+                    registry
                         .get(*id)
                         .map(|status| status.total_neurons)
                         .unwrap_or(0)
@@ -9561,13 +9833,22 @@ impl App {
     fn poll_cluster_display_activity(&mut self, network_id: &str) {
         let context = self.cluster_display_activity_context(network_id);
         let assignment_digest = context.as_ref().map(|(digest, _)| *digest);
+        let expected_targets = context.as_ref().map_or(0, |(_, targets)| targets.len());
         if self.cluster_activity_network_id.as_deref() != Some(network_id)
             || self.cluster_activity_assignment_digest != assignment_digest
         {
+            if self.cluster_activity_assignment_digest != assignment_digest {
+                self.raster_inputs.clear();
+                self.last_input_activity_rendered_step = None;
+                self.raster_outputs.clear();
+                self.last_activity_rendered_step = None;
+            }
             self.cluster_activity_network_id = Some(network_id.to_owned());
             self.cluster_activity_assignment_digest = assignment_digest;
             self.cluster_activity_last_steps.clear();
             self.cluster_activity_last_success = None;
+            self.cluster_activity_last_sensory_owner_step = None;
+            self.cluster_activity_last_output_owner_step = None;
             self.cluster_activity_last_active_count = 0;
             self.cluster_activity_poll_next = Instant::now();
         }
@@ -9579,6 +9860,11 @@ impl App {
             {
                 continue;
             }
+            // A timed-out optional display RPC cancels an HTTP/2 stream. Slow
+            // the next fan-out if any worker missed this poll so visualisation
+            // cannot create a rapid reset loop on a busy sensory owner.
+            self.cluster_activity_poll_next = Instant::now()
+                + cluster_activity_poll_interval(expected_targets, poll.samples.len());
             let mut accepted_any = false;
             let mut active_count = 0usize;
             let mut accepted_samples = Vec::new();
@@ -9590,8 +9876,12 @@ impl App {
                     if sample.sim_step < *previous_step {
                         // A same-assignment reset starts a new display trace.
                         self.cluster_activity_last_steps.clear();
+                        self.raster_inputs.clear();
+                        self.last_input_activity_rendered_step = None;
                         self.raster_outputs.clear();
                         self.last_activity_rendered_step = None;
+                        self.cluster_activity_last_sensory_owner_step = None;
+                        self.cluster_activity_last_output_owner_step = None;
                         for value in &mut self.sensory_activity {
                             *value = 0.0;
                         }
@@ -9615,6 +9905,39 @@ impl App {
                     &mut self.output_activity,
                     sample,
                 );
+                let sampled_at = Instant::now();
+                if sample.sensory_owner {
+                    if self.cluster_activity_last_sensory_owner_step.is_none() {
+                        nm_log!(
+                            "[ui.visualisation] input owner ready (network={}, node={}, step={}, history_spikes={})",
+                            network_id,
+                            sample.node_id,
+                            sample.sim_step,
+                            sample
+                                .sensory_history
+                                .iter()
+                                .map(|(_, indices)| indices.len())
+                                .sum::<usize>(),
+                        );
+                    }
+                    self.cluster_activity_last_sensory_owner_step = Some(sampled_at);
+                }
+                if sample.output_owner {
+                    if self.cluster_activity_last_output_owner_step.is_none() {
+                        nm_log!(
+                            "[ui.visualisation] output owner ready (network={}, node={}, step={}, history_spikes={})",
+                            network_id,
+                            sample.node_id,
+                            sample.sim_step,
+                            sample
+                                .output_history
+                                .iter()
+                                .map(|(_, indices)| indices.len())
+                                .sum::<usize>(),
+                        );
+                    }
+                    self.cluster_activity_last_output_owner_step = Some(sampled_at);
+                }
                 accepted_samples.push(sample);
                 accepted_any = true;
             }
@@ -9629,12 +9952,19 @@ impl App {
                 // this view. Do not rewind the shared raster cursor for that
                 // stale read; actual simulation resets are handled above.
                 let last_rendered_step = self.last_activity_rendered_step;
-                let raster_frames =
-                    cluster_activity_output_raster_frames(accepted_samples, output_count)
-                        .into_iter()
-                        .filter(|(step, _)| last_rendered_step.is_none_or(|last| *step > last))
-                        .collect();
+                let raster_frames = cluster_activity_output_raster_frames(
+                    accepted_samples.iter().copied(),
+                    output_count,
+                )
+                .into_iter()
+                .filter(|(step, _)| last_rendered_step.is_none_or(|last| *step > last))
+                .collect();
                 self.append_output_raster_step_frames(raster_frames);
+                let input_frames = cluster_activity_sensory_raster_frames(
+                    accepted_samples,
+                    self.sensory_count.max(self.local_net.num_sensory_neurons),
+                );
+                self.append_input_raster_step_frames(input_frames);
                 let first_sample = self.cluster_activity_last_success.is_none();
                 self.cluster_activity_last_success = Some(Instant::now());
                 self.cluster_activity_last_active_count = active_count;
@@ -9805,6 +10135,33 @@ impl App {
         }
     }
 
+    fn append_input_raster_step_frames(&mut self, frames: Vec<(u64, Vec<u32>)>) -> usize {
+        if let (Some(last), Some((latest, _))) =
+            (self.last_input_activity_rendered_step, frames.last())
+        {
+            if *latest < last && last - *latest > (self.raster_cols * 4) as u64 {
+                self.raster_inputs.clear();
+                self.last_input_activity_rendered_step = None;
+            }
+        }
+        let mut appended = 0;
+        for (step, indices) in frames {
+            if self
+                .last_input_activity_rendered_step
+                .is_some_and(|last| step <= last)
+            {
+                continue;
+            }
+            self.raster_inputs.push_back(indices);
+            if self.raster_inputs.len() > self.raster_cols {
+                self.raster_inputs.pop_front();
+            }
+            self.last_input_activity_rendered_step = Some(step);
+            appended += 1;
+        }
+        appended
+    }
+
     fn append_output_raster_step_frames(&mut self, frames: Vec<(u64, Vec<i8>)>) -> usize {
         if frames.is_empty() {
             return 0;
@@ -9837,7 +10194,6 @@ impl App {
             sensory_spikes,
             hidden_spikes,
             output_spikes,
-            output_history_frames,
             x_pre_in,
             v_h,
             v_o,
@@ -9862,6 +10218,7 @@ impl App {
             let net_s = snap.net.num_sensory_neurons.max(1);
             let net_h = snap.net.num_hidden_layers.max(1);
             let net_o = snap.net.num_output_neurons.max(1);
+            let sim_step = snap.t as u64;
             let sensory_spikes = runtime
                 .spk_hist_s
                 .first()
@@ -9869,21 +10226,6 @@ impl App {
                 .unwrap_or_else(|| vec![0; net_s]);
             let hidden_spikes = runtime.last_spk_h.clone();
             let output_spikes = runtime.last_spk_o.clone();
-            let sim_step = snap.t as u64;
-            let mut output_history_frames: Vec<(u64, Vec<i8>)> = runtime
-                .spk_hist_o
-                .iter()
-                .enumerate()
-                .filter_map(|(offset, frame)| {
-                    sim_step
-                        .checked_sub(offset as u64)
-                        .map(|step| (step, frame.clone()))
-                })
-                .collect();
-            output_history_frames.reverse();
-            if output_history_frames.is_empty() {
-                output_history_frames.push((sim_step, output_spikes.clone()));
-            }
             let x_pre_in: Vec<f32> = runtime.x_pre_in.iter().map(|&v| v as f32).collect();
             let v_h: Vec<Vec<f32>> = runtime
                 .v_h
@@ -9903,7 +10245,6 @@ impl App {
                 sensory_spikes,
                 hidden_spikes,
                 output_spikes,
-                output_history_frames,
                 x_pre_in,
                 v_h,
                 v_o,
@@ -9978,7 +10319,58 @@ impl App {
                 self.output_activity[k] = 1.0;
             }
         }
-        self.append_output_raster_step_frames(output_history_frames);
+        // Full topology snapshots carry only the Runner's biological delay
+        // ring, often two steps. With assigned workers, they must not advance
+        // the raster cursor past intermittent spikes in the worker display
+        // history. A single-process cluster without an assigned worker still
+        // needs its local snapshot as a bounded raster fallback.
+        let snapshot_only = self
+            .dist_network_registry
+            .get(network_id)
+            .is_none_or(|status| status.distribution.is_empty());
+        if snapshot_only {
+            let fallback_frames = self.cluster_snapshot_cache.as_ref().and_then(|snapshot| {
+                let runtime = snapshot.runtime_state.as_ref()?;
+                let input_frames = runtime
+                    .spk_hist_s
+                    .iter()
+                    .take(self.raster_cols)
+                    .enumerate()
+                    .filter_map(|(offset, frame)| {
+                        sim_step.checked_sub(offset as u64).map(|step| {
+                            (
+                                step,
+                                frame
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(index, &spike)| {
+                                        (spike != 0).then_some(index as u32)
+                                    })
+                                    .collect::<Vec<_>>(),
+                            )
+                        })
+                    })
+                    .rev()
+                    .collect::<Vec<_>>();
+                let output_frames = runtime
+                    .spk_hist_o
+                    .iter()
+                    .take(self.raster_cols)
+                    .enumerate()
+                    .filter_map(|(offset, frame)| {
+                        sim_step
+                            .checked_sub(offset as u64)
+                            .map(|step| (step, frame.clone()))
+                    })
+                    .rev()
+                    .collect::<Vec<_>>();
+                Some((input_frames, output_frames))
+            });
+            if let Some((input_frames, output_frames)) = fallback_frames {
+                self.append_input_raster_step_frames(input_frames);
+                self.append_output_raster_step_frames(output_frames);
+            }
+        }
         let mut probe_snapshot = UiSnapshot::default();
         probe_snapshot.sensory_spikes = sensory_spikes;
         probe_snapshot.hidden_spikes = hidden_spikes;
@@ -10929,6 +11321,40 @@ mod topology_presentation_tests {
     }
 
     #[test]
+    fn launched_brain_wins_initial_cluster_view_over_larger_existing_network() {
+        let mut existing = NetworkStatus::default();
+        existing.total_neurons = 1_650;
+        existing.playing = true;
+        let mut launched = NetworkStatus::default();
+        launched.total_neurons = 398;
+        launched.playing = true;
+        let mut registry = HashMap::from([
+            ("tenant-aarnn".to_owned(), existing),
+            ("celegans_01".to_owned(), launched),
+        ]);
+
+        assert_eq!(
+            App::preferred_cluster_network_id_for_inventory(&registry, None, Some("celegans_01")),
+            Some("celegans_01".to_owned())
+        );
+        registry.remove("celegans_01");
+        assert_eq!(
+            App::preferred_cluster_network_id_for_inventory(&registry, None, Some("celegans_01")),
+            None,
+            "wait for the launched brain instead of showing an unrelated one"
+        );
+        assert_eq!(
+            App::preferred_cluster_network_id_for_inventory(
+                &registry,
+                Some("tenant-aarnn"),
+                Some("celegans_01")
+            ),
+            Some("tenant-aarnn".to_owned()),
+            "an explicit current view is kept"
+        );
+    }
+
+    #[test]
     fn cluster_dashboard_layer_count_excludes_output_boundary() {
         assert_eq!(cluster_hidden_layer_count(Some(6), 6, 7), 6);
         assert_eq!(cluster_hidden_layer_count(None, 6, 7), 6);
@@ -11194,7 +11620,10 @@ mod topology_presentation_tests {
             node_id: "node-2".to_owned(),
             owned_layers: vec![1],
             sim_step: 17,
+            sensory_owner: true,
+            output_owner: true,
             sensory_indices: vec![1, 99],
+            sensory_history: vec![(17, vec![1, 99])],
             hidden_indices: vec![vec![0], vec![2, 99]],
             output_indices: vec![0],
             output_history: vec![(17, vec![0])],
@@ -11212,15 +11641,38 @@ mod topology_presentation_tests {
         assert_eq!(hidden[1], vec![0.0, 0.0, 1.0]);
         assert_eq!(hidden[2], vec![0.0, 0.0, 0.0]);
         assert_eq!(output, vec![1.0, 0.0]);
+
+        let mut non_owner = sample;
+        non_owner.sensory_owner = false;
+        non_owner.output_owner = false;
+        sensory.fill(0.0);
+        output.fill(0.0);
+        for layer in &mut hidden {
+            layer.fill(0.0);
+        }
+        assert_eq!(
+            merge_cluster_display_activity_sample(
+                &mut sensory,
+                &mut hidden,
+                &mut output,
+                &non_owner,
+            ),
+            1,
+        );
+        assert_eq!(sensory, vec![0.0, 0.0]);
+        assert_eq!(output, vec![0.0, 0.0]);
     }
 
     #[test]
-    fn worker_output_histories_advance_raster_and_merge_shared_steps() {
+    fn worker_rasters_accept_only_the_respective_io_owners() {
         let first_owner = ClusterDisplayActivitySample {
             node_id: "node-1".to_owned(),
             owned_layers: vec![0],
             sim_step: 12,
+            sensory_owner: true,
+            output_owner: true,
             sensory_indices: Vec::new(),
+            sensory_history: vec![(10, vec![0]), (11, Vec::new()), (12, vec![2])],
             hidden_indices: Vec::new(),
             output_indices: vec![2],
             output_history: vec![(10, vec![0]), (11, Vec::new()), (12, vec![2])],
@@ -11229,7 +11681,10 @@ mod topology_presentation_tests {
             node_id: "node-2".to_owned(),
             owned_layers: vec![1],
             sim_step: 12,
+            sensory_owner: false,
+            output_owner: false,
             sensory_indices: Vec::new(),
+            sensory_history: Vec::new(),
             hidden_indices: Vec::new(),
             output_indices: vec![3],
             output_history: vec![(11, vec![1]), (12, vec![3])],
@@ -11241,10 +11696,15 @@ mod topology_presentation_tests {
             frames,
             vec![
                 (10, vec![1, 0, 0, 0]),
-                (11, vec![0, 1, 0, 0]),
-                (12, vec![0, 0, 1, 1]),
+                (11, vec![0, 0, 0, 0]),
+                (12, vec![0, 0, 1, 0]),
             ],
-            "quiet steps still add raster columns, while worker outputs at the same step merge"
+            "quiet steps remain columns, but a non-owner cannot add output spikes"
+        );
+        assert_eq!(
+            cluster_activity_sensory_raster_frames([&first_owner, &second_owner], 3),
+            vec![(10, vec![0]), (11, vec![]), (12, vec![2])],
+            "only sensory-owner history may populate the input raster"
         );
     }
 
@@ -11258,6 +11718,18 @@ mod topology_presentation_tests {
         assert!(cluster_activity_poll_is_current(&poll, "brain-a", 42));
         assert!(!cluster_activity_poll_is_current(&poll, "brain-b", 42));
         assert!(!cluster_activity_poll_is_current(&poll, "brain-a", 43));
+        assert_eq!(
+            cluster_activity_poll_interval(2, 2),
+            CLUSTER_DISPLAY_ACTIVITY_POLL_INTERVAL
+        );
+        assert_eq!(
+            cluster_activity_poll_interval(2, 1),
+            CLUSTER_DISPLAY_ACTIVITY_RETRY_INTERVAL
+        );
+        assert_eq!(
+            cluster_activity_poll_interval(2, 0),
+            CLUSTER_DISPLAY_ACTIVITY_RETRY_INTERVAL
+        );
     }
 
     #[test]
@@ -11808,6 +12280,7 @@ const SCOPE_SPIKE_RELEASE_STEP: f32 = 0.25;
 #[derive(Clone, Default)]
 struct UiSnapshot {
     sensory_spikes: Vec<i8>,
+    sensory_spike_frames: Vec<Vec<i8>>,
     hidden_spikes: Vec<Vec<i8>>,
     output_spikes: Vec<i8>,
     output_spike_frames: Vec<Vec<i8>>,
@@ -12661,7 +13134,11 @@ fn merge_cluster_display_activity_sample(
     output: &mut [f32],
     sample: &ClusterDisplayActivitySample,
 ) -> usize {
-    let mut updated = merge_spike_indices_into_activity(sensory, &sample.sensory_indices);
+    let mut updated = if sample.sensory_owner {
+        merge_spike_indices_into_activity(sensory, &sample.sensory_indices)
+    } else {
+        0
+    };
     let response_covers_global_layers = sample
         .owned_layers
         .iter()
@@ -12682,14 +13159,15 @@ fn merge_cluster_display_activity_sample(
         };
         updated += merge_spike_indices_into_activity(display_layer, spikes);
     }
-    updated += merge_spike_indices_into_activity(output, &sample.output_indices);
+    if sample.output_owner {
+        updated += merge_spike_indices_into_activity(output, &sample.output_indices);
+    }
     updated
 }
 
-/// Reconstruct display-only output raster columns from fresh worker activity
-/// histories. Multiple owners are merged by simulation step so the dashboard
-/// advances when aggregate snapshots are delayed, without duplicating a
-/// column for every worker.
+/// Reconstruct display-only output raster columns from the assigned output
+/// owner's history. A non-owner cannot present a compatibility Runner's
+/// output as authoritative activity.
 #[cfg(feature = "ui")]
 fn cluster_activity_output_raster_frames<'a>(
     samples: impl IntoIterator<Item = &'a ClusterDisplayActivitySample>,
@@ -12698,6 +13176,9 @@ fn cluster_activity_output_raster_frames<'a>(
     let output_count = output_count.max(1);
     let mut frames_by_step = BTreeMap::<u64, Vec<i8>>::new();
     for sample in samples {
+        if !sample.output_owner {
+            continue;
+        }
         for (step, indices) in &sample.output_history {
             let frame = frames_by_step
                 .entry(*step)
@@ -12708,6 +13189,36 @@ fn cluster_activity_output_raster_frames<'a>(
                 }
             }
         }
+    }
+    frames_by_step.into_iter().collect()
+}
+
+/// Preserve the sensory-target owner's sparse frames, including quiet steps.
+/// A non-owner reports no history, so it cannot make stale sensory activity
+/// look like freshly admitted input.
+#[cfg(feature = "ui")]
+fn cluster_activity_sensory_raster_frames<'a>(
+    samples: impl IntoIterator<Item = &'a ClusterDisplayActivitySample>,
+    sensory_count: usize,
+) -> Vec<(u64, Vec<u32>)> {
+    let mut frames_by_step = BTreeMap::<u64, Vec<u32>>::new();
+    for sample in samples {
+        if !sample.sensory_owner {
+            continue;
+        }
+        for (step, indices) in &sample.sensory_history {
+            let frame = frames_by_step.entry(*step).or_default();
+            frame.extend(
+                indices
+                    .iter()
+                    .copied()
+                    .filter(|&index| (index as usize) < sensory_count),
+            );
+        }
+    }
+    for indices in frames_by_step.values_mut() {
+        indices.sort_unstable();
+        indices.dedup();
     }
     frames_by_step.into_iter().collect()
 }
@@ -15043,7 +15554,7 @@ impl eframe::App for App {
                             }
                             let now = std::time::Instant::now();
                             let stale = self.cluster_snapshot_last_fetch.map_or(true, |t| {
-                                now.duration_since(t) > std::time::Duration::from_secs(2)
+                                now.duration_since(t) > CLUSTER_TOPOLOGY_SNAPSHOT_REFRESH_INTERVAL
                             });
                             let needs_refresh = self.cluster_snapshot_network_id.as_deref()
                                 != Some(net_id)
@@ -15220,7 +15731,7 @@ impl eframe::App for App {
                     if let Some((local_node_id, is_orchestrator)) = local_identity {
                         let now = std::time::Instant::now();
                         let stale = self.cluster_snapshot_last_fetch.map_or(true, |t| {
-                            now.duration_since(t) > std::time::Duration::from_secs(2)
+                            now.duration_since(t) > CLUSTER_TOPOLOGY_SNAPSHOT_REFRESH_INTERVAL
                         });
                         let needs_refresh = self.cluster_snapshot_network_id.as_deref()
                             != Some(net_id)
@@ -16595,6 +17106,32 @@ impl eframe::App for App {
                     .map(|(idx, frame)| (first_step.saturating_add(idx as u64), frame))
                     .collect::<Vec<_>>();
                 self.append_output_raster_step_frames(stepped_frames);
+                let sensory_frames = if snap.sensory_spike_frames.is_empty() {
+                    vec![snap.sensory_spikes.clone()]
+                } else {
+                    snap.sensory_spike_frames.clone()
+                };
+                let first_sensory_step = snap
+                    .sim_step
+                    .saturating_sub(sensory_frames.len().saturating_sub(1) as u64);
+                self.append_input_raster_step_frames(
+                    sensory_frames
+                        .into_iter()
+                        .enumerate()
+                        .map(|(offset, frame)| {
+                            (
+                                first_sensory_step.saturating_add(offset as u64),
+                                frame
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(index, &spike)| {
+                                        (spike != 0).then_some(index as u32)
+                                    })
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                );
                 // Connection statistics (refreshed every 100 steps in sim thread).
                 if snap.total_conn > 0 || snap.longterm_conn > 0 {
                     self.longterm_conn = snap.longterm_conn;
@@ -18343,6 +18880,8 @@ impl eframe::App for App {
                     let _ = self.sim_tx.send(SimControl::ResizeSensory(self.sensory_count));
                     self.status = format!("Sensory resized to {}", self.sensory_count);
                     self.smoothed_equalizer_values.clear();
+                    self.raster_inputs.clear();
+                    self.last_input_activity_rendered_step = None;
                 }
                 let output_resize = ui
                     .add_enabled(
@@ -20500,15 +21039,16 @@ impl eframe::App for App {
                         let label = crate::visualization::VisualizationStage::from_number(active_stage)
                             .map_or("Visual detail", crate::visualization::VisualizationStage::label);
                         ui.label(format!(
-                            "{} · stage {} · {}{}",
+                            "{} · requested {} · showing stage {} · {}{}",
                             if self.visualization_auto { "Auto" } else { "Manual" },
+                            requested_stage,
                             active_stage,
                             label,
-                            if active_stage < requested_stage { format!(" · available through {available_stage}") } else { String::new() },
+                            if available_stage < requested_stage { format!(" · available through {available_stage}") } else { String::new() },
                         ));
                         if active_stage < requested_stage {
-                            if let ViewSource::ClusterGlobal(network_id) = &self.view_source {
-                                let reason = if let Some(error) =
+                            let cluster_reason = if let ViewSource::ClusterGlobal(network_id) = &self.view_source {
+                                if let Some(error) =
                                     self.cluster_display_projection_error.as_deref()
                                 {
                                     Some(format!("Anatomical projection unavailable: {error}"))
@@ -20529,14 +21069,23 @@ impl eframe::App for App {
                                     })
                                 {
                                     Some("The cluster snapshot has not supplied anatomical coordinates.".to_owned())
-                                } else if requested_stage >= 7 && available_stage <= 6 {
-                                    Some("Physical neurite detail requires measured radii and a verified clear 3D volume.".to_owned())
                                 } else {
                                     None
-                                };
-                                if let Some(reason) = reason {
-                                    ui.small(reason);
                                 }
+                            } else {
+                                None
+                            };
+                            let reason = cluster_reason.or_else(|| {
+                                if requested_stage >= 7 && available_stage <= 6 {
+                                    Some("Physical detail requires published soma and neurite radii plus verified 3D clearance; this view does not meet that requirement.".to_owned())
+                                } else if requested_stage >= 9 && available_stage == 8 {
+                                    Some("Contact detail requires verified contact coverage, including a confirmed empty contact set.".to_owned())
+                                } else {
+                                    None
+                                }
+                            });
+                            if let Some(reason) = reason {
+                                ui.small(reason);
                             }
                         }
                         let mut changed = false;
@@ -22975,7 +23524,7 @@ impl eframe::App for App {
             }
 
             #[cfg(feature = "growth3d")]
-            if self.show_region_labels {
+            if self.show_region_labels && !contract_anatomical_geometry {
                 for (name, label_pos, target_pos) in &self.region_label_positions {
                     // Draw a thin indicator line from smoothed label to actual target segment
                     let dist = label_pos.distance(*target_pos);
@@ -23008,6 +23557,7 @@ impl eframe::App for App {
             let sensory_activity = &self.sensory_activity;
             let hidden_activity = &self.hidden_activity;
             let output_activity = &self.output_activity;
+            let raster_inputs = &self.raster_inputs;
             let raster_outputs = &self.raster_outputs;
             let previous_hidden_spikes = &self.previous_hidden_spikes;
             let last_sensory_spikes = &self.last_sensory_spikes;
@@ -23085,7 +23635,7 @@ impl eframe::App for App {
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             let _hidden_layers_len = hidden_positions.len();
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
-            if growth_enabled && !use_aarnn_layout {
+            if growth_enabled && use_aarnn_layout && anatomical_contract.is_none() {
             let skull_opt = if let Some(active_runner) = active_runner_opt {
                 if active_runner.net.use_morphology {
                     active_runner.morph.skull_membrane
@@ -24981,6 +25531,17 @@ impl eframe::App for App {
             painter.rect_filled(rrect, 6.0, egui::Color32::from_gray(20));
             painter.rect_stroke(rrect, 6.0, egui::Stroke { width: 1.0, color: egui::Color32::from_gray(80) }, egui::StrokeKind::Outside);
             painter.text(rrect.left_top() + egui::vec2(8.0, 4.0), egui::Align2::LEFT_TOP, "Output raster", egui::FontId::proportional(12.0), egui::Color32::WHITE);
+            let cluster_view = matches!(&view_source, ViewSource::ClusterGlobal(_));
+            let output_owner_unavailable = cluster_view
+                && self.cluster_activity_last_output_owner_step.is_none();
+            let output_activity_stale = cluster_view
+                && self.cluster_activity_last_output_owner_step
+                    .is_none_or(|sampled_at| sampled_at.elapsed() > Duration::from_secs(2));
+            let sensory_owner_unavailable = cluster_view
+                && self.cluster_activity_last_sensory_owner_step.is_none();
+            let input_activity_stale = cluster_view
+                && self.cluster_activity_last_sensory_owner_step
+                    .is_none_or(|sampled_at| sampled_at.elapsed() > Duration::from_secs(2));
             // Draw cells using pixel-space binning so spikes remain visible even
             // when outputs/columns exceed available pixels.
             let raster_rows = raster_outputs
@@ -25036,7 +25597,15 @@ impl eframe::App for App {
                     painter.rect_filled(rr, 0.5, spike_col);
                 }
             }
-            if any_raster_spike {
+            if output_activity_stale {
+                painter.text(
+                    rrect.right_top() + egui::vec2(-8.0, 5.0),
+                    egui::Align2::RIGHT_TOP,
+                    if output_owner_unavailable { "output owner unavailable" } else { "no new output steps" },
+                    egui::FontId::proportional(10.0),
+                    egui::Color32::YELLOW,
+                );
+            } else if any_raster_spike {
                 painter.text(
                     rrect.right_top() + egui::vec2(-8.0, 5.0),
                     egui::Align2::RIGHT_TOP,
@@ -25050,10 +25619,72 @@ impl eframe::App for App {
                 painter.text(
                     center,
                     egui::Align2::CENTER_CENTER,
-                    "No output spikes in current view",
+                    if output_owner_unavailable { "Output owner unavailable" }
+                    else if output_activity_stale { "No recent output steps" }
+                    else { "No output spikes in current view" },
                     egui::FontId::proportional(10.0),
                     egui::Color32::from_gray(130),
                 );
+            }
+
+            let input_rect = egui::Rect::from_min_size(
+                egui::pos2(rrect.left(), rrect.top() - raster_h - margin),
+                egui::vec2(raster_w, raster_h),
+            );
+            painter.rect_filled(input_rect, 6.0, egui::Color32::from_gray(20));
+            painter.rect_stroke(input_rect, 6.0, egui::Stroke {
+                width: 1.0, color: egui::Color32::from_gray(80)
+            }, egui::StrokeKind::Outside);
+            painter.text(input_rect.left_top() + egui::vec2(8.0, 4.0),
+                egui::Align2::LEFT_TOP, "Input raster", egui::FontId::proportional(12.0),
+                egui::Color32::WHITE);
+            let input_rows = self.sensory_count.max(1);
+            let input_left = input_rect.left() + 8.0;
+            let input_top = input_rect.top() + 22.0;
+            let input_w = (input_rect.width() - 16.0).max(1.0);
+            let input_h = (input_rect.height() - 30.0).max(1.0);
+            let input_cols = input_w.floor().max(1.0) as usize;
+            let input_row_bins = input_h.floor().max(1.0) as usize;
+            let input_visible_cols = raster_inputs.len().max(1);
+            let mut input_occupied = vec![false; input_cols.saturating_mul(input_row_bins)];
+            let mut input_spike_count = 0usize;
+            for (column, indices) in raster_inputs.iter().enumerate() {
+                let bx = (column.saturating_mul(input_cols) / input_visible_cols).min(input_cols - 1);
+                for &index in indices {
+                    let index = index as usize;
+                    if index >= input_rows { continue; }
+                    input_spike_count = input_spike_count.saturating_add(1);
+                    let by = ((input_rows - index - 1).saturating_mul(input_row_bins) / input_rows)
+                        .min(input_row_bins - 1);
+                    input_occupied[by.saturating_mul(input_cols) + bx] = true;
+                }
+            }
+            for by in 0..input_row_bins {
+                for bx in 0..input_cols {
+                    if !input_occupied[by.saturating_mul(input_cols) + bx] { continue; }
+                    painter.rect_filled(egui::Rect::from_min_size(
+                        egui::pos2(input_left + bx as f32 * input_w / input_cols as f32,
+                                   input_top + by as f32 * input_h / input_row_bins as f32),
+                        egui::vec2((input_w / input_cols as f32 * 0.95).max(2.0),
+                                   (input_h / input_row_bins as f32 * 0.95).max(2.0))),
+                        0.5, egui::Color32::from_rgb(113, 224, 177));
+                }
+            }
+            if input_activity_stale {
+                painter.text(input_rect.right_top() + egui::vec2(-8.0, 5.0),
+                    egui::Align2::RIGHT_TOP,
+                    if sensory_owner_unavailable { "input owner unavailable" } else { "no new input steps" },
+                    egui::FontId::proportional(10.0), egui::Color32::YELLOW);
+            } else if input_spike_count > 0 {
+                painter.text(input_rect.right_top() + egui::vec2(-8.0, 5.0),
+                    egui::Align2::RIGHT_TOP, format!("spikes {}", input_spike_count),
+                    egui::FontId::proportional(10.0), egui::Color32::from_gray(170));
+            } else {
+                painter.text(input_rect.center(), egui::Align2::CENTER_CENTER,
+                    if sensory_owner_unavailable { "Input owner unavailable" }
+                    else if input_activity_stale { "No recent input steps" }
+                    else { "No input spikes in current view" }, egui::FontId::proportional(10.0),
+                    egui::Color32::from_gray(130));
             }
 
             // Oscilloscope window centered at bottom (multi-channel)
@@ -25841,10 +26472,11 @@ impl eframe::App for App {
 #[cfg(all(test, feature = "ui"))]
 mod sensory_input_route_tests {
     use super::{
-        distributed_input_provider_width, managed_input_inactive_message,
-        managed_input_waits_without_local_simulation, managed_sensory_delivery_error_is_retryable,
-        resolve_audio_provider_sensory_count, resolve_distributed_input_route_target,
-        resolve_managed_playing_state, resolve_view_input_sensory_count,
+        distributed_input_provider_width, ipc_managed_sensory_startup_error_is_retryable,
+        managed_input_inactive_message, managed_input_waits_without_local_simulation,
+        managed_sensory_delivery_error_is_retryable, resolve_audio_provider_sensory_count,
+        resolve_distributed_input_route_target, resolve_managed_playing_state,
+        resolve_view_input_sensory_count,
     };
 
     #[test]
@@ -26090,6 +26722,19 @@ mod sensory_input_route_tests {
         ));
         assert!(!managed_sensory_delivery_error_is_retryable(
             "managed network is paused"
+        ));
+    }
+
+    #[test]
+    fn webots_keeps_the_first_sensory_frame_until_placement_and_start() {
+        assert!(ipc_managed_sensory_startup_error_is_retryable(
+            "network celegans_01 has no published sensory I/O bridge"
+        ));
+        assert!(ipc_managed_sensory_startup_error_is_retryable(
+            "managed network is paused"
+        ));
+        assert!(!ipc_managed_sensory_startup_error_is_retryable(
+            "external sensory width 25 does not match network width 24"
         ));
     }
 }

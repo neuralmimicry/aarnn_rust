@@ -6,11 +6,12 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/project
 EXTERNPROTO "../protos/CelegansRobot.proto"
 
 WorldInfo {
-  # Slightly larger time step to keep Webots responsive with articulated
-  # multi-robot scenes and clustered controller traffic.
+  # Gram-scale fly bodies can tunnel through the floor after landing at 32 ms.
+  # Use a finer collision step whenever a fly is present; other profiles keep
+  # the less expensive 32 ms step.
   basicTimeStep 32
-  # Gravity reduced for zebrafish-only aquarium worlds (buoyancy approximation).
-  gravity 9.8
+  # Fish immersion in the named tank Fluid supplies buoyancy under physical gravity.
+  gravity 9.81
   contactProperties [
     ContactProperties {
       material1 "default"
@@ -177,6 +178,467 @@ Solid { name "nm_agar_optic_flow_panel_14" translation 1.579500 1.982475 0.13365
 Solid { name "nm_agar_optic_flow_panel_15" translation 1.822500 1.982475 0.133650 rotation 0 0 1 0.000000 children [ Transform { scale 1 1 1 children [ Shape { appearance PBRAppearance { baseColor 0.87 0.86 0.7 roughness 0.65 metalness 0  } geometry Box { size 0.121500 0.024300 0.157950 } } ] } ]  }
 Solid { name "nm_agar_light_beacon" translation 1.478250 1.478250 0.405000 rotation 0 0 1 0.000000 children [ Transform { scale 0.151875 0.151875 0.151875 children [ Shape { appearance PBRAppearance { baseColor 0.99 0.86 0.52 roughness 0.65 metalness 0 emissiveColor 0.99 0.86 0.52 } geometry Sphere { radius 0.5 subdivision 2 } } ] } ]  }
 PointLight { location 1.47825 1.47825 0.40500 color 1 0.86 0.52 intensity 0.8 radius 6.0750 attenuation 0 0 1 }
+Transform {
+  translation -0.5250 0.0000 0.0040
+  rotation 0.000000 0.000000 1.000000 0.00000
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.76 0.81 0.78
+        roughness 0.90
+        metalness 0.00
+        transparency 0.34
+      }
+      geometry Box {
+        size 0.9200 0.6200 0.0040
+      }
+    }
+  ]
+}
+Solid {
+  translation -0.3250 -0.1700 0.0460
+  rotation 0.000000 0.000000 1.000000 0.00000
+  name "eco_c_elegans_01_maze_left"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.28 0.57 0.35
+        roughness 0.66
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 0.4200 0.0400 0.0920
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.4200 0.0400 0.0920
+  }
+}
+Solid {
+  translation -0.3250 0.1700 0.0460
+  rotation 0.000000 0.000000 1.000000 0.00000
+  name "eco_c_elegans_01_maze_right"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.26 0.49 0.68
+        roughness 0.62
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 0.4200 0.0400 0.0920
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.4200 0.0400 0.0920
+  }
+}
+Solid {
+  translation -0.7850 0.0000 0.0380
+  rotation 0.000000 0.000000 1.000000 1.57080
+  name "eco_c_elegans_01_rear_barrier"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.62 0.35 0.23
+        roughness 0.60
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 0.2800 0.0380 0.0760
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.2800 0.0380 0.0760
+  }
+}
+Solid {
+  translation -0.5050 0.2900 0.0380
+  rotation 0.000000 1.000000 0.000000 0.26000
+  name "eco_c_elegans_01_ridge_ramp"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.67 0.56 0.28
+        roughness 0.58
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 0.2400 0.1800 0.0550
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.2400 0.1800 0.0550
+  }
+}
+Solid {
+  translation -0.2600 0.0000 0.0220
+  name "eco_c_elegans_01_taste_center"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.74 0.30
+        roughness 0.44
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Sphere {
+        radius 0.0300
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0300
+  }
+}
+Solid {
+  translation -0.3450 0.0900 0.0220
+  name "eco_c_elegans_01_taste_left"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.80 0.56 0.22
+        roughness 0.44
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Sphere {
+        radius 0.0280
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0280
+  }
+}
+Solid {
+  translation -0.3450 -0.0900 0.0220
+  name "eco_c_elegans_01_taste_right"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.76 0.48 0.20
+        roughness 0.44
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Sphere {
+        radius 0.0280
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0280
+  }
+}
+PointLight {
+  location -0.3050 -0.1900 0.3100
+  color 1.00 0.62 0.28
+  intensity 0.55
+  attenuation 0 0 4.5000
+  radius 1.80
+  castShadows FALSE
+}
+PointLight {
+  location -0.5850 0.2100 0.2900
+  color 0.72 0.87 1.00
+  intensity 0.42
+  attenuation 0 0 5.2000
+  radius 1.65
+  castShadows FALSE
+}
+Solid {
+  translation -0.8050 0.1600 0.0460
+  linearVelocity 0.4200 -0.1400 0.0000
+  angularVelocity 0.0000 0.0000 2.2000
+  name "eco_c_elegans_01_vibration_pellet"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.91 0.83 0.32
+        roughness 0.34
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Sphere {
+        radius 0.0460
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0460
+  }
+  physics Physics {
+    density -1
+    mass 0.01800
+  }
+}
+Solid {
+  translation -0.4950 -0.3000 0.0280
+  rotation 0.000000 0.000000 1.000000 0.42000
+  linearVelocity -0.1600 0.2800 0.0000
+  angularVelocity 0.0000 0.0000 2.6000
+  name "eco_c_elegans_01_flow_bar"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.86 0.44 0.18
+        roughness 0.38
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 0.1800 0.0500 0.0440
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.1800 0.0500 0.0440
+  }
+  physics Physics {
+    density -1
+    mass 0.02200
+  }
+}
+Transform {
+  translation 0.5250 0.0000 0.0040
+  rotation 0.000000 0.000000 1.000000 3.14159
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.76 0.81 0.78
+        roughness 0.90
+        metalness 0.00
+        transparency 0.34
+      }
+      geometry Box {
+        size 0.9200 0.6200 0.0040
+      }
+    }
+  ]
+}
+Solid {
+  translation 0.3250 0.1700 0.0460
+  rotation 0.000000 0.000000 1.000000 3.14159
+  name "eco_c_elegans_02_maze_left"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.28 0.57 0.35
+        roughness 0.66
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 0.4200 0.0400 0.0920
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.4200 0.0400 0.0920
+  }
+}
+Solid {
+  translation 0.3250 -0.1700 0.0460
+  rotation 0.000000 0.000000 1.000000 3.14159
+  name "eco_c_elegans_02_maze_right"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.26 0.49 0.68
+        roughness 0.62
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 0.4200 0.0400 0.0920
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.4200 0.0400 0.0920
+  }
+}
+Solid {
+  translation 0.7850 0.0000 0.0380
+  rotation 0.000000 0.000000 1.000000 4.71239
+  name "eco_c_elegans_02_rear_barrier"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.62 0.35 0.23
+        roughness 0.60
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 0.2800 0.0380 0.0760
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.2800 0.0380 0.0760
+  }
+}
+Solid {
+  translation 0.5050 -0.2900 0.0380
+  rotation 0.129634 0.000000 -0.991562 3.14159
+  name "eco_c_elegans_02_ridge_ramp"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.67 0.56 0.28
+        roughness 0.58
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 0.2400 0.1800 0.0550
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.2400 0.1800 0.0550
+  }
+}
+Solid {
+  translation 0.2600 0.0000 0.0220
+  name "eco_c_elegans_02_taste_center"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.92 0.74 0.30
+        roughness 0.44
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Sphere {
+        radius 0.0300
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0300
+  }
+}
+Solid {
+  translation 0.3450 -0.0900 0.0220
+  name "eco_c_elegans_02_taste_left"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.80 0.56 0.22
+        roughness 0.44
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Sphere {
+        radius 0.0280
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0280
+  }
+}
+Solid {
+  translation 0.3450 0.0900 0.0220
+  name "eco_c_elegans_02_taste_right"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.76 0.48 0.20
+        roughness 0.44
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Sphere {
+        radius 0.0280
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0280
+  }
+}
+PointLight {
+  location 0.3050 0.1900 0.3100
+  color 1.00 0.62 0.28
+  intensity 0.55
+  attenuation 0 0 4.5000
+  radius 1.80
+  castShadows FALSE
+}
+PointLight {
+  location 0.5850 -0.2100 0.2900
+  color 0.72 0.87 1.00
+  intensity 0.42
+  attenuation 0 0 5.2000
+  radius 1.65
+  castShadows FALSE
+}
+Solid {
+  translation 0.8050 -0.1600 0.0460
+  linearVelocity -0.4200 0.1400 0.0000
+  angularVelocity 0.0000 0.0000 2.2000
+  name "eco_c_elegans_02_vibration_pellet"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.91 0.83 0.32
+        roughness 0.34
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Sphere {
+        radius 0.0460
+      }
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.0460
+  }
+  physics Physics {
+    density -1
+    mass 0.01800
+  }
+}
+Solid {
+  translation 0.4950 0.3000 0.0280
+  rotation 0.000000 0.000000 1.000000 3.56159
+  linearVelocity 0.1600 -0.2800 0.0000
+  angularVelocity 0.0000 0.0000 2.6000
+  name "eco_c_elegans_02_flow_bar"
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.86 0.44 0.18
+        roughness 0.38
+        metalness 0.00
+        transparency 0.00
+      }
+      geometry Box {
+        size 0.1800 0.0500 0.0440
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.1800 0.0500 0.0440
+  }
+  physics Physics {
+    density -1
+    mass 0.02200
+  }
+}
+
 
 Robot {
   name "NM_WORLD_RECORDER"

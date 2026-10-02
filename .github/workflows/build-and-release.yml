@@ -38,7 +38,7 @@ on:
         description: "Immutable container build ID to promote (defaults to current SHA)"
         required: false
       container_workload:
-        description: "Container workload to promote"
+        description: "Workload to promote; source builds publish all workloads"
         required: false
         type: choice
         options: [orchestrator, node, web-ui]
@@ -91,12 +91,11 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # qc01 is also the Kubernetes control-plane host.  Keep concurrent Rust
-  # linkers bounded so the ARM64 verification job cannot starve PostgreSQL,
-  # Gail, and the other tenant workloads while compiling large test binaries.
+  # Keep Rust compilation bounded on hosted runners; the all-features test
+  # binaries have a large native dependency graph.
   CARGO_BUILD_JOBS: "2"
-  # qc00 carries a large product/model dataset. Keep verification artifacts
-  # bounded so debug symbols and incremental objects cannot fill its root FS.
+  # Keep verification artifacts bounded so debug symbols and incremental
+  # objects cannot fill a runner's ephemeral workspace.
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
@@ -134,18 +133,17 @@ jobs:
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     timeout-minutes: 90
     env:
-      # The ARM runner also serves cluster workloads. Bound verification
-      # compilation while leaving release linking enough parallelism to finish
-      # before the runner heartbeat is starved.
+      # Bound verification compilation while leaving release linking enough
+      # parallelism to finish in the hosted job window.
       CARGO_BUILD_JOBS: "2"
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner_arch: X64
-            runs_on: '["self-hosted","Linux","X64"]'
+            runs_on: '["ubuntu-24.04"]'
           - runner_arch: ARM64
-            runs_on: '["self-hosted", "Linux", "ARM64"]'
+            runs_on: '["ubuntu-24.04-arm"]'
     defaults:
       run:
         working-directory: repo-build-release
@@ -340,7 +338,7 @@ jobs:
     name: Release Metadata
     needs: verify
     if: needs.verify.result == 'success'
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: repo-build-release
@@ -422,15 +420,15 @@ jobs:
       - release-meta
     if: needs.verify.result == 'success' && needs.release-meta.result == 'success'
     runs-on: ${{ fromJSON(matrix.runs_on) }}
-    # Package and container matrix jobs share the single ARM64 self-hosted
-    # runner. The runner itself serializes execution; the lock is unique per
-    # Ubuntu artifact so GitHub retains every queued matrix entry instead of
-    # replacing the single pending entry for a shared architecture group.
+    # Keep each package job on an ephemeral architecture-matched runner so
+    # native builds cannot compete with AARNN workloads on the cluster nodes.
     concurrency:
       group: >-
         aarnn-build-runner-${{ matrix.runner_arch }}-${{ matrix.ubuntu_label }}-${{ github.ref }}
       cancel-in-progress: false
-    timeout-minutes: 120
+    # The all-feature ARM64 release package can exceed two hours while its
+    # native dependencies and binaries compile.
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       # The architecture concurrency group below remains the resource lock;
@@ -439,7 +437,7 @@ jobs:
       matrix:
         include:
           - runner_arch: X64
-            runs_on: '["self-hosted","Linux","X64"]'
+            runs_on: '["ubuntu-24.04"]'
             ubuntu_series: "24.04"
             ubuntu_label: ubuntu24.04
             rust_target: x86_64-unknown-linux-gnu
@@ -447,7 +445,7 @@ jobs:
             deb_arch: amd64
             container_platform: amd64
           - runner_arch: X64
-            runs_on: '["self-hosted","Linux","X64"]'
+            runs_on: '["ubuntu-24.04"]'
             ubuntu_series: "25.04"
             ubuntu_label: ubuntu25.04
             rust_target: x86_64-unknown-linux-gnu
@@ -455,7 +453,7 @@ jobs:
             deb_arch: amd64
             container_platform: amd64
           - runner_arch: ARM64
-            runs_on: '["self-hosted", "Linux", "ARM64"]'
+            runs_on: '["ubuntu-24.04-arm"]'
             ubuntu_series: "24.04"
             ubuntu_label: ubuntu24.04
             rust_target: aarch64-unknown-linux-gnu
@@ -463,7 +461,7 @@ jobs:
             deb_arch: arm64
             container_platform: arm64
           - runner_arch: ARM64
-            runs_on: '["self-hosted", "Linux", "ARM64"]'
+            runs_on: '["ubuntu-24.04-arm"]'
             ubuntu_series: "25.04"
             ubuntu_label: ubuntu25.04
             rust_target: aarch64-unknown-linux-gnu
@@ -544,9 +542,8 @@ jobs:
           set -euo pipefail
           authfile="$RUNNER_TEMP/podman-anonymous-auth.json"
           printf '{}\n' > "$authfile"
-          # qc00 also hosts Gail training/inference workloads. Keep the
-          # containerized release build bounded so concurrent workloads
-          # cannot OOM-kill rustc (exit 137).
+          # Keep the containerized release build bounded so large native
+          # dependency builds stay within the hosted runner's memory limit.
           podman run --rm -i --pull=missing \
             --authfile "$authfile" \
             --platform "linux/${{ matrix.container_platform }}" \
@@ -712,7 +709,7 @@ jobs:
     needs:
       - release-meta
       - package-linux
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     if: >-
       always() &&
       needs.release-meta.outputs.publish_release == 'true' &&
@@ -854,86 +851,86 @@ jobs:
 
   container-build:
     name: Container Build (${{ matrix.workload }}, ${{ matrix.variant }}, ${{ matrix.runner_arch }})
-    if: github.event_name == 'push'
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' &&
+       !inputs.publish_only &&
+       inputs.container_workload != '')
     needs:
       - verify
       - package-linux
     # The container jobs consume the already-built release package. Each
-    # workload/variant has its own queue lock: qc00 still runs one job at a
-    # time, while GitHub retains all ARM variants and self-hosted X64 jobs can
-    # proceed concurrently.
+    # workload/variant has its own queue lock, while architecture-matched
+    # hosted runners keep compilation away from live AARNN nodes.
     concurrency:
       group: >-
         aarnn-build-runner-${{ matrix.runner_arch }}-${{ matrix.workload }}-${{ matrix.variant }}-${{ github.ref }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
-      # Independent matrix entries may be dispatched concurrently. A physical
-      # self-hosted runner still accepts one job at a time, and the unique
-      # concurrency keys prevent GitHub's one-pending-request rule from
-      # cancelling sibling ARM variants.
+      # Independent matrix entries may be dispatched concurrently; unique
+      # concurrency keys prevent overlapping reruns from publishing stale
+      # aliases for the same variant.
       max-parallel: 9
       matrix:
         include:
           - workload: orchestrator
             arch: amd64
             runner_arch: X64
-            runs_on: '["self-hosted","Linux","X64"]'
+            runs_on: '["ubuntu-24.04"]'
             variant: amd64
             page_size: 4k
           - workload: orchestrator
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["self-hosted", "Linux", "ARM64"]'
+            runs_on: '["ubuntu-24.04-arm"]'
             variant: arm64-4k
             page_size: 4k
           - workload: orchestrator
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["self-hosted", "Linux", "ARM64"]'
+            runs_on: '["ubuntu-24.04-arm"]'
             variant: arm64-64k-hwe
             page_size: 64k-hwe
           - workload: node
             arch: amd64
             runner_arch: X64
-            runs_on: '["self-hosted","Linux","X64"]'
+            runs_on: '["ubuntu-24.04"]'
             variant: amd64
             page_size: 4k
           - workload: node
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["self-hosted", "Linux", "ARM64"]'
+            runs_on: '["ubuntu-24.04-arm"]'
             variant: arm64-4k
             page_size: 4k
           - workload: node
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["self-hosted", "Linux", "ARM64"]'
+            runs_on: '["ubuntu-24.04-arm"]'
             variant: arm64-64k-hwe
             page_size: 64k-hwe
           - workload: web-ui
             arch: amd64
             runner_arch: X64
-            runs_on: '["self-hosted","Linux","X64"]'
+            runs_on: '["ubuntu-24.04"]'
             variant: amd64
             page_size: 4k
           - workload: web-ui
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["self-hosted", "Linux", "ARM64"]'
+            runs_on: '["ubuntu-24.04-arm"]'
             variant: arm64-4k
             page_size: 4k
           - workload: web-ui
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["self-hosted", "Linux", "ARM64"]'
+            runs_on: '["ubuntu-24.04-arm"]'
             variant: arm64-64k-hwe
             page_size: 64k-hwe
     runs-on: ${{ fromJSON(matrix.runs_on) }}
     env:
-      # The ARM self-hosted runner also serves live cluster workloads. Keep
-      # container package compilation single-threaded so the runner remains
-      # responsive to GitHub and does not starve the product network stack.
+      # Keep native image package compilation bounded on hosted runners.
       CARGO_BUILD_JOBS: "1"
     permissions:
       contents: read
@@ -1167,7 +1164,12 @@ jobs:
         (github.event_name == 'push' &&
          needs.container-build.result == 'success' &&
          needs.release-meta.result == 'success') ||
-        (github.event_name == 'workflow_dispatch' && inputs.publish_only)
+        (github.event_name == 'workflow_dispatch' && inputs.publish_only) ||
+        (github.event_name == 'workflow_dispatch' &&
+         !inputs.publish_only &&
+         inputs.container_workload != '' &&
+         needs.container-build.result == 'success' &&
+         needs.release-meta.result == 'success')
       )
     needs:
       - container-build
@@ -1177,7 +1179,7 @@ jobs:
       max-parallel: 3
       matrix:
         workload: [orchestrator, node, web-ui]
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     env:
       # Recovery publication must point at the immutable build that already
       # exists in GHCR, rather than at the SHA of this recovery dispatch.
@@ -1194,6 +1196,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Prepare self-hosted container runner disk
+        if: runner.environment == 'self-hosted'
         shell: bash
         run: bash .github/scripts/runner-disk-cleanup.sh prepare-container
 
@@ -1344,7 +1347,7 @@ jobs:
           verify_ref "${image}:${build}-${{ matrix.workload }}-arm64-64k-hwe" "linux/arm64/v8"
 
       - name: Clean self-hosted container runner artifacts
-        if: always()
+        if: always() && runner.environment == 'self-hosted'
         shell: bash
         run: bash .github/scripts/runner-disk-cleanup.sh finish
 
@@ -1360,7 +1363,7 @@ jobs:
          inputs.publish_only &&
          needs.container-manifest.result == 'success')
       )
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     # Mutable tags are updated by one serialized promotion boundary. This
     # prevents concurrent manifest matrix jobs or recovery dispatches from
     # racing on :latest and the role aliases.
@@ -1376,6 +1379,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Prepare self-hosted container runner disk
+        if: runner.environment == 'self-hosted'
         shell: bash
         run: bash .github/scripts/runner-disk-cleanup.sh prepare-container
 
@@ -1468,7 +1472,7 @@ jobs:
           echo "Promoted GHCR latest aliases from build ${build}"
 
       - name: Clean self-hosted container runner artifacts
-        if: always()
+        if: always() && runner.environment == 'self-hosted'
         shell: bash
         run: bash .github/scripts/runner-disk-cleanup.sh finish
 
@@ -1486,7 +1490,7 @@ jobs:
          needs.container-latest.result == 'success') ||
         (github.event_name == 'workflow_dispatch' && inputs.environment != '')
       )
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     permissions:
       packages: write
     steps:
@@ -1496,7 +1500,7 @@ jobs:
       - name: Verify Podman is available
         run: |
           command -v podman >/dev/null 2>&1 || {
-            echo "podman is required on self-hosted runners."
+            echo "podman is required on the build runner."
             exit 1
           }
           podman --version
@@ -1544,7 +1548,7 @@ jobs:
          !startsWith(github.event.head_commit.message, 'chore: bump version ')) ||
         (github.event_name == 'workflow_dispatch' && inputs.run_version_bump)
       )
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     defaults:
@@ -1639,7 +1643,7 @@ jobs:
     if: >-
       (github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')) ||
       (github.event_name == 'workflow_dispatch' && inputs.sync_wiki)
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

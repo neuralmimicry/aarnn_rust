@@ -362,6 +362,13 @@ struct AppState {
     /// decisions come from the existing orchestrator Policy; this process-local
     /// registry remains reference-only until Phase 7 authority can replicate it.
     peripheral_sessions: Arc<StdMutex<PeripheralSessionRegistry>>,
+    /// Exact deployment grants remain available in the compatibility profile
+    /// that does not configure persisted management authority.
+    configured_peripheral_input_grants: HashSet<(String, String)>,
+    /// Server-managed virtual simulation gateways are authorised separately
+    /// from workstation peripheral sessions. Brain scope still comes only
+    /// from an exact persisted or deployment-configured PeripheralInput grant.
+    simulation_ingress_principals: HashSet<String>,
     /// In-memory migration journals are used only when the reference web
     /// profile has no `NM_MIGRATION_JOURNAL_DIR`. Production deployments set
     /// that directory so every transition uses the crash-safe journal.
@@ -600,6 +607,7 @@ fn api_access_requirement(method: &Method, path: &str) -> Option<AccessRequireme
         | ("POST", ["api", "fpv", "jobs", _, "cancel"])
         | ("POST", ["api", "fpv", "jobs", _, "retry"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "aer", "inject"]) => Some(AccessRequirement::aarnn_use()),
+        ("POST", ["api", "simulation", "aer", "inject"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "aer", "infer"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "aer", "stream"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "llm", "mirror"]) => Some(AccessRequirement::aarnn_use()),
@@ -1852,6 +1860,35 @@ struct PeripheralSessionCreatePayload {
     ttl_secs: u64,
 }
 
+fn simulation_ingress_principals_from_env() -> anyhow::Result<HashSet<String>> {
+    let Some(raw) = env_opt("NM_SIMULATION_INGRESS_PRINCIPALS") else {
+        return Ok(HashSet::new());
+    };
+    parse_simulation_ingress_principals(&raw)
+}
+
+fn parse_simulation_ingress_principals(raw: &str) -> anyhow::Result<HashSet<String>> {
+    let mut principals = HashSet::new();
+    for principal in raw
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if principal.len() > 256 {
+            anyhow::bail!("simulation ingress principals must be at most 256 bytes");
+        }
+        principals.insert(principal.to_owned());
+        if principals.len() > 64 {
+            anyhow::bail!("NM_SIMULATION_INGRESS_PRINCIPALS exceeds the 64-principal bound");
+        }
+    }
+    Ok(principals)
+}
+
+fn is_simulation_ingress_principal(user: &AuthUser, principals: &HashSet<String>) -> bool {
+    user.role == "service_account" && principals.contains(&user.username)
+}
+
 const fn default_peripheral_session_ttl() -> u64 {
     300
 }
@@ -2045,6 +2082,7 @@ async fn main() -> anyhow::Result<()> {
         allowed_origins: cors_allowed_origins_from_env(),
     };
     let peripheral_input_grants = peripheral_input_grants_from_env()?;
+    let simulation_ingress_principals = simulation_ingress_principals_from_env()?;
 
     // The browser management client is enabled only when an explicit
     // persisted orchestrator state path is supplied. This keeps the
@@ -2134,6 +2172,8 @@ async fn main() -> anyhow::Result<()> {
         runtime,
         management,
         peripheral_sessions: Arc::new(StdMutex::new(PeripheralSessionRegistry::default())),
+        configured_peripheral_input_grants: peripheral_input_grants.iter().cloned().collect(),
+        simulation_ingress_principals,
         migration_journals: Arc::new(StdMutex::new(BTreeMap::new())),
         chain,
         token_pricing,
@@ -2225,6 +2265,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/activity", get(activity))
         .route("/export", get(export))
         .route("/aer/inject", post(aer_inject))
+        .route("/simulation/aer/inject", post(aer_simulation_inject))
         .route("/aer/infer", post(aer_infer))
         .route("/aer/stream", post(aer_stream))
         .route("/llm/mirror", post(llm_mirror))
@@ -2859,6 +2900,19 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "sim_step": { "type": "integer", "format": "uint64" },
               "sim_time_ms": { "type": "number", "format": "double" },
               "sensory": { "$ref": "#/components/schemas/ActivityIndices" },
+              "sensory_history": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "step": { "type": "integer", "format": "uint64" },
+                    "indices": { "type": "array", "items": { "type": "integer", "format": "uint32" } }
+                  },
+                  "required": ["step", "indices"]
+                }
+              },
+              "sensory_target_layer": { "type": "integer", "format": "uint32", "nullable": true },
+              "sensory_source": { "type": "string", "nullable": true },
               "hidden": { "type": "array", "items": { "$ref": "#/components/schemas/ActivityIndices" } },
               "output": { "$ref": "#/components/schemas/ActivityIndices" },
               "output_history": {
@@ -2874,7 +2928,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               },
               "source": { "type": "string" }
             },
-            "required": ["network_id", "sim_step", "sim_time_ms", "sensory", "hidden", "output", "output_history", "source"]
+            "required": ["network_id", "sim_step", "sim_time_ms", "sensory", "sensory_history", "hidden", "output", "output_history", "source"]
           },
           "WorkspaceTopologyResponse": {
             "type": "object",
@@ -3516,6 +3570,30 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             }
             }
           },
+        "/api/simulation/aer/inject": {
+          "post": {
+            "tags": ["network"],
+            "summary": "Inject a virtual simulation sensory frame",
+            "description": "Server-managed virtual simulations only. Requires an authenticated service account on the simulation-ingress allow-list, `aarnn:use`, and an exact brain-scoped PeripheralInput grant. It does not create or accept a workstation PeripheralSession and cannot authorise physical devices. Every frame must provide a stable producer `session_id` and non-negative `step_index` from the shared world clock.",
+            "operationId": "injectSimulationAerExchange",
+            "security": [{ "cookieAuth": [] }, { "bearerAuth": [] }],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": { "$ref": "#/components/schemas/AerInjectPayload" }
+                }
+              }
+            },
+            "responses": {
+              "200": { "description": "Virtual sensory frame accepted.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AerInjectResponse" } } } },
+              "400": { "description": "Invalid payload, missing stable source step/session, or target override.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "401": { "description": "Unauthorised.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "Service identity or exact brain input grant denied.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "503": { "description": "Target connection or sensory admission unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
         "/api/aer/infer": {
           "post": {
             "tags": ["network"],
@@ -3718,14 +3796,18 @@ async fn api_auth_middleware(
         req.extensions_mut().insert(user);
         return next.run(req).await;
     }
-    if let Some(user) = bearer_auth_user(&state, req.headers()).await {
-        if let Some(requirement) = access_requirement {
-            if !user.can_access(requirement) {
-                return insufficient_service_access_response(&user, requirement);
+    match bearer_auth_user(&state, req.headers()).await {
+        Ok(Some(user)) => {
+            if let Some(requirement) = access_requirement {
+                if !user.can_access(requirement) {
+                    return insufficient_service_access_response(&user, requirement);
+                }
             }
+            req.extensions_mut().insert(user);
+            return next.run(req).await;
         }
-        req.extensions_mut().insert(user);
-        return next.run(req).await;
+        Ok(None) => {}
+        Err(_) => return central_auth_unavailable_response(),
     }
     (
         StatusCode::UNAUTHORIZED,
@@ -3783,8 +3865,10 @@ async fn me(
     if let Some(user) = session_auth_user(&state, &jar).await {
         return Json(authenticated_identity_payload(&user)).into_response();
     }
-    if let Some(user) = bearer_auth_user(&state, &headers).await {
-        return Json(authenticated_identity_payload(&user)).into_response();
+    match bearer_auth_user(&state, &headers).await {
+        Ok(Some(user)) => return Json(authenticated_identity_payload(&user)).into_response(),
+        Ok(None) => {}
+        Err(_) => return central_auth_unavailable_response(),
     }
     (
         StatusCode::UNAUTHORIZED,
@@ -5538,14 +5622,39 @@ async fn session_auth_user(state: &AppState, jar: &CookieJar) -> Option<AuthUser
     None
 }
 
-async fn bearer_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> {
-    let central = state.auth.central.as_ref()?;
-    let access_token = extract_bearer_token(headers)?;
-    let session = central.session(&access_token).await.ok()?;
+async fn bearer_auth_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<AuthUser>, CentralApiError> {
+    let Some(central) = state.auth.central.as_ref() else {
+        return Ok(None);
+    };
+    let Some(access_token) = extract_bearer_token(headers) else {
+        return Ok(None);
+    };
+    let session = match central.session(&access_token).await {
+        Ok(session) => session,
+        Err(error) if error.status == Some(StatusCode::UNAUTHORIZED.as_u16()) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
     if !session.authenticated {
-        return None;
+        return Ok(None);
     }
-    AuthUser::from_central_session(&session, Some(access_token))
+    Ok(AuthUser::from_central_session(&session, Some(access_token)))
+}
+
+fn central_auth_unavailable_response() -> Response {
+    let mut response = (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"error": "authentication_service_unavailable"})),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+    response
 }
 
 fn fpv_error_response(error: FpvRenderError) -> Response {
@@ -6877,6 +6986,8 @@ async fn activity(
             Err(resp) => return resp.into_response(),
         };
 
+    let require_output_owner = query.node_id.is_none();
+    let mut activity_candidates = Vec::new();
     let mut last_error = String::from("no candidate target attempted");
     for target_addr in target_addrs {
         let mut client = match connect_cluster_client(target_addr.clone()).await {
@@ -6887,50 +6998,95 @@ async fn activity(
             }
         };
 
-        match client
-            .get_network_activity(authenticated_grpc_request(NetworkActivityRequest {
-                network_id: network_id.clone(),
-            }))
-            .await
-        {
-            Ok(resp) => {
-                let resp = resp.into_inner();
-                let sim_step = resp.sim_step;
-                let sim_time_ms = resp.sim_time_ms;
-                let sensory = resp.sensory.map(|s| s.indices).unwrap_or_default();
-                let hidden: Vec<Vec<u32>> = resp.hidden.into_iter().map(|h| h.indices).collect();
-                let output = resp.output.map(|o| o.indices).unwrap_or_default();
-                let output_history = resp
-                    .output_history
-                    .into_iter()
-                    .enumerate()
-                    .map(|(offset, frame)| {
-                        json!({
-                            "step": sim_step.saturating_sub(offset as u64),
-                            "indices": frame.indices,
-                        })
-                    })
-                    .collect::<Vec<_>>();
-
-                return (
-                    StatusCode::OK,
-                    Json(json!({
-                        "network_id": resp.network_id,
-                        "sim_step": sim_step,
-                        "sim_time_ms": sim_time_ms,
-                        "sensory": { "indices": sensory },
-                        "hidden": hidden.into_iter().map(|indices| json!({ "indices": indices })).collect::<Vec<_>>(),
-                        "output": { "indices": output },
-                        "output_history": output_history,
-                        "source": target_addr,
-                    })),
-                )
-                    .into_response();
+        let mut request = authenticated_grpc_request(NetworkActivityRequest {
+            network_id: network_id.clone(),
+        });
+        request.set_timeout(Duration::from_secs(2));
+        match client.get_network_activity(request).await {
+            Ok(response) => {
+                activity_candidates.push((target_addr.clone(), response.into_inner()));
+                if network_activity_candidate_index(&activity_candidates, require_output_owner)
+                    .is_some()
+                    && activity_candidates
+                        .iter()
+                        .any(|(_, response)| response.sensory_stage_assigned)
+                {
+                    break;
+                }
             }
             Err(e) => {
                 last_error = format!("activity failed via {}: {}", target_addr, e);
             }
         }
+    }
+
+    if let Some(candidate_index) =
+        network_activity_candidate_index(&activity_candidates, require_output_owner)
+    {
+        let sensory_owner = network_sensory_owner_index(&activity_candidates)
+            .and_then(|index| activity_candidates.get(index));
+        let sensory = sensory_owner
+            .and_then(|(_, response)| response.sensory.as_ref())
+            .map(|frame| frame.indices.clone())
+            .unwrap_or_default();
+        let sensory_history = sensory_owner
+            .map(|(_, response)| {
+                response
+                    .sensory_history
+                    .iter()
+                    .enumerate()
+                    .map(|(offset, frame)| {
+                        json!({
+                            "step": response.sim_step.saturating_sub(offset as u64),
+                            "indices": frame.indices,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let sensory_source = sensory_owner.map(|(addr, _)| addr.clone());
+        let sensory_target_layer = sensory_owner.map(|(_, response)| response.sensory_target_layer);
+        let (target_addr, resp) = activity_candidates.swap_remove(candidate_index);
+        let sim_step = resp.sim_step;
+        let hidden: Vec<Vec<u32>> = resp.hidden.into_iter().map(|h| h.indices).collect();
+        let output = resp.output.map(|o| o.indices).unwrap_or_default();
+        let output_history = resp
+            .output_history
+            .into_iter()
+            .enumerate()
+            .map(|(offset, frame)| {
+                json!({
+                    "step": sim_step.saturating_sub(offset as u64),
+                    "indices": frame.indices,
+                })
+            })
+            .collect::<Vec<_>>();
+        return (StatusCode::OK, Json(json!({
+            "network_id": resp.network_id,
+            "sim_step": sim_step,
+            "sim_time_ms": resp.sim_time_ms,
+            "sensory": { "indices": sensory },
+            "sensory_history": sensory_history,
+            "sensory_target_layer": sensory_target_layer,
+            "sensory_source": sensory_source,
+            "hidden": hidden.into_iter().map(|indices| json!({ "indices": indices })).collect::<Vec<_>>(),
+            "output": { "indices": output },
+            "output_history": output_history,
+            "output_source_layer": resp.output_source_layer,
+            "output_stage_assigned": resp.output_stage_assigned,
+            "source": target_addr,
+        }))).into_response();
+    }
+
+    if require_output_owner && !activity_candidates.is_empty() {
+        let output_source_layer = activity_candidates
+            .iter()
+            .map(|(_, response)| response.output_source_layer)
+            .next()
+            .unwrap_or_default();
+        last_error = format!(
+            "no available active worker owns output-source layer {output_source_layer}; retry activity later"
+        );
     }
 
     (
@@ -7819,30 +7975,25 @@ struct MirrorInferenceOutput {
 /// inference output.
 async fn send_aer_inference(
     target_addr: String,
+    activity_target_addrs: Vec<String>,
     batch: SpikeBatch,
     requested_timeout_ms: Option<u64>,
 ) -> Result<MirrorInferenceOutput, ApiError> {
     let network_id = batch.network_id.clone();
-    let mut activity_client =
-        connect_cluster_client(target_addr.clone())
-            .await
-            .map_err(|error| {
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({ "error": format!("connect failed: {error}") })),
-                )
-            })?;
+    let mut activity_clients = Vec::new();
+    for address in activity_target_addrs {
+        if let Ok(client) = connect_cluster_client(address.clone()).await {
+            activity_clients.push((address, client));
+        }
+    }
     let accepted_batches = send_aer_batches(target_addr, vec![batch]).await?;
     // Capture the simulator position only after the transport handler accepted
     // the sensory frame. Returning a later step avoids mislabelling unrelated
-    // output that happened while the frame was still in transit.
-    let injected_at_step = activity_client
-        .get_network_activity(authenticated_grpc_request(NetworkActivityRequest {
-            network_id: network_id.clone(),
-        }))
+    // output that happened while the frame was still in transit. The output
+    // owner can be a different worker from the sensory ingress target.
+    let injected_at_step = output_owner_activity(&mut activity_clients, &network_id)
         .await
-        .ok()
-        .map(|response| response.into_inner().sim_step);
+        .map(|(_, activity)| activity.sim_step);
     let Some(injected_at_step) = injected_at_step else {
         return Ok(MirrorInferenceOutput {
             accepted_batches,
@@ -7865,14 +8016,9 @@ async fn send_aer_inference(
             });
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
-        let activity = match activity_client
-            .get_network_activity(authenticated_grpc_request(NetworkActivityRequest {
-                network_id: network_id.clone(),
-            }))
-            .await
-        {
-            Ok(response) => response.into_inner(),
-            Err(_) => continue,
+        let Some((_, activity)) = output_owner_activity(&mut activity_clients, &network_id).await
+        else {
+            continue;
         };
         if let Some((output_step_index, output)) =
             recent_output_after_step(&activity, injected_at_step)
@@ -7886,6 +8032,28 @@ async fn send_aer_inference(
             });
         }
     }
+}
+
+async fn output_owner_activity(
+    candidates: &mut [(
+        String,
+        DistributedNeuromorphicClient<tonic::transport::Channel>,
+    )],
+    network_id: &str,
+) -> Option<(String, NetworkActivityResponse)> {
+    for (address, client) in candidates {
+        let mut request = authenticated_grpc_request(NetworkActivityRequest {
+            network_id: network_id.to_owned(),
+        });
+        request.set_timeout(Duration::from_millis(500));
+        if let Ok(response) = client.get_network_activity(request).await {
+            let activity = response.into_inner();
+            if activity.output_stage_assigned {
+                return Some((address.clone(), activity));
+            }
+        }
+    }
+    None
 }
 
 /// Browser/WebGL inference adapter. The browser sends sensory values or an
@@ -7902,7 +8070,11 @@ fn has_explicit_peripheral_input_grant(
     brain_id: &str,
 ) -> bool {
     let Some(management) = &state.management else {
-        return false;
+        return has_configured_peripheral_input_grant(
+            &state.configured_peripheral_input_grants,
+            principal_id,
+            brain_id,
+        );
     };
     let Ok(management) = management.lock() else {
         return false;
@@ -7914,6 +8086,14 @@ fn has_explicit_peripheral_input_grant(
         brain_id,
         &ManagementCapability::PeripheralInput,
     )
+}
+
+fn has_configured_peripheral_input_grant(
+    grants: &HashSet<(String, String)>,
+    principal_id: &str,
+    brain_id: &str,
+) -> bool {
+    grants.contains(&(principal_id.to_owned(), brain_id.to_owned()))
 }
 
 async fn create_peripheral_session(
@@ -8123,6 +8303,62 @@ fn authorize_peripheral_aer_input(
         .map_err(|error| peripheral_failure(StatusCode::FORBIDDEN, error))
 }
 
+fn authorize_simulation_aer_input(
+    state: &AppState,
+    user: &AuthUser,
+    brain_id: &str,
+) -> Result<(), Response> {
+    let allowlisted_service =
+        is_simulation_ingress_principal(user, &state.simulation_ingress_principals);
+    let has_brain_grant = allowlisted_service
+        && has_explicit_peripheral_input_grant(state, &user.username, brain_id.trim());
+    if let Some(message) =
+        simulation_aer_input_denial(state.auth.mode, allowlisted_service, has_brain_grant)
+    {
+        return Err(peripheral_failure(StatusCode::FORBIDDEN, message));
+    }
+    Ok(())
+}
+
+fn simulation_aer_input_denial(
+    auth_mode: AuthMode,
+    allowlisted_service: bool,
+    has_brain_grant: bool,
+) -> Option<&'static str> {
+    if auth_mode == AuthMode::None {
+        Some("simulation ingress is disabled when web authentication is set to none")
+    } else if !allowlisted_service {
+        Some("an allow-listed simulation service identity is required")
+    } else if !has_brain_grant {
+        Some("the simulation service has no exact input grant for this brain")
+    } else {
+        None
+    }
+}
+
+fn validate_simulation_aer_frame_metadata(
+    session_id: Option<&str>,
+    step_index: Option<i64>,
+    has_address_override: bool,
+    has_node_override: bool,
+) -> Result<(), &'static str> {
+    if has_address_override || has_node_override {
+        return Err("simulation ingress does not accept target address or node overrides");
+    }
+    match session_id.map(str::trim).filter(|value| !value.is_empty()) {
+        None => return Err("stable producer session_id is required for simulation ingress"),
+        Some(value) if value.len() > 128 => {
+            return Err("simulation producer session_id must be at most 128 bytes");
+        }
+        Some(_) => {}
+    }
+    match step_index {
+        Some(step) if step >= 0 => Ok(()),
+        Some(_) => Err("simulation step_index must be non-negative"),
+        None => Err("shared-world step_index is required for simulation ingress"),
+    }
+}
+
 async fn aer_infer(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
@@ -8158,15 +8394,22 @@ async fn aer_infer(
         Ok(addr) => addr,
         Err(err) => return err.into_response(),
     };
-    let target_addr = match resolve_network_addr(
+    let activity_target_addrs = match resolve_network_addrs(
         orchestrator_addr,
         &payload.network_id,
         payload.node_id.clone(),
     )
     .await
     {
-        Ok(addr) => addr,
+        Ok(addrs) => addrs,
         Err(err) => return err.into_response(),
+    };
+    let Some(target_addr) = activity_target_addrs.first().cloned() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "no candidate target address resolved" })),
+        )
+            .into_response();
     };
 
     let batch = match build_aer_batch(
@@ -8188,7 +8431,14 @@ async fn aer_infer(
         Err(err) => return err.into_response(),
     };
 
-    match send_aer_inference(target_addr.clone(), batch, payload.timeout_ms).await {
+    match send_aer_inference(
+        target_addr.clone(),
+        activity_target_addrs,
+        batch,
+        payload.timeout_ms,
+    )
+    .await
+    {
         Ok(output) => (
             StatusCode::OK,
             Json(json!({
@@ -8217,7 +8467,7 @@ fn recent_output_after_step(
     activity: &NetworkActivityResponse,
     injected_at_step: u64,
 ) -> Option<(u64, SpikeIndices)> {
-    if activity.sim_step <= injected_at_step {
+    if !activity.output_stage_assigned || activity.sim_step <= injected_at_step {
         return None;
     }
 
@@ -8713,14 +8963,24 @@ async fn stimulate_llm_mirror(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let target_addr = if node_id.is_some() {
-        match resolve_network_addr(orchestrator_addr.clone(), &network_id, node_id).await {
-            Ok(addr) => addr,
+    let activity_target_addrs = if node_id.is_some() {
+        match resolve_network_addrs(orchestrator_addr.clone(), &network_id, node_id.clone()).await {
+            Ok(addrs) => addrs,
             Err(err) => {
                 response.error = Some(api_error_message(err));
                 return response;
             }
         }
+    } else {
+        resolve_network_addrs(orchestrator_addr.clone(), &network_id, None)
+            .await
+            .unwrap_or_else(|_| vec![orchestrator_addr.clone()])
+    };
+    let target_addr = if node_id.is_some() {
+        activity_target_addrs
+            .first()
+            .cloned()
+            .unwrap_or_else(|| orchestrator_addr.clone())
     } else {
         orchestrator_addr
     };
@@ -8748,7 +9008,7 @@ async fn stimulate_llm_mirror(
         }
     };
 
-    match send_aer_inference(target_addr, batch, None).await {
+    match send_aer_inference(target_addr, activity_target_addrs, batch, None).await {
         Ok(inference) => {
             response.accepted_batches = inference.accepted_batches;
             response.output_step_index = inference.output_step_index;
@@ -8841,7 +9101,26 @@ async fn aer_inject(
     Extension(user): Extension<AuthUser>,
     headers: HeaderMap,
     Json(payload): Json<AerInjectPayload>,
-) -> impl IntoResponse {
+) -> Response {
+    aer_inject_with_authority(state, user, headers, payload, false).await
+}
+
+async fn aer_simulation_inject(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    headers: HeaderMap,
+    Json(payload): Json<AerInjectPayload>,
+) -> Response {
+    aer_inject_with_authority(state, user, headers, payload, true).await
+}
+
+async fn aer_inject_with_authority(
+    state: Arc<AppState>,
+    user: AuthUser,
+    headers: HeaderMap,
+    payload: AerInjectPayload,
+    simulation_ingress: bool,
+) -> Response {
     if payload.network_id.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -8849,10 +9128,23 @@ async fn aer_inject(
         )
             .into_response();
     }
-    if let Err(response) =
+    let authorization = if simulation_ingress {
+        authorize_simulation_aer_input(&state, &user, &payload.network_id)
+    } else {
         authorize_peripheral_aer_input(&state, &user, &headers, &payload.network_id)
-    {
+    };
+    if let Err(response) = authorization {
         return response;
+    }
+    if simulation_ingress {
+        if let Err(message) = validate_simulation_aer_frame_metadata(
+            payload.session_id.as_deref(),
+            payload.step_index,
+            payload.addr.is_some(),
+            payload.node_id.is_some(),
+        ) {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response();
+        }
     }
     let orchestrator_addr =
         match resolve_addr_or_default(payload.addr, state.default_orchestrator.clone()) {
@@ -8876,9 +9168,9 @@ async fn aer_inject(
     };
 
     // Sparse external sensory input must enter through the orchestrator's
-    // placement-aware prepare/commit path. The browser-facing route has
-    // already checked the exact PeripheralInput grant and active local
-    // session before this internal service-authenticated RPC is made.
+    // placement-aware prepare/commit path. The HTTP route above has checked
+    // either the workstation's active local session or the explicitly
+    // allow-listed simulation service identity and exact brain grant.
     if payload.node_id.is_none()
         && payload
             .aer_payload_hex
@@ -9405,9 +9697,43 @@ async fn resolve_network_addr(
     }
 }
 
+fn network_sensory_owner_index(candidates: &[(String, NetworkActivityResponse)]) -> Option<usize> {
+    candidates
+        .iter()
+        .position(|(_, response)| response.sensory_stage_assigned)
+}
+
+fn network_activity_candidate_index(
+    candidates: &[(String, NetworkActivityResponse)],
+    require_output_owner: bool,
+) -> Option<usize> {
+    if require_output_owner {
+        candidates
+            .iter()
+            .position(|(_, response)| response.output_stage_assigned)
+    } else if candidates.is_empty() {
+        None
+    } else {
+        Some(0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn central_auth_outage_is_retryable_and_not_reported_as_bad_credentials() {
+        let response = central_auth_unavailable_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("5")
+        );
+    }
 
     #[test]
     fn peripheral_session_token_headers_are_supported_for_cors_clients() {
@@ -9426,6 +9752,81 @@ mod tests {
     }
 
     #[test]
+    fn activity_selection_uses_the_output_layer_owner_not_the_largest_shard() {
+        let candidates = vec![
+            (
+                "largest-shard".to_owned(),
+                NetworkActivityResponse {
+                    output_source_layer: 3,
+                    output_stage_assigned: false,
+                    ..NetworkActivityResponse::default()
+                },
+            ),
+            (
+                "output-owner".to_owned(),
+                NetworkActivityResponse {
+                    output_source_layer: 3,
+                    output_stage_assigned: true,
+                    ..NetworkActivityResponse::default()
+                },
+            ),
+        ];
+
+        assert_eq!(network_activity_candidate_index(&candidates, true), Some(1));
+        assert_eq!(
+            network_activity_candidate_index(&candidates, false),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn activity_selection_fails_closed_without_an_active_output_owner() {
+        let candidates = vec![(
+            "hidden-shard".to_owned(),
+            NetworkActivityResponse {
+                output_source_layer: 2,
+                output_stage_assigned: false,
+                ..NetworkActivityResponse::default()
+            },
+        )];
+
+        assert_eq!(network_activity_candidate_index(&candidates, true), None);
+    }
+
+    #[test]
+    fn activity_selection_keeps_sensory_and_output_owners_distinct() {
+        let candidates = vec![
+            (
+                "output-owner".to_owned(),
+                NetworkActivityResponse {
+                    output_stage_assigned: true,
+                    ..NetworkActivityResponse::default()
+                },
+            ),
+            (
+                "sensory-owner".to_owned(),
+                NetworkActivityResponse {
+                    sensory_stage_assigned: true,
+                    sensory_history: vec![SpikeIndices {
+                        indices: vec![2],
+                        ..SpikeIndices::default()
+                    }],
+                    ..NetworkActivityResponse::default()
+                },
+            ),
+        ];
+        assert_eq!(network_activity_candidate_index(&candidates, true), Some(0));
+        assert_eq!(network_sensory_owner_index(&candidates), Some(1));
+        assert_eq!(
+            candidates[network_sensory_owner_index(&candidates).unwrap()]
+                .1
+                .sensory_history[0]
+                .indices,
+            vec![2]
+        );
+    }
+
+    #[test]
     fn peripheral_input_grant_configuration_is_explicit_and_brain_scoped() {
         let grants =
             parse_peripheral_input_grants_json(r#"[{"principal":"alice","brain_id":"brain-a"}]"#)
@@ -9441,6 +9842,117 @@ mod tests {
         assert!(
             parse_peripheral_input_grants_json(r#"[{"principal":"alice","brain_id":" "}]"#)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn configured_peripheral_input_grants_work_without_management_state_and_stay_scoped() {
+        let grants =
+            parse_peripheral_input_grants_json(r#"[{"principal":"webots","brain_id":"brain-a"}]"#)
+                .expect("valid deployment grant list")
+                .into_iter()
+                .collect::<HashSet<_>>();
+        assert!(has_configured_peripheral_input_grant(
+            &grants, "webots", "brain-a"
+        ));
+        assert!(!has_configured_peripheral_input_grant(
+            &grants, "webots", "brain-b"
+        ));
+        assert!(!has_configured_peripheral_input_grant(
+            &grants,
+            "another-service",
+            "brain-a"
+        ));
+    }
+
+    #[test]
+    fn simulation_ingress_allowlist_accepts_only_bounded_service_principals() {
+        let principals =
+            parse_simulation_ingress_principals("webots, batch-sim, webots").expect("allow-list");
+        assert_eq!(principals.len(), 2);
+        assert!(principals.contains("webots"));
+        assert!(principals.contains("batch-sim"));
+        assert!(parse_simulation_ingress_principals(&"x".repeat(257)).is_err());
+        let too_many = (0..65)
+            .map(|index| format!("sim-{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(parse_simulation_ingress_principals(&too_many).is_err());
+    }
+
+    #[test]
+    fn simulation_ingress_requires_an_allowlisted_service_account() {
+        let principals = HashSet::from(["webots".to_owned()]);
+        let mut user = AuthUser::default();
+        user.username = "webots".to_owned();
+        user.role = "service_account".to_owned();
+        assert!(is_simulation_ingress_principal(&user, &principals));
+
+        user.role = "user".to_owned();
+        assert!(!is_simulation_ingress_principal(&user, &principals));
+        user.role = "service_account".to_owned();
+        user.username = "another-service".to_owned();
+        assert!(!is_simulation_ingress_principal(&user, &principals));
+        assert!(!is_simulation_ingress_principal(&user, &HashSet::new()));
+    }
+
+    #[test]
+    fn simulation_ingress_authorization_fails_closed() {
+        assert_eq!(
+            simulation_aer_input_denial(AuthMode::None, true, true),
+            Some("simulation ingress is disabled when web authentication is set to none")
+        );
+        assert_eq!(
+            simulation_aer_input_denial(AuthMode::Oidc, false, true),
+            Some("an allow-listed simulation service identity is required")
+        );
+        assert_eq!(
+            simulation_aer_input_denial(AuthMode::Local, true, false),
+            Some("the simulation service has no exact input grant for this brain")
+        );
+        assert_eq!(
+            simulation_aer_input_denial(AuthMode::Oidc, true, true),
+            None
+        );
+        assert_eq!(
+            simulation_aer_input_denial(AuthMode::Local, true, true),
+            None
+        );
+    }
+
+    #[test]
+    fn simulation_ingress_requires_stable_identity_and_shared_world_step() {
+        assert!(
+            validate_simulation_aer_frame_metadata(Some("webots-robot-0"), Some(42), false, false)
+                .is_ok()
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(None, Some(42), false, false),
+            Err("stable producer session_id is required for simulation ingress")
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(Some("  "), Some(42), false, false),
+            Err("stable producer session_id is required for simulation ingress")
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(Some(&"x".repeat(129)), Some(42), false, false),
+            Err("simulation producer session_id must be at most 128 bytes")
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(Some("webots-robot-0"), None, false, false),
+            Err("shared-world step_index is required for simulation ingress")
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(Some("webots-robot-0"), Some(-1), false, false),
+            Err("simulation step_index must be non-negative")
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(Some("webots-robot-0"), Some(42), true, false),
+            Err("simulation ingress does not accept target address or node overrides")
+        );
+        assert_eq!(
+            validate_simulation_aer_frame_metadata(Some("webots-robot-0"), Some(42), false, true),
+            Err("simulation ingress does not accept target address or node overrides")
         );
     }
 
@@ -9559,6 +10071,13 @@ mod tests {
         assert_eq!(
             api_access_requirement(&Method::POST, "/api/aer/infer"),
             Some(AccessRequirement::aarnn_use())
+        );
+        let simulation_requirement =
+            api_access_requirement(&Method::POST, "/api/simulation/aer/inject");
+        assert_eq!(simulation_requirement, Some(AccessRequirement::aarnn_use()));
+        assert!(
+            !AuthUser::default()
+                .can_access(simulation_requirement.expect("simulation ingress access requirement"))
         );
         assert_eq!(
             api_access_requirement(&Method::POST, "/api/peripheral/sessions"),
@@ -9842,6 +10361,7 @@ mod tests {
     fn recent_output_uses_non_empty_history_after_injection() {
         let activity = NetworkActivityResponse {
             network_id: "network".to_string(),
+            output_stage_assigned: true,
             output: Some(SpikeIndices::default()),
             sim_step: 12,
             output_history: vec![
@@ -9865,6 +10385,7 @@ mod tests {
     fn recent_output_ignores_history_before_injection() {
         let activity = NetworkActivityResponse {
             network_id: "network".to_string(),
+            output_stage_assigned: true,
             output: Some(SpikeIndices::default()),
             sim_step: 12,
             output_history: vec![
@@ -9878,6 +10399,22 @@ mod tests {
         };
 
         assert!(recent_output_after_step(&activity, 11).is_none());
+    }
+
+    #[test]
+    fn recent_output_ignores_non_owner_activity_even_when_it_has_spikes() {
+        let activity = NetworkActivityResponse {
+            network_id: "network".to_string(),
+            output_stage_assigned: false,
+            sim_step: 12,
+            output_history: vec![SpikeIndices {
+                indices: vec![2],
+                ..SpikeIndices::default()
+            }],
+            ..NetworkActivityResponse::default()
+        };
+
+        assert!(recent_output_after_step(&activity, 10).is_none());
     }
 
     #[test]

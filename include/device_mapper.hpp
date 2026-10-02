@@ -10,6 +10,7 @@
 #include <webots/TouchSensor.hpp>
 #include <webots/PositionSensor.hpp>
 #include <webots/Node.hpp>
+#include <simulated_motor_response.hpp>
 
 #include <vector>
 #include <string>
@@ -33,10 +34,14 @@ struct DeviceMapping {
     std::vector<std::string> port_names;
     std::vector<double> min_values;
     std::vector<double> max_values;
+    // A device named with an axis suffix contributes only that physical axis.
+    int selected_axis = -1;
+    bool distance_increases_with_range = false;
     // Camera event encoder state (used only when type == Node::CAMERA).
     int camera_retina_rows = 0;
     int camera_retina_cols = 0;
     bool camera_state_initialized = false;
+    bool camera_luminance_gradient = false;
     std::vector<float> camera_curr_log_gray;
     std::vector<float> camera_prev_log_gray;
     std::vector<float> camera_event_state;
@@ -49,6 +54,9 @@ public:
     DeviceMapper() {}
 
     void discover(Robot& robot, int timestep) {
+        timestep_ms_ = std::max(1, timestep);
+        robot_name_ = robot.getName();
+        motor_debug_interval_ = read_env_int("NM_WEBOTS_MOTOR_DEBUG_INTERVAL", 0, 0, 100000);
         camera_retina_cols_ = read_env_int("NM_CAMERA_RETINA_WIDTH", 160, 1, 1024);
         camera_retina_rows_ = read_env_int("NM_CAMERA_RETINA_HEIGHT", 120, 1, 1024);
         dros_camera_retina_cols_ = read_env_int("NM_DROS_CAMERA_RETINA_WIDTH", camera_retina_cols_, 1, 1024);
@@ -90,7 +98,9 @@ public:
             if (type == Node::ACCELEROMETER) {
                 auto s = (Accelerometer*)d;
                 s->enable(timestep);
-                add_sensor(d, type, 3, {name + ".x", name + ".y", name + ".z"}, -20.0, 20.0);
+                const int axis = named_axis(name);
+                if (axis >= 0) add_sensor(d, type, 1, {name}, -20.0, 20.0, axis);
+                else add_sensor(d, type, 3, {name + ".x", name + ".y", name + ".z"}, -20.0, 20.0);
             } else if (type == Node::CAMERA) {
                 auto s = (Camera*)d;
                 s->enable(timestep);
@@ -101,11 +111,22 @@ public:
             } else if (type == Node::GYRO) {
                 auto s = (Gyro*)d;
                 s->enable(timestep);
-                add_sensor(d, type, 3, {name + ".x", name + ".y", name + ".z"}, -10.0, 10.0);
+                const int axis = named_axis(name);
+                if (axis >= 0) add_sensor(d, type, 1, {name}, -10.0, 10.0, axis);
+                else add_sensor(d, type, 3, {name + ".x", name + ".y", name + ".z"}, -10.0, 10.0);
             } else if (type == Node::DISTANCE_SENSOR) {
                 auto s = (DistanceSensor*)d;
                 s->enable(timestep);
-                add_sensor(d, type, 1, {name}, 0.0, s->getMaxValue());
+                add_sensor(d, type, 1, {name}, s->getMinValue(), s->getMaxValue());
+                const int table_size = s->getLookupTableSize();
+                const double* table = s->getLookupTable();
+                if (table && table_size > 1) {
+                    const double near_value = table[1];
+                    const double far_value = table[3 * (table_size - 1) + 1];
+                    sensors_.back().distance_increases_with_range =
+                        std::isfinite(near_value) && std::isfinite(far_value)
+                        && far_value > near_value;
+                }
             } else if (type == Node::LIGHT_SENSOR) {
                 auto s = (LightSensor*)d;
                 s->enable(timestep);
@@ -162,7 +183,7 @@ public:
         for (auto& m : sensors_) {
             if (m.type == Node::ACCELEROMETER) {
                 const double* v = ((Accelerometer*)m.device)->getValues();
-                for (int i = 0; i < 3; ++i) buf[idx++] = normalize(v[i], m.min_values[i], m.max_values[i]);
+                for (int i = 0; i < m.size; ++i) buf[idx++] = normalize(v[m.selected_axis >= 0 ? m.selected_axis : i], m.min_values[i], m.max_values[i]);
             } else if (m.type == Node::CAMERA) {
                 auto c = (Camera*)m.device;
                 const unsigned char* image = c->getImage();
@@ -236,6 +257,16 @@ public:
                     const float prev = m.camera_prev_log_gray[i];
                     const float curr = curr_log_gray[i];
                     const float delta = curr - prev;
+                    const int out_i = cam_base + (2 * i);
+                    if (m.camera_luminance_gradient) {
+                        // The zebrafish model's two 1x1 eye channels are
+                        // luminance and temporal gradient, not ON/OFF events.
+                        buf[(size_t)out_i] = curr;
+                        buf[(size_t)out_i + 1] = std::min(1.0f,
+                            std::fabs(delta) / camera_event_threshold_);
+                        m.camera_prev_log_gray[i] = prev + camera_prev_blend_ * delta;
+                        return;
+                    }
                     float mem = m.camera_event_state[i] * leak_keep + delta;
 
                     float on_event = 0.0f;
@@ -272,7 +303,6 @@ public:
                     }
 
                     m.camera_event_state[i] = std::max(-1.0f, std::min(1.0f, mem));
-                    const int out_i = cam_base + (2 * i);
                     buf[(size_t)out_i] = on_event;
                     buf[(size_t)out_i + 1] = off_event;
 
@@ -282,9 +312,13 @@ public:
                 });
             } else if (m.type == Node::GYRO) {
                 const double* v = ((Gyro*)m.device)->getValues();
-                for (int i = 0; i < 3; ++i) buf[idx++] = normalize(v[i], m.min_values[i], m.max_values[i]);
+                for (int i = 0; i < m.size; ++i) buf[idx++] = normalize(v[m.selected_axis >= 0 ? m.selected_axis : i], m.min_values[i], m.max_values[i]);
             } else if (m.type == Node::DISTANCE_SENSOR) {
-                buf[idx++] = normalize(((DistanceSensor*)m.device)->getValue(), m.min_values[0], m.max_values[0]);
+                // Read polarity from the physical lookup table: a raw value
+                // that rises with range is inverted so nearby stimuli remain
+                // the strong input for either sensor transfer direction.
+                const float raw = normalize(((DistanceSensor*)m.device)->getValue(), m.min_values[0], m.max_values[0]);
+                buf[idx++] = m.distance_increases_with_range ? 1.0f - raw : raw;
             } else if (m.type == Node::LIGHT_SENSOR) {
                 buf[idx++] = normalize(((LightSensor*)m.device)->getValue(), m.min_values[0], m.max_values[0]);
             } else if (m.type == Node::TOUCH_SENSOR) {
@@ -306,14 +340,22 @@ public:
             last_output_.assign(actuators_.size(), 0.5);
         }
 
+        const bool emit_motor_diag = motor_debug_interval_ > 0 &&
+          ++motor_apply_count_ % static_cast<size_t>(motor_debug_interval_) == 0;
+        int physical_motors = 0;
+        int active_motors = 0;
+        int target_mismatches = 0;
+        double max_target_fraction = 0.0;
         int idx = 0;
         for (auto& m : actuators_) {
             if (m.type == Node::ROTATIONAL_MOTOR || m.type == Node::LINEAR_MOTOR) {
                 float val = buf[idx];
                 if (!std::isfinite(val)) val = 0.5f; // Fallback to neutral
 
-                // EMA Smoothing (0.9 prev + 0.1 new)
-                double alpha = 0.1;
+                const double alpha = aarnn::webots::SimulatedMotorResponse::motor_alpha(
+                  m.device->getName(), m.min_values[0], m.max_values[0],
+                  static_cast<Motor*>(m.device)->getMaxVelocity(),
+                  static_cast<float>(timestep_ms_));
                 last_output_[idx] = (1.0 - alpha) * last_output_[idx] + alpha * (double)val;
 
                 double pos = denormalize((float)last_output_[idx], m.min_values[0], m.max_values[0]);
@@ -340,9 +382,31 @@ public:
                     pos = 0.0;
                 }
 
-                ((Motor*)m.device)->setPosition(pos);
+                auto* motor = static_cast<Motor*>(m.device);
+                motor->setPosition(pos);
+                if (emit_motor_diag &&
+                    !aarnn::webots::SimulatedMotorResponse::channel_only(m.device->getName()) &&
+                    !aarnn::webots::SimulatedMotorResponse::passive_lock(m.device->getName()) &&
+                    max_v > min_v) {
+                    physical_motors += 1;
+                    const double accepted = motor->getTargetPosition();
+                    if (!std::isfinite(accepted) || std::fabs(accepted - pos) > 1e-6) {
+                        target_mismatches += 1;
+                    }
+                    const double neutral = (min_v + max_v) * 0.5;
+                    const double fraction = std::fabs(accepted - neutral) /
+                                            ((max_v - min_v) * 0.5);
+                    max_target_fraction = std::max(max_target_fraction, fraction);
+                    if (fraction > 0.01) active_motors += 1;
+                }
                 idx++;
             }
+        }
+        if (emit_motor_diag) {
+            std::cout << "[DeviceMapper] motor diag robot=" << robot_name_
+                      << " active=" << active_motors << "/" << physical_motors
+                      << " max_target_fraction=" << max_target_fraction
+                      << " target_mismatches=" << target_mismatches << std::endl;
         }
     }
 
@@ -368,6 +432,10 @@ private:
     std::vector<double> last_output_;
     int total_s_ = 0;
     int total_o_ = 0;
+    int timestep_ms_ = 32;
+    std::string robot_name_;
+    int motor_debug_interval_ = 0;
+    size_t motor_apply_count_ = 0;
     int camera_retina_rows_ = 120;
     int camera_retina_cols_ = 160;
     int dros_camera_retina_rows_ = 8;
@@ -502,11 +570,18 @@ private:
         rows = read_env_int_str("NM_CAMERA_RETINA_HEIGHT_" + suffix, rows, 1, 1024);
     }
 
-    void add_sensor(Device* d, int type, int size, std::vector<std::string> names, double min_v, double max_v) {
+    static int named_axis(const std::string& name) {
+        if (name.size() < 2 || name[name.size() - 2] != '.') return -1;
+        const char axis = name.back();
+        return axis == 'x' ? 0 : axis == 'y' ? 1 : axis == 'z' ? 2 : -1;
+    }
+
+    void add_sensor(Device* d, int type, int size, std::vector<std::string> names, double min_v, double max_v, int selected_axis = -1) {
         DeviceMapping m;
         m.device = d;
         m.type = type;
         m.size = size;
+        m.selected_axis = selected_axis;
         m.port_names = names;
         for (int i = 0; i < size; ++i) {
             m.min_values.push_back(min_v);
@@ -523,11 +598,19 @@ private:
         m.camera_retina_cols = cols;
         const int cells = rows * cols;
         m.size = cells * 2; // ON + OFF event channel per retina cell
+        const bool zebrafish_left = camera_name == "zebrafish_s_16_eye_left";
+        const bool zebrafish_right = camera_name == "zebrafish_s_18_eye_right";
+        m.camera_luminance_gradient = cells == 1 && (zebrafish_left || zebrafish_right);
         m.port_names.reserve((size_t)m.size);
         const int row_digits = index_digits(rows);
         const int col_digits = index_digits(cols);
         for (int r = 0; r < rows; ++r) {
             for (int c = 0; c < cols; ++c) {
+                if (m.camera_luminance_gradient) {
+                    m.port_names.push_back(zebrafish_left ? "zebrafish_s_16_eye_left_lum" : "zebrafish_s_18_eye_right_lum");
+                    m.port_names.push_back(zebrafish_left ? "zebrafish_s_17_eye_left_grad" : "zebrafish_s_19_eye_right_grad");
+                    continue;
+                }
                 m.port_names.push_back(
                     camera_channel_name(camera_name, "on", r, c, row_digits, col_digits)
                 );

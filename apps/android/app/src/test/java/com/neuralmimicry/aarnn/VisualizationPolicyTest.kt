@@ -37,6 +37,11 @@ class VisualizationPolicyTest {
         assertEquals(9, VisualizationPolicy.highestAvailable(null, snapshot(true, 0.04, 0.006, true)))
         assertEquals(6, VisualizationPolicy.highestAvailable(null, snapshot(true, null, 0.006, true)))
         assertEquals(6, VisualizationPolicy.highestAvailable(null, snapshot(false, 0.04, 0.006, true)))
+        assertEquals(9, VisualizationPolicy.highestAvailable(null, snapshot(true, 0.04, 0.006, false)))
+        val empty = snapshot(true, 0.04, 0.006, false).copy(nodes = emptyList(), edges = emptyList())
+        assertEquals(9, VisualizationPolicy.highestAvailable(null, empty))
+        val unverified = snapshot(true, 0.04, 0.006, true).copy(contactSetVerified = false)
+        assertEquals(8, VisualizationPolicy.highestAvailable(null, unverified))
     }
 
     private fun snapshot(
@@ -55,6 +60,7 @@ class VisualizationPolicyTest {
         complete = true,
         truncated = false,
         volumetricClearanceVerified = clearance,
+        contactSetVerified = true,
         unavailableReason = null,
         region = null,
         membrane = null,

@@ -11,6 +11,8 @@ public actor AarnnRemoteSession {
         public let name: String
         public let running: Bool
         public let totalNeurons: Int
+        public let sensoryNeurons: Int?
+        public let outputNeurons: Int?
         public let distributedNodeCount: Int
 
         enum CodingKeys: String, CodingKey {
@@ -19,8 +21,45 @@ public actor AarnnRemoteSession {
             case networkID = "network_id"
             case name, running
             case totalNeurons = "total_neurons"
+            case sensoryNeurons = "num_sensory_neurons"
+            case outputNeurons = "num_output_neurons"
             case distributedNodeCount = "distributed_node_count"
         }
+    }
+
+    public struct SpikeFrame: Decodable, Sendable {
+        public let step: UInt64
+        public let indices: [Int]
+    }
+
+    public struct Activity: Decodable, Sendable {
+        public let step: UInt64
+        public let simTimeMS: Double
+        public let sensory: [Int]
+        public let output: [Int]
+        public let sensoryHistory: [SpikeFrame]
+        public let outputHistory: [SpikeFrame]
+
+        enum CodingKeys: String, CodingKey {
+            case step, sensory, output
+            case simTimeMS = "sim_time_ms"
+            case sensoryHistory = "sensory_history"
+            case outputHistory = "output_history"
+        }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            step = try values.decode(UInt64.self, forKey: .step)
+            simTimeMS = try values.decode(Double.self, forKey: .simTimeMS)
+            sensory = try values.decodeIfPresent([Int].self, forKey: .sensory) ?? []
+            output = try values.decodeIfPresent([Int].self, forKey: .output) ?? []
+            sensoryHistory = Array((try values.decodeIfPresent([SpikeFrame].self, forKey: .sensoryHistory) ?? []).prefix(128))
+            outputHistory = Array((try values.decodeIfPresent([SpikeFrame].self, forKey: .outputHistory) ?? []).prefix(128))
+        }
+    }
+
+    private struct WorkspaceActivityResponse: Decodable {
+        let activity: Activity
     }
 
     public struct DisplayViews: Decodable, Sendable {
@@ -144,6 +183,7 @@ public actor AarnnRemoteSession {
         public let truncated: Bool
         public let unavailableReason: String?
         public let volumetricClearanceVerified: Bool
+        public let contactSetVerified: Bool
         public let region: DisplayRegion?
         public let membrane: DisplayMembrane?
         public let nodes: [DisplayNode]
@@ -166,12 +206,14 @@ public actor AarnnRemoteSession {
             let region: DisplayRegion?
             let membrane: DisplayMembrane?
             let volumetricClearanceVerified: Bool?
+            let contactSetVerified: Bool?
 
             enum CodingKeys: String, CodingKey {
                 case complete, truncated
                 case unavailableReason = "unavailable_reason"
                 case region, membrane
                 case volumetricClearanceVerified = "volumetric_clearance_verified"
+                case contactSetVerified = "contact_set_verified"
             }
         }
 
@@ -193,6 +235,7 @@ public actor AarnnRemoteSession {
             truncated = coverage?.truncated ?? false
             unavailableReason = coverage?.unavailableReason
             volumetricClearanceVerified = coverage?.volumetricClearanceVerified ?? false
+            contactSetVerified = coverage?.contactSetVerified ?? false
             region = coverage?.region
             membrane = coverage?.membrane
         }
@@ -285,6 +328,15 @@ public actor AarnnRemoteSession {
         let (data, response) = try await session.data(for: URLRequest(url: url))
         try validate(response)
         return data
+    }
+
+    public func workspaceActivity(workspaceID: String, ownerID: String) async throws -> Activity {
+        var components = URLComponents(url: endpoint.appendingPathComponent("api/runtime/workspaces/\(workspaceID)/activity"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "owner", value: ownerID)]
+        guard let url = components?.url else { throw SessionError.invalidEndpoint }
+        let (data, response) = try await session.data(for: URLRequest(url: url))
+        try validate(response)
+        return try JSONDecoder().decode(WorkspaceActivityResponse.self, from: data).activity
     }
 
     /// Fetches the same bounded, versioned presentation contract consumed by

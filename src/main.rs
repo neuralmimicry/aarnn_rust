@@ -945,6 +945,33 @@ fn configured_tokio_worker_threads() -> Option<usize> {
         .filter(|threads| *threads > 0)
 }
 
+fn queue_received_worker_command(
+    pending: &mut std::collections::VecDeque<crate::distributed::proto::NetworkCommand>,
+    in_flight_loads: &std::collections::HashSet<String>,
+    command: crate::distributed::proto::NetworkCommand,
+) -> bool {
+    let is_load = command.r#type
+        == crate::distributed::proto::network_command::CommandType::LoadNetwork as i32;
+    if is_load {
+        if in_flight_loads.contains(&command.network_id) {
+            return false;
+        }
+        if let Some(existing) = pending.iter_mut().find(|existing| {
+            existing.r#type
+                == crate::distributed::proto::network_command::CommandType::LoadNetwork as i32
+                && existing.network_id == command.network_id
+        }) {
+            // The scheduler may revise an assignment while an older load is
+            // still waiting in the local command queue. Keep only its newest
+            // idempotent replacement rather than consuming queue capacity.
+            *existing = command;
+            return true;
+        }
+    }
+    pending.push_back(command);
+    true
+}
+
 #[derive(Debug, Deserialize)]
 struct OrchestratorNetworkSpec {
     network_id: String,
@@ -1246,6 +1273,12 @@ fn load_io_contract_from_path(path: &str) -> Option<NetworkConfig> {
     serde_json::from_str::<NetworkConfig>(&payload).ok()
 }
 
+fn load_required_io_contract_from_path(path: &str) -> anyhow::Result<NetworkConfig> {
+    load_io_contract_from_path(path).ok_or_else(|| {
+        anyhow::anyhow!("failed to load orchestrator startup I/O contract from '{}': expected a readable network config or snapshot", path)
+    })
+}
+
 fn apply_io_contract(target: &mut NetworkConfig, contract: &NetworkConfig) -> bool {
     let mut changed = false;
     // A config file is also used as the optional I/O contract when an
@@ -1351,6 +1384,64 @@ fn align_startup_snapshot_io(
     runner.export_network_json()
 }
 
+fn sim_neuron_model_for_startup_spec(
+    name: &str,
+    izh_type: &str,
+) -> anyhow::Result<sim::NeuronModel> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "lif" => Ok(sim::NeuronModel::Lif),
+        "izh" => Ok(sim::NeuronModel::Izh(IzhikevichParams::from_preset(
+            izh_type, 1.0,
+        ))),
+        "aarnn" => Ok(sim::NeuronModel::Aarnn),
+        other => Err(anyhow::anyhow!(
+            "unsupported neuron model '{}' for startup I/O alignment",
+            other
+        )),
+    }
+}
+
+fn sim_learning_for_startup_spec(name: &str) -> anyhow::Result<sim::Learning> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "stdp" => Ok(sim::Learning::Stdp),
+        "hebb" => Ok(sim::Learning::Hebb),
+        "oja" => Ok(sim::Learning::Oja),
+        "aarnn" => Ok(sim::Learning::Aarnn),
+        other => Err(anyhow::anyhow!(
+            "unsupported learning rule '{}' for startup I/O alignment",
+            other
+        )),
+    }
+}
+
+fn apply_startup_io_contract(
+    cfg: &mut NetworkConfig,
+    snapshot_json: Option<String>,
+    io_contract: Option<&NetworkConfig>,
+    neuron_model: &str,
+    learning_rule: &str,
+    izh_type: &str,
+) -> anyhow::Result<Option<String>> {
+    if let Some(contract) = io_contract {
+        apply_io_contract(cfg, contract);
+    }
+
+    let Some(snapshot_json) = snapshot_json else {
+        return Ok(None);
+    };
+    let neuron_model = sim_neuron_model_for_startup_spec(neuron_model, izh_type)?;
+    let learning = sim_learning_for_startup_spec(learning_rule)?;
+    let aligned = align_startup_snapshot_io(&snapshot_json, cfg, neuron_model, learning)?;
+    Ok(Some(aligned))
+}
+
+fn startup_environment_contract_applies_to_network(
+    network_id: &str,
+    allowed_network_ids: Option<&std::collections::HashSet<String>>,
+) -> bool {
+    allowed_network_ids.is_none_or(|ids| ids.contains(network_id))
+}
+
 /// Stable non-cryptographic fallback for legacy snapshots without `rng_seed`.
 fn stable_snapshot_seed(snapshot_json: &str) -> u64 {
     snapshot_json
@@ -1369,6 +1460,33 @@ fn build_orchestrator_startup_networks(
 ) -> anyhow::Result<Vec<OrchestratorStartupNetwork>> {
     let default_model = args.neuron_model.to_str().to_string();
     let default_learning = args.learning.to_str().to_string();
+    let environment_io_contract = std::env::var("NM_ORCHESTRATOR_STARTUP_IO_CONTRACT")
+        .ok()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            load_required_io_contract_from_path(&path)
+                .with_context(|| format!("invalid NM_ORCHESTRATOR_STARTUP_IO_CONTRACT '{}':", path))
+        })
+        .transpose()?;
+    let environment_io_contract_network_ids = std::env::var(
+        "NM_ORCHESTRATOR_STARTUP_IO_CONTRACT_NETWORK_IDS",
+    )
+    .ok()
+    .map(|raw| {
+        let ids = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|network_id| !network_id.is_empty())
+            .map(str::to_owned)
+            .collect::<std::collections::HashSet<_>>();
+        anyhow::ensure!(
+            !ids.is_empty(),
+            "NM_ORCHESTRATOR_STARTUP_IO_CONTRACT_NETWORK_IDS must list at least one network ID"
+        );
+        Ok::<_, anyhow::Error>(ids)
+    })
+    .transpose()?;
 
     let mut startup_networks = Vec::new();
     if let Ok(raw_specs) = std::env::var("NM_ORCHESTRATOR_NETWORK_SPECS") {
@@ -1427,6 +1545,37 @@ fn build_orchestrator_startup_networks(
                 apply_spec_deployment_overrides(&mut cfg, &spec);
                 apply_deployment_autodetect(&mut cfg, args);
 
+                let config_io_contract = match spec.config_path.as_deref().map(str::trim) {
+                    Some(path) if !path.is_empty() => {
+                        Some(load_required_io_contract_from_path(path).with_context(|| {
+                            format!("invalid startup I/O contract for network '{}':", network_id)
+                        })?)
+                    }
+                    _ => None,
+                };
+                let environment_contract = startup_environment_contract_applies_to_network(
+                    &network_id,
+                    environment_io_contract_network_ids.as_ref(),
+                )
+                .then_some(environment_io_contract.as_ref())
+                .flatten();
+                let io_contract = config_io_contract.as_ref().or(environment_contract);
+                let neuron_model = spec.neuron_model.unwrap_or_else(|| default_model.clone());
+                let learning_rule = spec
+                    .learning_rule
+                    .unwrap_or_else(|| default_learning.clone());
+                let snapshot_json = apply_startup_io_contract(
+                    &mut cfg,
+                    snapshot_json,
+                    io_contract,
+                    &neuron_model,
+                    &learning_rule,
+                    &args.izh_type,
+                )
+                .with_context(|| {
+                    format!("failed to align startup I/O for network '{}'", network_id)
+                })?;
+
                 let cfg_json = serde_json::to_string(&cfg).unwrap_or_default();
                 startup_networks.push(OrchestratorStartupNetwork {
                     network_id,
@@ -1434,10 +1583,8 @@ fn build_orchestrator_startup_networks(
                     desired_aarnn_depth: cfg.aarnn_layer_depth as u32,
                     config_json: cfg_json,
                     snapshot_json,
-                    neuron_model: spec.neuron_model.unwrap_or_else(|| default_model.clone()),
-                    learning_rule: spec
-                        .learning_rule
-                        .unwrap_or_else(|| default_learning.clone()),
+                    neuron_model,
+                    learning_rule,
                 });
             }
         }
@@ -1447,8 +1594,24 @@ fn build_orchestrator_startup_networks(
         let mut cfg = fallback_cfg.clone();
         apply_cli_deployment_overrides(&mut cfg, args);
         apply_deployment_autodetect(&mut cfg, args);
+        let network_id = args.brain_id.clone();
+        let environment_contract = startup_environment_contract_applies_to_network(
+            &network_id,
+            environment_io_contract_network_ids.as_ref(),
+        )
+        .then_some(environment_io_contract.as_ref())
+        .flatten();
+        let snapshot_json = apply_startup_io_contract(
+            &mut cfg,
+            fallback_snapshot_json.map(ToOwned::to_owned),
+            environment_contract,
+            &default_model,
+            &default_learning,
+            &args.izh_type,
+        )
+        .context("failed to align default orchestrator startup I/O")?;
         startup_networks.push(OrchestratorStartupNetwork {
-            network_id: args.brain_id.clone(),
+            network_id,
             num_layers: (cfg.num_hidden_layers + 1) as u32,
             desired_aarnn_depth: cfg.aarnn_layer_depth as u32,
             config_json: fallback_config_json
@@ -1456,7 +1619,7 @@ fn build_orchestrator_startup_networks(
                 .map(ToOwned::to_owned)
                 .or_else(|| serde_json::to_string(&cfg).ok())
                 .unwrap_or_default(),
-            snapshot_json: fallback_snapshot_json.map(ToOwned::to_owned),
+            snapshot_json,
             neuron_model: default_model,
             learning_rule: default_learning,
         });
@@ -4152,7 +4315,9 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
     use crate::causal_transport::proto::causal_data_plane_server::CausalDataPlaneServer;
     use crate::distributed::proto::distributed_neuromorphic_client::DistributedNeuromorphicClient;
     use crate::distributed::proto::stable_checkpoint_transfer_server::StableCheckpointTransferServer;
-    use crate::distributed::proto::{HeartbeatRequest, JoinRequest, NetworkCommandResult};
+    use crate::distributed::proto::{
+        HeartbeatRequest, JoinRequest, NetworkCommand, NetworkCommandResult,
+    };
     use crate::distributed::{
         DistributedNode, ManagedNetwork,
         proto::distributed_neuromorphic_server::DistributedNeuromorphicServer,
@@ -4935,6 +5100,46 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             // carrying an acknowledgement is lost, the orchestrator can
             // safely receive the identical digest-bound result again.
             let mut command_results: Vec<NetworkCommandResult> = Vec::new();
+            let mut pending_commands: std::collections::VecDeque<NetworkCommand> =
+                std::collections::VecDeque::new();
+            let mut in_flight_loads = std::collections::HashSet::new();
+            let (command_tx, mut command_rx) = tokio::sync::mpsc::channel::<NetworkCommand>(128);
+            let (result_tx, mut result_rx) =
+                tokio::sync::mpsc::channel::<NetworkCommandResult>(128);
+            let (load_complete_tx, mut load_complete_rx) =
+                tokio::sync::mpsc::channel::<String>(128);
+            let command_worker_node = node_inner.clone();
+            let mut command_worker_shutdown = shutdown_rx_node.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        changed = command_worker_shutdown.changed() => {
+                            if changed.is_err() || *command_worker_shutdown.borrow() {
+                                break;
+                            }
+                        }
+                        command = command_rx.recv() => {
+                            let Some(command) = command else { break; };
+                            let load_network_id = (command.r#type
+                                == crate::distributed::proto::network_command::CommandType::LoadNetwork as i32)
+                                .then(|| command.network_id.clone());
+                            if let Some(result) = command_worker_node
+                                .handle_command_with_result(command)
+                                .await
+                            {
+                                if result_tx.send(result).await.is_err() {
+                                    break;
+                                }
+                            }
+                            if let Some(network_id) = load_network_id {
+                                if load_complete_tx.send(network_id).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
 
             'connection_manager: loop {
                 if *shutdown_rx_node.borrow() {
@@ -5004,6 +5209,45 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                     }
                     if *shutdown_rx_node.borrow() {
                         return;
+                    }
+                    while let Ok(result) = result_rx.try_recv() {
+                        if !command_results.iter().any(|existing| {
+                            existing.network_id == result.network_id
+                                && existing.request_id == result.request_id
+                        }) {
+                            command_results.push(result);
+                        }
+                    }
+                    while let Ok(network_id) = load_complete_rx.try_recv() {
+                        in_flight_loads.remove(&network_id);
+                    }
+                    while let Some(command) = pending_commands.pop_front() {
+                        let load_network_id = (command.r#type
+                            == crate::distributed::proto::network_command::CommandType::LoadNetwork
+                                as i32)
+                            .then(|| command.network_id.clone());
+                        if load_network_id
+                            .as_ref()
+                            .is_some_and(|network_id| in_flight_loads.contains(network_id))
+                        {
+                            continue;
+                        }
+                        match command_tx.try_send(command) {
+                            Ok(()) => {
+                                if let Some(network_id) = load_network_id {
+                                    in_flight_loads.insert(network_id);
+                                }
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(command)) => {
+                                pending_commands.push_front(command);
+                                break;
+                            }
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(command)) => {
+                                pending_commands.push_front(command);
+                                nm_err!("[error] network command worker queue closed");
+                                break;
+                            }
+                        }
                     }
                     {
                         let mut state = node_inner.state.write().await;
@@ -5108,16 +5352,39 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
                                 state.network_peers.clear();
                                 state.network_sensory_ingress_node.clear();
                             }
-                            let commands = resp.commands;
-                            for cmd in commands {
-                                if let Some(result) =
-                                    node_inner.handle_command_with_result(cmd).await
+                            for command in resp.commands {
+                                queue_received_worker_command(
+                                    &mut pending_commands,
+                                    &in_flight_loads,
+                                    command,
+                                );
+                            }
+                            while let Some(command) = pending_commands.pop_front() {
+                                let load_network_id = (command.r#type
+                                    == crate::distributed::proto::network_command::CommandType::LoadNetwork as i32)
+                                    .then(|| command.network_id.clone());
+                                if load_network_id
+                                    .as_ref()
+                                    .is_some_and(|network_id| in_flight_loads.contains(network_id))
                                 {
-                                    if !command_results.iter().any(|existing| {
-                                        existing.network_id == result.network_id
-                                            && existing.request_id == result.request_id
-                                    }) {
-                                        command_results.push(result);
+                                    continue;
+                                }
+                                match command_tx.try_send(command) {
+                                    Ok(()) => {
+                                        if let Some(network_id) = load_network_id {
+                                            in_flight_loads.insert(network_id);
+                                        }
+                                    }
+                                    Err(tokio::sync::mpsc::error::TrySendError::Full(command)) => {
+                                        pending_commands.push_front(command);
+                                        break;
+                                    }
+                                    Err(tokio::sync::mpsc::error::TrySendError::Closed(
+                                        command,
+                                    )) => {
+                                        pending_commands.push_front(command);
+                                        nm_err!("[error] network command worker queue closed");
+                                        break;
                                     }
                                 }
                             }
@@ -5323,11 +5590,73 @@ mod management_startup_tests {
 }
 
 #[cfg(test)]
+mod worker_command_queue_tests {
+    use super::queue_received_worker_command;
+    use crate::distributed::proto::{NetworkCommand, network_command::CommandType};
+    use std::collections::{HashSet, VecDeque};
+
+    fn load_command(config_json: &'static [u8]) -> NetworkCommand {
+        NetworkCommand {
+            r#type: CommandType::LoadNetwork as i32,
+            network_id: "alpha".to_owned(),
+            config_json: config_json.to_vec(),
+            layers: vec![0, 1],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 3,
+            neuron_model: "aarnn".to_owned(),
+            learning_rule: "aarnn".to_owned(),
+        }
+    }
+
+    #[test]
+    fn repeated_load_delivery_is_bounded_and_pending_assignment_is_replaced() {
+        let mut pending = VecDeque::new();
+        let no_load_in_flight = HashSet::new();
+        let first = load_command(b"snapshot-a");
+
+        assert!(queue_received_worker_command(
+            &mut pending,
+            &no_load_in_flight,
+            first.clone()
+        ));
+        assert!(queue_received_worker_command(
+            &mut pending,
+            &no_load_in_flight,
+            first.clone()
+        ));
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.front(), Some(&first));
+
+        let revised = load_command(b"snapshot-b");
+        assert!(queue_received_worker_command(
+            &mut pending,
+            &no_load_in_flight,
+            revised.clone()
+        ));
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.front(), Some(&revised));
+
+        let load_in_flight = HashSet::from(["alpha".to_owned()]);
+        assert!(!queue_received_worker_command(
+            &mut pending,
+            &load_in_flight,
+            load_command(b"snapshot-c")
+        ));
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.front(), Some(&revised));
+    }
+}
+
+#[cfg(test)]
 mod startup_snapshot_io_tests {
-    use super::{align_startup_snapshot_io, stable_snapshot_seed};
+    use super::{
+        align_startup_snapshot_io, apply_startup_io_contract, stable_snapshot_seed,
+        startup_environment_contract_applies_to_network,
+    };
     use crate::config::{LIFParams, NetworkConfig, STDPParams};
     use crate::runner::{Runner, decode_snapshot_with_profile_backfill};
     use crate::sim;
+    use std::collections::HashSet;
 
     fn zero_width_snapshot() -> String {
         let config = NetworkConfig {
@@ -5348,6 +5677,29 @@ mod startup_snapshot_io_tests {
         );
         runner.rng.seed(0xA0D1_0C0F_2026);
         runner.export_network_json().expect("export test snapshot")
+    }
+
+    fn zero_output_snapshot() -> String {
+        let config = NetworkConfig {
+            num_sensory_neurons: 32,
+            num_hidden_layers: 1,
+            num_hidden_per_layer_initial: 8,
+            num_output_neurons: 0,
+            growth_enabled: false,
+            use_morphology: false,
+            ..NetworkConfig::default()
+        };
+        let mut runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            config,
+            sim::NeuronModel::Lif,
+            sim::Learning::Stdp,
+        );
+        runner.rng.seed(0xA0D1_0C0F_2026);
+        runner
+            .export_network_json()
+            .expect("export zero-output snapshot")
     }
 
     #[test]
@@ -5380,6 +5732,84 @@ mod startup_snapshot_io_tests {
         assert_eq!(runtime.pred_s.len(), 4);
         assert!(runtime.spk_hist_s.iter().all(|frame| frame.len() == 4));
         assert_eq!(runtime.v_o.len(), 3);
+    }
+
+    #[test]
+    fn orchestrator_startup_contract_restores_missing_output_width_deterministically() {
+        let source = zero_output_snapshot();
+        let source_snapshot = decode_snapshot_with_profile_backfill(&source)
+            .expect("decode zero-output source snapshot");
+        assert_eq!(source_snapshot.net.num_sensory_neurons, 32);
+        assert_eq!(source_snapshot.net.num_output_neurons, 0);
+
+        let contract = NetworkConfig {
+            num_sensory_neurons: 32,
+            num_output_neurons: 16,
+            num_hidden_layers: 1,
+            num_hidden_per_layer_initial: 8,
+            growth_enabled: false,
+            use_morphology: false,
+            ..NetworkConfig::default()
+        };
+        let mut first_config = source_snapshot.net.clone();
+        let mut second_config = source_snapshot.net.clone();
+        let first = apply_startup_io_contract(
+            &mut first_config,
+            Some(source.clone()),
+            Some(&contract),
+            "lif",
+            "stdp",
+            "v2",
+        )
+        .expect("apply first startup contract")
+        .expect("aligned snapshot");
+        let second = apply_startup_io_contract(
+            &mut second_config,
+            Some(source),
+            Some(&contract),
+            "lif",
+            "stdp",
+            "v2",
+        )
+        .expect("apply second startup contract")
+        .expect("aligned snapshot");
+
+        assert_eq!(first, second, "snapshot alignment must be reproducible");
+        assert_eq!(first_config.num_sensory_neurons, 32);
+        assert_eq!(first_config.num_output_neurons, 16);
+        let aligned =
+            decode_snapshot_with_profile_backfill(&first).expect("decode aligned startup snapshot");
+        assert_eq!(aligned.net.num_sensory_neurons, 32);
+        assert_eq!(aligned.net.num_output_neurons, 16);
+        assert_eq!((aligned.w_out.rows, aligned.w_out.cols), (16, 8));
+        assert_eq!(
+            aligned
+                .runtime_state
+                .expect("aligned runtime state")
+                .v_o
+                .len(),
+            16
+        );
+    }
+
+    #[test]
+    fn environment_startup_io_contract_can_be_scoped_to_simulated_networks() {
+        let scoped = HashSet::from([
+            "neuralmimicry-shared-snn".to_owned(),
+            "tenant-aarnn".to_owned(),
+        ]);
+        assert!(startup_environment_contract_applies_to_network(
+            "neuralmimicry-shared-snn",
+            Some(&scoped)
+        ));
+        assert!(!startup_environment_contract_applies_to_network(
+            "unrelated-customer-network",
+            Some(&scoped)
+        ));
+        assert!(startup_environment_contract_applies_to_network(
+            "unrelated-customer-network",
+            None
+        ));
     }
 
     #[test]

@@ -35,7 +35,8 @@ def main():
     commands = {
         'contract': ([sys.executable, 'scripts/qa/test_simulator_content.py'], 120),
         'browser': (['node', 'scripts/qa/test_simulator_browser.cjs'], 150),
-        'webots': ([sys.executable, 'scripts/qa/probe_simulator_webots.py'], 180),
+        # Six independent Webots processes run serially; each has a 90 s bound.
+        'webots': ([sys.executable, 'scripts/qa/probe_simulator_webots.py'], 600),
     }
     command, timeout = commands[args.lane]
     base = ROOT / 'target/qa/simulator-content'

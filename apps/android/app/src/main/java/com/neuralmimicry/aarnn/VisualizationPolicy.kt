@@ -32,18 +32,23 @@ internal object VisualizationPolicy {
     }
 
     fun highestAvailable(synthetic: RemoteDisplaySnapshot?, anatomical: RemoteDisplaySnapshot?): Int {
-        if (anatomical == null || anatomical.nodes.isEmpty()) {
+        if (anatomical == null) {
             return if (synthetic?.nodes?.isNotEmpty() == true) 3 else 1
         }
+        if (anatomical.nodes.isEmpty()) {
+            return if (anatomical.complete && anatomical.volumetricClearanceVerified && anatomical.contactSetVerified) 9
+                else if (synthetic?.nodes?.isNotEmpty() == true) 3 else 1
+        }
         var highest = if (anatomical.edges.any { !it.isPath }) 6 else 4
-        if (anatomical.volumetricClearanceVerified && anatomical.edges.any { it.isPath }) {
+        if (anatomical.volumetricClearanceVerified &&
+            (anatomical.edges.any { it.isPath } || anatomical.contactSetVerified)) {
             val somasHavePhysicalRadius = anatomical.nodes.all { (it.somaRadiusMM ?: 0.0) > 0.0 }
             val pathsHavePhysicalRadius = anatomical.edges.filter { it.isPath }.all { it.radius.isFinite() && it.radius > 0.0 }
             if (somasHavePhysicalRadius && pathsHavePhysicalRadius) {
                 // A clearance flag without physical volume radii cannot prove
                 // that the 3D scene is free of overlapping items.
                 highest = 8
-                if (anatomical.markers.isNotEmpty()) highest = 9
+                if (anatomical.complete && anatomical.contactSetVerified) highest = 9
             }
         }
         return highest

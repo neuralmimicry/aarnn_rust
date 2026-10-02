@@ -924,6 +924,42 @@ mod tests {
     }
 
     #[test]
+    fn webots_robot_sensor_widths_encode_into_the_corresponding_neural_input() {
+        let profiles = [
+            (NetworkIoProfile::Celegans, 24),
+            (NetworkIoProfile::Drosophila, 418),
+            (NetworkIoProfile::Drosophila, 418),
+            (NetworkIoProfile::Hexapod, 34),
+            (NetworkIoProfile::Nao, 250),
+            (NetworkIoProfile::ZebraFish, 32),
+        ];
+        for (profile, width) in profiles {
+            let stimulated_index = width / 2;
+            let mut inputs = vec![0.0; width];
+            inputs[stimulated_index] = 1.0;
+            let mut spikes = vec![0; width];
+            encode_profile_inputs_with(
+                profile,
+                &inputs,
+                &mut spikes,
+                || 0.5,
+                &ProfileInputEncoding::default(),
+            );
+            assert_eq!(
+                spikes[stimulated_index], 1,
+                "{profile:?} input was not encoded"
+            );
+            assert!(
+                spikes
+                    .iter()
+                    .enumerate()
+                    .all(|(index, &spike)| index == stimulated_index || spike == 0),
+                "{profile:?} input mapped to the wrong neural channel"
+            );
+        }
+    }
+
+    #[test]
     fn explicit_profile_selector_bypasses_dimension_heuristic() {
         assert_eq!(
             resolve_network_io_profile(NetworkIoProfileSelector::Celegans, 16, 8),

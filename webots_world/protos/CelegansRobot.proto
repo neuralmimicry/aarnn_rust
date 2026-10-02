@@ -2287,12 +2287,20 @@ Solid { name "nm_amphid_1" translation 0.005100 0.002615 -0.006538 rotation 0 1 
       TouchSensor {
         name "celegans_s_06_touch_front"
         type "bumper"
-        translation 0.19 0.0 0.0
+        translation 0.19 0.010 0.0
+        # The contact face sits just beyond the head hull and above the agar,
+        # so resting on the floor is not mistaken for an object push.
+        boundingObject Box {
+          size 0.022 0.010 0.026
+        }
       }
       TouchSensor {
         name "celegans_s_07_touch_rear"
         type "bumper"
-        translation -0.19 0.0 0.0
+        translation -0.19 0.010 0.0
+        boundingObject Box {
+          size 0.022 0.010 0.026
+        }
       }
       # Phototaxis channels.
       LightSensor {

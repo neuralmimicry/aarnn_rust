@@ -84,6 +84,16 @@ pub struct EngineActivity {
     pub sensory: Vec<usize>,
     pub hidden: Vec<Vec<usize>>,
     pub output: Vec<usize>,
+    #[serde(default)]
+    pub sensory_history: Vec<EngineSpikeHistoryFrame>,
+    #[serde(default)]
+    pub output_history: Vec<EngineSpikeHistoryFrame>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EngineSpikeHistoryFrame {
+    pub step: u64,
+    pub indices: Vec<usize>,
 }
 
 /// Bounded, read-only topology projection for management and visualisation
@@ -179,7 +189,29 @@ impl RunnerEngine {
     }
 
     pub fn activity(&self) -> EngineActivity {
-        self.last_activity.clone()
+        let mut activity = self.last_activity.clone();
+        let step = self.runner.t as u64;
+        let frames = |history: &std::collections::VecDeque<ndarray::Array1<i8>>| {
+            history
+                .iter()
+                .take(128)
+                .enumerate()
+                .filter_map(|(offset, frame)| {
+                    step.checked_sub(offset as u64)
+                        .map(|frame_step| EngineSpikeHistoryFrame {
+                            step: frame_step,
+                            indices: frame
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, &spike)| (spike != 0).then_some(index))
+                                .collect(),
+                        })
+                })
+                .collect()
+        };
+        activity.sensory_history = frames(&self.runner.spk_hist_s);
+        activity.output_history = frames(&self.runner.spk_hist_o);
+        activity
     }
 
     /// Return a deterministic, bounded topology projection from the current
@@ -858,6 +890,8 @@ impl RunnerEngine {
             sensory,
             hidden,
             output,
+            sensory_history: Vec::new(),
+            output_history: Vec::new(),
         };
         self.last_activity.clone()
     }
@@ -1375,6 +1409,12 @@ fn live_morphology_display_snapshot(
         });
     }
     drop(add_segments);
+    // The electrical graph can already contain weighted links while physical
+    // synapse routes are still growing. Keep those links available to the
+    // schematic stage-5/6 views without representing them as neurite paths.
+    // A physical route takes precedence for the same pair of neurons.
+    omitted_display_items |=
+        append_missing_live_graph_edges(runner, &samples_by_layer, display_item_limit, &mut edges);
     omitted_paths |= paths.len() >= display_item_limit;
     let mut hash = display_topology_epoch(&layer_counts);
     hash ^= (paths.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
@@ -1667,6 +1707,114 @@ fn add_display_matrix_edges(
     false
 }
 
+#[cfg(all(feature = "morpho", feature = "growth3d"))]
+fn append_missing_live_graph_edges(
+    runner: &Runner,
+    samples_by_layer: &[Vec<usize>],
+    max_edges: usize,
+    edges: &mut Vec<DisplayEdge>,
+) -> bool {
+    let hidden_layers = runner.net.num_hidden_layers;
+    let mut seen = edges
+        .iter()
+        .map(|edge| (edge.source, edge.target))
+        .collect::<std::collections::HashSet<_>>();
+    let mut omitted = false;
+    let mut append = |matrix: &ndarray::Array2<f64>,
+                      source_role: DisplayRole,
+                      target_role: DisplayRole,
+                      source_layer: usize,
+                      target_layer: usize,
+                      kind: &str| {
+        let sources = samples_by_layer
+            .get(source_layer)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let targets = samples_by_layer
+            .get(target_layer)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        for &target in targets {
+            if target >= matrix.nrows() {
+                continue;
+            }
+            for &source in sources {
+                if source >= matrix.ncols()
+                    || !matrix[(target, source)].is_finite()
+                    || matrix[(target, source)] == 0.0
+                {
+                    continue;
+                }
+                let source_id = legacy_display_id(source_role, source_layer, source);
+                let target_id = legacy_display_id(target_role, target_layer, target);
+                if !seen.insert((source_id, target_id)) {
+                    continue;
+                }
+                if edges.len() >= max_edges {
+                    omitted = true;
+                    continue;
+                }
+                edges.push(DisplayEdge {
+                    source: source_id,
+                    target: target_id,
+                    points_mm: Vec::new(),
+                    multiplicity: 1,
+                    kind: format!("graph_{kind}"),
+                });
+            }
+        }
+    };
+    append(
+        &runner.w_in,
+        DisplayRole::Sensory,
+        DisplayRole::Hidden,
+        0,
+        1,
+        "input",
+    );
+    for (layer, matrix) in runner.w_hh_fwd.iter().enumerate() {
+        append(
+            matrix,
+            DisplayRole::Hidden,
+            DisplayRole::Hidden,
+            layer + 1,
+            layer + 2,
+            "forward",
+        );
+    }
+    for (layer, matrix) in runner.w_hh_bwd.iter().enumerate() {
+        append(
+            matrix,
+            DisplayRole::Hidden,
+            DisplayRole::Hidden,
+            layer + 2,
+            layer + 1,
+            "backward",
+        );
+    }
+    for (layer, matrix) in runner.w_hh_rec.iter().enumerate() {
+        append(
+            matrix,
+            DisplayRole::Hidden,
+            DisplayRole::Hidden,
+            layer + 1,
+            layer + 1,
+            "recurrent",
+        );
+    }
+    if hidden_layers > 0 {
+        append(
+            &runner.w_out,
+            DisplayRole::Hidden,
+            DisplayRole::Output,
+            hidden_layers,
+            hidden_layers + 1,
+            "output",
+        );
+    }
+    omitted
+}
+
 fn display_topology_epoch(layer_counts: &[usize]) -> u64 {
     let mut hash = 14695981039346656037u64;
     for count in layer_counts {
@@ -1856,6 +2004,23 @@ mod tests {
             RunnerEngine::uses_superdense_executor(),
             cfg!(feature = "superdense_executor")
         );
+    }
+
+    #[test]
+    fn workspace_activity_history_tracks_admitted_sensory_steps() {
+        let mut spec = EngineSpec::default();
+        spec.net.num_sensory_neurons = 4;
+        let mut engine = RunnerEngine::new(spec).expect("engine");
+        let first = engine.step(Some(&[0, 1, 0, 0]));
+        let activity = engine.activity();
+        assert_eq!(activity.step, first.step);
+        assert_eq!(activity.sensory_history[0].step, activity.step);
+        assert_eq!(activity.sensory_history[0].indices, vec![1]);
+        assert_eq!(activity.output_history[0].step, activity.step);
+        engine.step(Some(&[0, 0, 0, 0]));
+        let next = engine.activity();
+        assert_eq!(next.sensory_history[0].indices, Vec::<usize>::new());
+        assert_eq!(next.sensory_history[1].indices, vec![1]);
     }
 
     #[test]
@@ -2214,5 +2379,48 @@ mod tests {
         );
         anatomical.validate().expect("valid anatomical snapshot");
         synthetic.validate().expect("valid synthetic snapshot");
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    #[test]
+    fn live_anatomical_view_keeps_weighted_graph_links_before_synapses_grow() {
+        let mut spec = EngineSpec::default();
+        spec.net.num_sensory_neurons = 0;
+        spec.net.num_hidden_layers = 2;
+        spec.net.num_hidden_per_layer_initial = 1;
+        spec.net.num_output_neurons = 0;
+        spec.net.use_morphology = true;
+        let mut engine = RunnerEngine::new(spec).expect("engine");
+        let soma = |layer, x| crate::morphology::Soma {
+            id: 0,
+            layer,
+            pos: crate::morphology::Point3 { x, y: 0.0, z: 0.0 },
+            stimuli: 0.0,
+            atp: 1.0,
+            organelles: Vec::new(),
+            prev_err: Default::default(),
+            integral_err: Default::default(),
+            region_name: None,
+            type_name: None,
+        };
+        engine.runner.morph.somas = vec![vec![soma(0, -0.25)], vec![soma(1, 0.25)]];
+        engine.runner.morph.synapses.clear();
+        engine.runner.w_hh_fwd[0][(0, 0)] = 0.75;
+
+        let anatomical = engine
+            .display_snapshot(DisplayMode::Anatomical, 1, 64, 64)
+            .expect("anatomical snapshot");
+        assert!(anatomical.edges.iter().any(|edge| {
+            edge.source == legacy_display_id(DisplayRole::Hidden, 1, 0)
+                && edge.target == legacy_display_id(DisplayRole::Hidden, 2, 0)
+                && edge.kind == "graph_forward"
+                && edge.points_mm.is_empty()
+        }));
+        assert!(!anatomical.coverage.volumetric_clearance_verified);
+        assert_eq!(
+            crate::visualization::highest_supported_stage(None, Some(&anatomical)),
+            Some(crate::visualization::VisualizationStage::AnatomicalBranchingEdges),
+        );
+        anatomical.validate().expect("valid anatomical snapshot");
     }
 }

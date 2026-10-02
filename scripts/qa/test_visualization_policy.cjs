@@ -42,9 +42,25 @@ const anatomical = {
   edges: [{ source: {}, target: {} }],
   paths: [{ radius_mm: 0.006 }],
   markers: [{ kind: "synapse" }],
-  coverage: { volumetric_clearance_verified: true },
+  coverage: { complete: true, volumetric_clearance_verified: true, contact_set_verified: true },
 };
 assert.equal(policy.highestSupported({ nodes: [{}] }, anatomical), 9);
+assert.equal(policy.highestSupported(null, {
+  ...anatomical,
+  paths: [],
+  markers: [],
+}), 9, "a verified empty contact set needs no invented path or marker");
+assert.equal(policy.highestSupported(null, {
+  ...anatomical,
+  nodes: [],
+  edges: [],
+  paths: [],
+  markers: [],
+}), 9, "a verified empty brain retains stage-nine inspection");
+assert.equal(policy.highestSupported(null, {
+  ...anatomical,
+  coverage: { complete: true, volumetric_clearance_verified: true },
+}), 8, "old snapshots with markers do not prove complete contact coverage");
 assert.equal(policy.highestSupported({ nodes: [{}] }, {
   ...anatomical,
   nodes: [{ }],

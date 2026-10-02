@@ -110,15 +110,30 @@ pub fn highest_supported_stage(
     anatomical: Option<&DisplaySnapshot>,
 ) -> Option<VisualizationStage> {
     let has_synthetic = synthetic.is_some_and(|snapshot| !snapshot.nodes.is_empty());
-    let Some(anatomical) = anatomical.filter(|snapshot| !snapshot.nodes.is_empty()) else {
+    let Some(anatomical) = anatomical else {
         return has_synthetic.then_some(VisualizationStage::SyntheticNeurons);
     };
+
+    // A verified empty brain has no soma, path or contact to render, but its
+    // contact inspection stage is still a valid, explicitly empty view.
+    if anatomical.nodes.is_empty() {
+        return if anatomical.coverage.complete
+            && anatomical.coverage.volumetric_clearance_verified
+            && anatomical.coverage.contact_set_verified
+        {
+            Some(VisualizationStage::AnatomicalContacts)
+        } else {
+            has_synthetic.then_some(VisualizationStage::SyntheticNeurons)
+        };
+    }
 
     let mut highest = VisualizationStage::AnatomicalPixels;
     if !anatomical.edges.is_empty() {
         highest = VisualizationStage::AnatomicalBranchingEdges;
     }
-    if anatomical.coverage.volumetric_clearance_verified && !anatomical.paths.is_empty() {
+    if anatomical.coverage.volumetric_clearance_verified
+        && (!anatomical.paths.is_empty() || anatomical.coverage.contact_set_verified)
+    {
         let physical_somas = anatomical.nodes.iter().all(|node| {
             node.soma_radius_mm
                 .is_some_and(|radius| radius.is_finite() && radius > 0.0)
@@ -132,7 +147,7 @@ pub fn highest_supported_stage(
         // witness before exposing any volumetric stage.
         if physical_somas && physical_neurites {
             highest = VisualizationStage::AnatomicalVolumes;
-            if !anatomical.markers.is_empty() {
+            if anatomical.coverage.complete && anatomical.coverage.contact_set_verified {
                 highest = VisualizationStage::AnatomicalContacts;
             }
         }
@@ -397,6 +412,114 @@ mod tests {
             highest_supported_stage(None, Some(&anatomical)),
             Some(VisualizationStage::AnatomicalBranchingEdges),
             "a clearance flag without physical soma radii is not sufficient evidence",
+        );
+    }
+
+    #[test]
+    fn verified_empty_contact_set_supports_stage_nine_without_invented_markers() {
+        use crate::morphology_contract::{DisplayMode, DisplayProvenance};
+
+        let mut empty = DisplaySnapshot::bounded_with_paths(
+            1,
+            1,
+            1,
+            1,
+            DisplayMode::Anatomical,
+            DisplayProvenance::ProceduralAnatomy,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            8,
+            8,
+            None,
+        )
+        .unwrap();
+        assert!(empty.coverage.complete);
+        assert_eq!(highest_supported_stage(None, Some(&empty)), None);
+        empty.coverage.volumetric_clearance_verified = true;
+        assert_eq!(highest_supported_stage(None, Some(&empty)), None);
+        empty.coverage.contact_set_verified = true;
+        assert_eq!(
+            highest_supported_stage(None, Some(&empty)),
+            Some(VisualizationStage::AnatomicalContacts)
+        );
+        assert!(empty.nodes.is_empty());
+        assert!(empty.paths.is_empty());
+        assert!(empty.markers.is_empty());
+        empty.coverage.complete = false;
+        assert_eq!(highest_supported_stage(None, Some(&empty)), None);
+
+        let clipped = DisplaySnapshot::bounded_with_paths(
+            1,
+            1,
+            1,
+            2,
+            DisplayMode::Anatomical,
+            DisplayProvenance::ProceduralAnatomy,
+            None,
+            Vec::new(),
+            vec![crate::morphology_contract::DisplayEdge {
+                source: crate::morphology_contract::AnatomicalId::new(1, 1).unwrap(),
+                target: crate::morphology_contract::AnatomicalId::new(2, 1).unwrap(),
+                points_mm: Vec::new(),
+                multiplicity: 1,
+                kind: "unresolved".to_owned(),
+            }],
+            Vec::new(),
+            8,
+            8,
+            None,
+        )
+        .unwrap();
+        assert!(!clipped.coverage.complete);
+        assert!(clipped.coverage.truncated);
+    }
+
+    #[test]
+    fn physical_scene_needs_complete_contact_witness_for_stage_nine() {
+        use crate::morphology_contract::{
+            AnatomicalId, AnatomicalKind, DisplayMode, DisplayNode, DisplayProvenance, DisplayRole,
+            Vec3,
+        };
+
+        let mut scene = DisplaySnapshot::bounded_with_paths(
+            1,
+            1,
+            1,
+            1,
+            DisplayMode::Anatomical,
+            DisplayProvenance::ProceduralAnatomy,
+            None,
+            vec![DisplayNode {
+                id: AnatomicalId::new(1, 1).unwrap(),
+                role: DisplayRole::Hidden,
+                layer: Some(0),
+                position_mm: Vec3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                kind: AnatomicalKind::Soma,
+                soma_radius_mm: Some(0.04),
+                colour_slot: 0,
+            }],
+            Vec::new(),
+            Vec::new(),
+            8,
+            8,
+            None,
+        )
+        .unwrap();
+        scene.coverage.volumetric_clearance_verified = true;
+        assert_eq!(
+            highest_supported_stage(None, Some(&scene)),
+            Some(VisualizationStage::AnatomicalPixels)
+        );
+        scene.coverage.contact_set_verified = true;
+        assert_eq!(
+            highest_supported_stage(None, Some(&scene)),
+            Some(VisualizationStage::AnatomicalContacts)
         );
     }
 }

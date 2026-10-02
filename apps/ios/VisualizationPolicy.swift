@@ -48,11 +48,16 @@ enum AarnnVisualizationPolicy {
         synthetic: AarnnRemoteSession.DisplaySnapshot?,
         anatomical: AarnnRemoteSession.DisplaySnapshot?
     ) -> Int {
-        guard let anatomical, !anatomical.nodes.isEmpty else {
+        guard let anatomical else {
             return synthetic?.nodes.isEmpty == false ? 3 : 1
         }
+        if anatomical.nodes.isEmpty {
+            return anatomical.complete && anatomical.volumetricClearanceVerified && anatomical.contactSetVerified
+                ? 9 : (synthetic?.nodes.isEmpty == false ? 3 : 1)
+        }
         var highest = anatomical.edges.isEmpty ? 4 : 6
-        guard anatomical.volumetricClearanceVerified, !anatomical.paths.isEmpty else { return highest }
+        guard anatomical.volumetricClearanceVerified,
+              !anatomical.paths.isEmpty || anatomical.contactSetVerified else { return highest }
         let physicalSomas = anatomical.nodes.allSatisfy {
             guard let radius = $0.somaRadiusMM else { return false }
             return radius.isFinite && radius > 0
@@ -62,7 +67,7 @@ enum AarnnVisualizationPolicy {
             return radius.isFinite && radius > 0
         }
         if physicalSomas && physicalNeurites {
-            highest = anatomical.markers.isEmpty ? 8 : 9
+            highest = anatomical.complete && anatomical.contactSetVerified ? 9 : 8
         }
         return highest
     }

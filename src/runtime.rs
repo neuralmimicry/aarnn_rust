@@ -1922,7 +1922,8 @@ impl RuntimeManager {
                         .engine
                         .lock()
                         .map_err(|_| anyhow!("workspace engine lock poisoned"))?;
-                    let activity = engine.step(None);
+                    engine.step(None);
+                    let activity = engine.activity();
                     let status = engine.status();
                     handle_for_worker.record_step_time(step_started.elapsed());
                     let should_persist =
@@ -1973,7 +1974,8 @@ impl RuntimeManager {
                 .engine
                 .lock()
                 .map_err(|_| anyhow!("workspace engine lock poisoned"))?;
-            let activity = engine.step(None);
+            engine.step(None);
+            let activity = engine.activity();
             let status = engine.status();
             handle_for_step.record_step_time(step_started.elapsed());
             *handle_for_step.status_cache.blocking_write() = status;

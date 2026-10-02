@@ -22,6 +22,7 @@ CLEANED_UP=0
 LOCAL_RUST_UI_LOG=""
 WEBOTS_RECORD_WORLD_FILE=""
 WEBOTS_RECORD_PROGRESS_PID=""
+STARTUP_SNAPSHOT_DIR=""
 
 register_supervised_pid() {
     local pid="$1"
@@ -137,6 +138,10 @@ EOS
     if [ -n "${WEBOTS_RECORD_WORLD_FILE:-}" ]; then
         rm -f "$WEBOTS_RECORD_WORLD_FILE" "${WEBOTS_RECORD_WORLD_FILE%.*}.wbproj" 2>/dev/null || true
     fi
+    if [ -n "$STARTUP_SNAPSHOT_DIR" ] && [ -d "$STARTUP_SNAPSHOT_DIR" ]; then
+        rm -f -- "$STARTUP_SNAPSHOT_DIR"/*.snapshot.json
+        rmdir -- "$STARTUP_SNAPSHOT_DIR" 2>/dev/null || true
+    fi
 }
 
 trap 'exit 0' SIGINT SIGTERM
@@ -224,9 +229,10 @@ Options:
   --no-webots-record-progress
                            Disable console recording progress.
   --skip-controller-build  Skip preflight build/check of nao_nn_controller_uds.
-  --connect-timeout <sec>  Timeout waiting for controller brain connections (default: 60).
+  --connect-timeout <sec>  Timeout waiting for neural worker startup (default: 60).
   --cluster-distribution-timeout <sec>
-                           Timeout waiting for remote cluster distribution per network (default: 300).
+                           Timeout waiting for remote cluster distribution per network and,
+                           by default, managed Webots input readiness (default: 300).
   --help                   Show this help.
 
 Environment overrides:
@@ -238,7 +244,8 @@ Environment overrides:
   NM_IPC_FORCE_AER, NM_IPC_DISABLE_AER, NM_IPC_MAX_RAW_BYTES,
   NM_IPC_AER_THRESHOLD, NM_IPC_AER_MAX_EVENTS, NM_IPC_AER_MAX_PACKET_BYTES,
   START_WEBOTS, WEBOTS_BIN, WEBOTS_MODE, WEBOTS_HEADLESS, WEBOTS_CONNECT_TIMEOUT,
-  WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT, NM_WEBOTS_RECORD, NM_WEBOTS_RECORD_FILE,
+  WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT, WEBOTS_CONTROLLER_CONNECT_TIMEOUT,
+  NM_WEBOTS_IPC_STARTUP_TIMEOUT_SECS, NM_WEBOTS_RECORD, NM_WEBOTS_RECORD_FILE,
   NM_WEBOTS_RECORD_WIDTH, NM_WEBOTS_RECORD_HEIGHT, NM_WEBOTS_RECORD_DURATION_MS,
   NM_WEBOTS_RECORD_QUALITY, NM_WEBOTS_RECORD_ACCELERATION, NM_WEBOTS_RECORD_CODEC,
   NM_WEBOTS_RECORD_PROGRESS, NM_WEBOTS_RECORD_PROGRESS_INTERVAL_MS,
@@ -809,6 +816,26 @@ if ! [[ "$WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
+# The controller may connect before a large network's sensory bridge is
+# published. Keep its deadline and the IPC frame-zero retry finite and long
+# enough for post-registration placement/load work.
+WEBOTS_CONTROLLER_CONNECT_TIMEOUT="${WEBOTS_CONTROLLER_CONNECT_TIMEOUT:-$((WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT + 60))}"
+if ! [[ "$WEBOTS_CONTROLLER_CONNECT_TIMEOUT" =~ ^[0-9]+$ ]]; then
+    echo "Invalid WEBOTS_CONTROLLER_CONNECT_TIMEOUT '$WEBOTS_CONTROLLER_CONNECT_TIMEOUT' (must be a non-negative integer)."
+    exit 1
+fi
+if [ -z "${NM_WEBOTS_IPC_STARTUP_TIMEOUT_SECS+x}" ]; then
+    NM_WEBOTS_IPC_STARTUP_TIMEOUT_SECS="$WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT"
+    if [ "$NM_WEBOTS_IPC_STARTUP_TIMEOUT_SECS" -eq 0 ]; then
+        NM_WEBOTS_IPC_STARTUP_TIMEOUT_SECS=120
+    fi
+fi
+if ! [[ "$NM_WEBOTS_IPC_STARTUP_TIMEOUT_SECS" =~ ^[0-9]+$ ]] || [ "$NM_WEBOTS_IPC_STARTUP_TIMEOUT_SECS" -lt 1 ] || [ "$NM_WEBOTS_IPC_STARTUP_TIMEOUT_SECS" -gt 3600 ]; then
+    echo "Invalid NM_WEBOTS_IPC_STARTUP_TIMEOUT_SECS '$NM_WEBOTS_IPC_STARTUP_TIMEOUT_SECS' (use 1..3600)."
+    exit 1
+fi
+export NM_WEBOTS_IPC_STARTUP_TIMEOUT_SECS
+
 for pair in \
     "NM_WEBOTS_RECORD_WIDTH:$WEBOTS_RECORD_WIDTH" \
     "NM_WEBOTS_RECORD_HEIGHT:$WEBOTS_RECORD_HEIGHT" \
@@ -1092,6 +1119,35 @@ network_for_brain() {
         printf "%s" "${NETWORK_FILE_MAP[$brain]}"
     else
         printf "%s" "${NETWORK_FILE:-}"
+    fi
+}
+
+pin_local_cluster_startup_snapshots() {
+    [ "$RUNTIME" = "cluster" ] && [ "$REMOTE_COMPUTE" -eq 0 ] || return 0
+
+    local brain source pinned bytes index=0
+    for brain in "${BRAINS[@]}"; do
+        source="$(network_for_brain "$brain")"
+        [ -n "$source" ] || continue
+        if [ -z "$STARTUP_SNAPSHOT_DIR" ]; then
+            STARTUP_SNAPSHOT_DIR="$(mktemp -d "$(abs_path_from_root "$LOG_DIR")/startup-snapshots.XXXXXX")" || {
+                echo "Failed to allocate a private Webots startup snapshot directory."
+                return 1
+            }
+        fi
+        pinned="$STARTUP_SNAPSHOT_DIR/brain-${index}.snapshot.json"
+        if ! cp --reflink=auto -- "$source" "$pinned"; then
+            echo "Failed to pin the startup snapshot for brain '$brain': $source"
+            return 1
+        fi
+        NETWORK_FILE_MAP["$brain"]="$pinned"
+        bytes="$(stat -c%s "$pinned")"
+        echo "Pinned startup snapshot for '$brain': ${bytes} bytes (workspace autosave remains separate)"
+        index=$((index + 1))
+    done
+    local primary_brain="${BRAINS[0]}"
+    if [ -n "${NETWORK_FILE_MAP[$primary_brain]+x}" ]; then
+        NETWORK_FILE="${NETWORK_FILE_MAP[$primary_brain]}"
     fi
 }
 
@@ -2046,27 +2102,6 @@ wait_for_socket() {
     return 1
 }
 
-wait_for_log_line() {
-    local path="$1"
-    local needle="$2"
-    local timeout_s="${3:-$WEBOTS_CONNECT_TIMEOUT}"
-    local watched_pid="${4:-}"
-    if ! [[ "$timeout_s" =~ ^[0-9]+$ ]]; then
-        timeout_s=60
-    fi
-    local deadline=$((SECONDS + timeout_s))
-    while [ "$SECONDS" -lt "$deadline" ]; do
-        if [ -f "$path" ] && grep -Fq -- "$needle" "$path"; then
-            return 0
-        fi
-        if [ -n "$watched_pid" ] && ! kill -0 "$watched_pid" 2>/dev/null; then
-            return 1
-        fi
-        sleep 0.1
-    done
-    return 1
-}
-
 run_diag_for_brain() {
     local brain="$1"
     local socket_path="$2"
@@ -2400,7 +2435,7 @@ start_cluster_runtime() {
             "$bin"
             --orchestrator
             --brain-id "$brain"
-            --grpc-addr "0.0.0.0:$orch_port"
+            --grpc-addr "127.0.0.1:$orch_port"
             "${EXECUTION_ARGS[@]}"
             --ipc
             --ui
@@ -2449,6 +2484,7 @@ start_cluster_runtime() {
     done
     local orch_cmd=(
         env
+        "NM_UI_PREFERRED_NETWORK_ID=${NM_UI_PREFERRED_NETWORK_ID:-${BRAINS[0]}}"
         "NM_ORCHESTRATOR_NETWORK_SPECS=$orch_specs_json"
         "NM_IPC_NODE_IDS=$ipc_node_ids"
         "NM_DISTRIBUTE_STARTUP_SNAPSHOT=$DISTRIBUTE_STARTUP_SNAPSHOT"
@@ -2462,7 +2498,7 @@ start_cluster_runtime() {
         "$bin"
         --orchestrator
         --brain-id orchestrator
-        --grpc-addr "0.0.0.0:$orch_port"
+        --grpc-addr "127.0.0.1:$orch_port"
         --orchestrator-addr "http://127.0.0.1:$orch_port"
         "${EXECUTION_ARGS[@]}"
     )
@@ -2507,7 +2543,7 @@ start_cluster_runtime() {
             --node
             --node-id "${brain}_ipc"
             --brain-id "$brain"
-            --grpc-addr "0.0.0.0:$node_port"
+            --grpc-addr "127.0.0.1:$node_port"
             --orchestrator-addr "http://127.0.0.1:$orch_port"
             "${EXECUTION_ARGS[@]}"
             --ipc
@@ -2566,6 +2602,10 @@ start_cluster_runtime() {
     local extra_workers=$((NODE_COUNT - ${#BRAINS[@]}))
     local extra_index=1
     local worker_brain="${BRAINS[0]}"
+    local -a extra_worker_ids=()
+    local -a extra_worker_ports=()
+    local -a extra_worker_logs=()
+    local -a extra_worker_pids=()
     while [ "$extra_index" -le "$extra_workers" ]; do
         local node_port
         node_port="$(find_free_port "$node_port_start")" || {
@@ -2592,7 +2632,7 @@ start_cluster_runtime() {
             --node
             --node-id "$worker_id"
             --brain-id "$worker_brain"
-            --grpc-addr "0.0.0.0:$node_port"
+            --grpc-addr "127.0.0.1:$node_port"
             --orchestrator-addr "http://127.0.0.1:$orch_port"
             "${EXECUTION_ARGS[@]}"
         )
@@ -2611,19 +2651,57 @@ start_cluster_runtime() {
         local node_pid="$!"
         PIDS+=("$node_pid")
         register_supervised_pid "$node_pid" "worker/$worker_id"
-        if ! wait_for_log_line "$log_file" "Successfully joined orchestrator" "$WEBOTS_CONNECT_TIMEOUT" "$node_pid"; then
-            echo "Extra worker '$worker_id' did not register with the orchestrator within ${WEBOTS_CONNECT_TIMEOUT}s"
-            echo "See log: $log_file"
-            tail -n 40 "$log_file" || true
-            exit 1
-        fi
-
-        echo "Worker '$worker_id' ready:"
-        echo "  node gRPC: $node_port"
-        echo "  log: $log_file"
-        cluster_node_ids+=("$worker_id")
+        extra_worker_ids+=("$worker_id")
+        extra_worker_ports+=("$node_port")
+        extra_worker_logs+=("$log_file")
+        extra_worker_pids+=("$node_pid")
         extra_index=$((extra_index + 1))
     done
+
+    # All extra workers load the same pinned startup snapshot concurrently.
+    # A slow worker must not defer another worker's process start or extend the
+    # bounded registration deadline by serialising separate waits.
+    local -a registered=()
+    local pending=${#extra_worker_ids[@]}
+    local worker_deadline=$((SECONDS + WEBOTS_CONNECT_TIMEOUT))
+    local next_progress=$((SECONDS + 30))
+    local i
+    for i in "${!extra_worker_ids[@]}"; do
+        registered[$i]=0
+    done
+    while [ "$pending" -gt 0 ]; do
+        for i in "${!extra_worker_ids[@]}"; do
+            [ "${registered[$i]}" -eq 0 ] || continue
+            if grep -Fq -- "Successfully joined orchestrator" "${extra_worker_logs[$i]}" 2>/dev/null; then
+                registered[$i]=1
+                pending=$((pending - 1))
+                echo "Worker '${extra_worker_ids[$i]}' ready:"
+                echo "  node gRPC: ${extra_worker_ports[$i]}"
+                echo "  log: ${extra_worker_logs[$i]}"
+            elif ! pid_is_running "${extra_worker_pids[$i]}"; then
+                echo "Extra worker '${extra_worker_ids[$i]}' exited before registering."
+                echo "See log: ${extra_worker_logs[$i]}"
+                tail -n 40 "${extra_worker_logs[$i]}" || true
+                exit 1
+            fi
+        done
+        [ "$pending" -gt 0 ] || break
+        if [ "$SECONDS" -ge "$worker_deadline" ]; then
+            for i in "${!extra_worker_ids[@]}"; do
+                [ "${registered[$i]}" -eq 0 ] || continue
+                echo "Extra worker '${extra_worker_ids[$i]}' did not register within ${WEBOTS_CONNECT_TIMEOUT}s."
+                echo "See log: ${extra_worker_logs[$i]}"
+                tail -n 40 "${extra_worker_logs[$i]}" || true
+            done
+            exit 1
+        fi
+        if [ "$SECONDS" -ge "$next_progress" ]; then
+            echo "Still waiting for $pending extra worker(s) to register; all remaining processes are alive."
+            next_progress=$((SECONDS + 30))
+        fi
+        sleep 1
+    done
+    cluster_node_ids+=("${extra_worker_ids[@]}")
 
     echo "Orchestrator ready:"
     echo "  gRPC: $orch_port"
@@ -3348,6 +3426,7 @@ if [ "$START_WEBOTS" -eq 1 ] && [ "$WEBOTS_RECORD" -eq 1 ] && [ -z "${DISPLAY:-}
 fi
 
 mkdir -p "$LOG_DIR"
+pin_local_cluster_startup_snapshots
 if [ "$WEBOTS_RECORD" -eq 1 ]; then
     if [ -z "$WEBOTS_RECORD_FILE" ]; then
         WEBOTS_RECORD_FILE="$LOG_DIR/webots_recording.mp4"
@@ -3452,6 +3531,8 @@ if [ "$START_WEBOTS" -eq 1 ]; then
     echo "  webots headless rendering: $WEBOTS_HEADLESS"
     echo "  skip controller build: $SKIP_CONTROLLER_BUILD"
     echo "  connect timeout (s): $WEBOTS_CONNECT_TIMEOUT"
+    echo "  controller connect timeout (s): $WEBOTS_CONTROLLER_CONNECT_TIMEOUT"
+    echo "  IPC managed input startup timeout (s): $NM_WEBOTS_IPC_STARTUP_TIMEOUT_SECS"
 fi
 echo
 
@@ -3508,7 +3589,7 @@ if [ "$START_WEBOTS" -eq 1 ]; then
         exit 1
     fi
     echo "Waiting for Webots controller to connect to NN sockets..."
-    if ! wait_for_webots_connections "$WEBOTS_CONNECT_TIMEOUT"; then
+    if ! wait_for_webots_connections "$WEBOTS_CONTROLLER_CONNECT_TIMEOUT"; then
         exit 1
     fi
 fi

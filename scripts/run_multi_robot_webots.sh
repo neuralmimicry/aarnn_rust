@@ -1464,14 +1464,14 @@ for f in targets:
 PY
 
   # Per-camera retina override: zebrafish eyes are 1×1-pixel cameras processed
-  # by the DeviceMapper camera event encoder (2 channels per camera = 4 total,
-  # mapping to sensory channels 16–17 (left eye ON/OFF) and 18–19 (right eye)).
-  NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_EYE_LEFT="${NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_EYE_LEFT:-1}"
-  NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_EYE_LEFT="${NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_EYE_LEFT:-1}"
-  NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_EYE_RIGHT="${NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_EYE_RIGHT:-1}"
-  NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_EYE_RIGHT="${NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_EYE_RIGHT:-1}"
-  export NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_EYE_LEFT NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_EYE_LEFT
-  export NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_EYE_RIGHT NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_EYE_RIGHT
+  # by DeviceMapper as luminance and temporal-gradient channels (2 per camera,
+  # mapping to sensory channels 16–17 on the left and 18–19 on the right).
+  NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_S_16_EYE_LEFT="${NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_S_16_EYE_LEFT:-1}"
+  NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_S_16_EYE_LEFT="${NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_S_16_EYE_LEFT:-1}"
+  NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_S_18_EYE_RIGHT="${NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_S_18_EYE_RIGHT:-1}"
+  NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_S_18_EYE_RIGHT="${NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_S_18_EYE_RIGHT:-1}"
+  export NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_S_16_EYE_LEFT NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_S_16_EYE_LEFT
+  export NM_CAMERA_RETINA_WIDTH_ZEBRAFISH_S_18_EYE_RIGHT NM_CAMERA_RETINA_HEIGHT_ZEBRAFISH_S_18_EYE_RIGHT
 
   # AER transport recommended for the larger zebrafish network
   NM_IPC_FORCE_AER="${NM_IPC_FORCE_AER:-1}"
@@ -1818,42 +1818,31 @@ fi
 
 AUTO_CONNECT_TIMEOUT=""
 AUTO_CONNECT_REASON=""
+# Snapshot bytes understate the cost of rebuilding morphology and initialising
+# a compute backend before a worker can join.  A 4 MB hexapod joined in ~51 s;
+# the saved 12 MB hexapod needed ~185 s.  Give each worker an independent,
+# bounded startup budget; explicit environment/CLI timeouts still win.
+MODEL_STARTUP_TIMEOUT=$((MAX_NETWORK_MB * 30))
+if [ "$MODEL_STARTUP_TIMEOUT" -lt 120 ]; then
+  MODEL_STARTUP_TIMEOUT=120
+elif [ "$MODEL_STARTUP_TIMEOUT" -gt 1800 ]; then
+  MODEL_STARTUP_TIMEOUT=1800
+fi
 if [ -z "${WEBOTS_CONNECT_TIMEOUT+x}" ] && ! pass_through_has_arg "--connect-timeout"; then
-  if [ "$MAX_NETWORK_BYTES" -ge $((512 * 1024 * 1024)) ]; then
-    AUTO_CONNECT_TIMEOUT=300
-  elif [ "$MAX_NETWORK_BYTES" -ge $((256 * 1024 * 1024)) ]; then
-    AUTO_CONNECT_TIMEOUT=240
-  elif [ "$MAX_NETWORK_BYTES" -ge $((128 * 1024 * 1024)) ]; then
-    AUTO_CONNECT_TIMEOUT=180
-  elif [ "$MAX_NETWORK_BYTES" -ge $((32 * 1024 * 1024)) ]; then
-    AUTO_CONNECT_TIMEOUT=120
-  else
-    AUTO_CONNECT_TIMEOUT=60
-  fi
-
-  if [ "$MAX_NETWORK_MB" -gt 0 ]; then
-    AUTO_CONNECT_REASON="max snapshot ${MAX_NETWORK_MB}MB"
-  fi
+  AUTO_CONNECT_TIMEOUT="$MODEL_STARTUP_TIMEOUT"
+  AUTO_CONNECT_REASON="max snapshot ${MAX_NETWORK_MB}MB; includes model/backend initialisation"
 fi
 
 AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=""
 AUTO_CLUSTER_DISTRIBUTION_REASON=""
 if [ -z "${WEBOTS_CLUSTER_DISTRIBUTION_TIMEOUT+x}" ] && ! pass_through_has_arg "--cluster-distribution-timeout"; then
-  if [ "$MAX_NETWORK_BYTES" -ge $((512 * 1024 * 1024)) ]; then
-    AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=1800
-  elif [ "$MAX_NETWORK_BYTES" -ge $((256 * 1024 * 1024)) ]; then
-    AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=1200
-  elif [ "$MAX_NETWORK_BYTES" -ge $((128 * 1024 * 1024)) ]; then
-    AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=900
-  elif [ "$MAX_NETWORK_BYTES" -ge $((32 * 1024 * 1024)) ]; then
-    AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=600
-  else
+  AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=$((MODEL_STARTUP_TIMEOUT * 2))
+  if [ "$AUTO_CLUSTER_DISTRIBUTION_TIMEOUT" -lt 300 ]; then
     AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=300
+  elif [ "$AUTO_CLUSTER_DISTRIBUTION_TIMEOUT" -gt 3600 ]; then
+    AUTO_CLUSTER_DISTRIBUTION_TIMEOUT=3600
   fi
-
-  if [ "$MAX_NETWORK_MB" -gt 0 ]; then
-    AUTO_CLUSTER_DISTRIBUTION_REASON="max snapshot ${MAX_NETWORK_MB}MB"
-  fi
+  AUTO_CLUSTER_DISTRIBUTION_REASON="max snapshot ${MAX_NETWORK_MB}MB"
 fi
 
 AUTO_IPC_PROFILE=""

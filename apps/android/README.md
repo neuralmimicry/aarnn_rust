@@ -57,3 +57,8 @@ and remains read-only. When disconnected it renders only a clearly labelled
 local demonstration projection; when a connected topology projection is
 unavailable it shows the nodes without fabricated edges and reports that
 limitation.
+
+The Dashboard now renders paired input and output spike rasters from the
+workspace activity endpoint's bounded neural-step histories. The read-only
+client does not synthesize spikes from sensor previews or repeat a stale current
+sample when no new step has been published.

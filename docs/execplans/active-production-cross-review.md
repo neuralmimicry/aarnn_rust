@@ -3585,3 +3585,25 @@ no native engine content hash is presented as biological or physics equivalence.
   rollout. The current Kubernetes orchestrator remains on its rollback image;
   Webots bindings and live neural-to-actuator operation have not yet been
   restored or verified.
+
+## Verification update — 2026-10-02: live shared Webots world I/O
+
+- [x] Deployed the sensory-ingress worker build serially to `qc03`, `sm00`,
+  `sm01`, `qc02`, then the active ingress owner `qc04`. Every worker service
+  returned active and rejoined; the shared SNN remained playing. Both x86
+  simulation hosts passed the `libgpgme.so.11` and OpenCV 4.6 runtime checks.
+- [x] The Webots acceptance playbook confirmed one world service on `sm00`,
+  `sm01` stopped, and the shared-SNN robot connected with 32 sensory inputs
+  and 16 actuator channels. The persisted world clock advanced from
+  `142316.704` to `142346.336` seconds during a 35-second probe.
+- [!] Live sensory admission is present, but end-to-end I/O did not pass:
+  Webots committed frames with 12 AER input spikes while the assigned output
+  layer on `sm00` returned zero output spikes and zero mapped actuators. No
+  motor-application event was observed, so the acceptance playbook failed at
+  its nonzero neural-output gate. The acknowledgement proves mailbox admission,
+  not consumption by a biological step; sampled activity on the sensory owner
+  was also zero at query time. Preserve this limitation until an explicit
+  consumed-frame signal and nonzero motor response are observed.
+- [!] The shared SNN remains active and `tenant-aarnn` remains untouched. Do
+  not stop services for the paired `qc00`/`qc01` power-cycle yet; first resolve
+  the missing neural output and pass the full live I/O gate.

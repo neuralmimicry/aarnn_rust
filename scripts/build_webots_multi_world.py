@@ -984,7 +984,7 @@ def build_celegans_interactive_ecology(
         forward_z,
         lateral_x,
         lateral_z,
-        forward=-0.18,
+        forward=-0.26,
         lateral=0.0,
         bound=bound,
     )
@@ -1056,7 +1056,7 @@ def build_celegans_interactive_ecology(
     )
 
     for suffix, local_forward, local_lateral, radius, color in (
-        ("taste_center", 0.20, 0.00, 0.030, (0.92, 0.74, 0.30)),
+        ("taste_center", 0.265, 0.00, 0.030, (0.92, 0.74, 0.30)),
         ("taste_left", 0.18, 0.09, 0.028, (0.80, 0.56, 0.22)),
         ("taste_right", 0.18, -0.09, 0.028, (0.76, 0.48, 0.20)),
     ):
@@ -1634,9 +1634,10 @@ def build_zebrafish_interactive_ecology(
     prefix = robot_name.lower()
     yaw = math.atan2(forward_z, forward_x)
     blocks: List[str] = [
-        # Gravel-bed floor patch (chemical / olfactory cue zone)
+        # Tank floor top is 0.06 m in build_demo_zone_furniture. Keep every
+        # physical cue inside that tank instead of burying it below the floor.
         floor_patch_box(
-            x, z, 0.001,
+            x, z, 0.061,
             size_x=0.28, size_y=0.22, size_z=0.003,
             color=(0.42, 0.36, 0.26), roughness=0.94,
             rotation=yaw_rotation(yaw),
@@ -1653,7 +1654,7 @@ def build_zebrafish_interactive_ecology(
             x, z, forward_x, forward_z, lateral_x, lateral_z,
             forward=lf, lateral=ll, bound=bound)
         blocks.append(sphere_node(
-            f"eco_{prefix}_{suffix}", px, pz, 0.008,
+            f"eco_{prefix}_{suffix}", px, pz, 0.068,
             radius=radius, color=color, roughness=0.62))
 
     # Coloured visual-contrast panel (eye / light sensor target)
@@ -1661,8 +1662,8 @@ def build_zebrafish_interactive_ecology(
         x, z, forward_x, forward_z, lateral_x, lateral_z,
         forward=0.12, lateral=-0.08, bound=bound)
     blocks.append(box_node(
-        f"eco_{prefix}_vis_panel", panel_x, panel_z, 0.022,
-        size_x=0.006, size_y=0.028, size_z=0.040,
+        f"eco_{prefix}_vis_panel", panel_x, panel_z, 0.125,
+        size_x=0.006, size_y=0.028, size_z=0.090,
         color=(0.30, 0.68, 0.90), roughness=0.28,
         emissive_color=(0.04, 0.10, 0.14),
         rotation=yaw_rotation(yaw)))
@@ -1672,7 +1673,7 @@ def build_zebrafish_interactive_ecology(
         x, z, forward_x, forward_z, lateral_x, lateral_z,
         forward=0.14, lateral=0.10, bound=bound)
     blocks.append(point_light_node(
-        warm_x, warm_z, 0.06,
+        warm_x, warm_z, 0.16,
         color=(0.60, 0.90, 1.00), intensity=0.28,
         attenuation=12.0, radius=0.40))
 
@@ -1681,8 +1682,8 @@ def build_zebrafish_interactive_ecology(
         x, z, forward_x, forward_z, lateral_x, lateral_z,
         forward=0.09, lateral=0.00, bound=bound)
     blocks.append(cylinder_node(
-        f"eco_{prefix}_flow_post", post_x, post_z, 0.018,
-        radius=0.004, height=0.036, color=(0.70, 0.65, 0.50), roughness=0.55))
+        f"eco_{prefix}_flow_post", post_x, post_z, 0.105,
+        radius=0.004, height=0.090, color=(0.70, 0.65, 0.50), roughness=0.55))
 
     return "\n".join(blocks)
 
@@ -1745,6 +1746,9 @@ def build_robot_stimuli(
                 )
             )
         else:
+            # The hexapod and NAO share a room-scale navigation pocket. The
+            # first rigid objects are at least 0.54 m forward of either spawn;
+            # the six-leg robot has clearance to articulate before contact.
             blocks.append(
                 build_nao_interactive_ecology(
                     robot_name,
@@ -2288,8 +2292,6 @@ def build_environment_block(
     center_x, center_z, scene_radius, span_x, span_z = scene_metrics(entries, positions)
     robot_kinds = {robot_kind for (_, _, _, _, robot_kind) in entries}
     has_nao = bool(robot_kinds.intersection({"nao", "hexapod"}))
-    has_zebrafish = "zebrafish" in robot_kinds
-    only_zebrafish = robot_kinds == {"zebrafish"}
 
     floor_size = max(6.8, room_half_size * 2.0)
     arena_size = max(5.6, floor_size - 0.9)
@@ -2330,36 +2332,6 @@ def build_environment_block(
 """
 
     zone_props = build_demo_zone_furniture(entries, positions, room_half_size)
-
-    # Water surface overlay for zebrafish scenes (visual only — Webots has no
-    # fluid simulation, but the plane makes the aquarium legible in the viewer).
-    water_block = ""
-    if has_zebrafish:
-        zf_positions = [(x, z) for (_, _, _, _, k), (x, z) in zip(entries, positions)
-                        if k == "zebrafish"]
-        if zf_positions:
-            wc_x = sum(p[0] for p in zf_positions) / len(zf_positions)
-            wc_z = sum(p[1] for p in zf_positions) / len(zf_positions)
-            water_block = f"""Transform {{
-  translation {wc_x:.4f} {wc_z:.4f} 0.030
-  children [
-    Shape {{
-      appearance PBRAppearance {{
-        baseColor 0.35 0.62 0.90
-        roughness 0.04
-        metalness 0.10
-        transparency 0.68
-      }}
-      geometry Box {{
-        size {max(0.80, scene_radius * 1.6):.2f} {max(0.60, scene_radius * 1.4):.2f} 0.001
-      }}
-    }}
-  ]
-}}
-"""
-
-    # For zebrafish-only worlds use reduced gravity (buoyancy approximation).
-    gravity_line = "gravity 2.2" if only_zebrafish else "gravity 9.81"
 
     return f"""# Scene-aware demo hall with clear robot zones and low-profile staging.
 RectangleArena {{
@@ -2451,7 +2423,7 @@ PointLight {{
   radius {max(6.5, scene_radius * 2.5):.2f}
   castShadows FALSE
 }}
-{storage_block}{zone_props}{water_block}"""
+{storage_block}{zone_props}"""
 
 
 
@@ -2601,7 +2573,10 @@ def main() -> None:
         center_z,
         target_height,
     )
-    stimuli_nodes = webots_habitats(entries, positions)
+    # Shared habitats provide the broad scene; robot-local cues place contrast,
+    # contact and distance targets inside each actual sensor's useful range.
+    stimuli_nodes = webots_habitats(entries, positions, tank_aligned_fish_water=True)
+    local_stimuli_nodes = build_robot_stimuli(entries, positions, arena_half_size)
     interaction_stick_nodes = ""
 
     world = f"""#VRML_SIM R2025a utf8
@@ -2609,11 +2584,12 @@ def main() -> None:
 {os.linesep.join(extern_lines)}
 
 WorldInfo {{
-  # Slightly larger time step to keep Webots responsive with articulated
-  # multi-robot scenes and clustered controller traffic.
-  basicTimeStep 32
-  # Gravity reduced for zebrafish-only aquarium worlds (buoyancy approximation).
-  gravity {2.2 if {k for (_, _, _, _, k) in entries} == {"zebrafish"} else 9.81:.1f}
+  # Gram-scale fly bodies can tunnel through the floor after landing at 32 ms.
+  # Use a finer collision step whenever a fly is present; other profiles keep
+  # the less expensive 32 ms step.
+  basicTimeStep {8 if has_drosophila else 32}
+  # Fish immersion in the named tank Fluid supplies buoyancy under physical gravity.
+  gravity 9.81
   contactProperties [
     ContactProperties {{
       material1 "default"
@@ -2649,6 +2625,7 @@ DirectionalLight {{
 }}
 
 {stimuli_nodes}
+{local_stimuli_nodes}
 {interaction_stick_nodes}
 {recorder_supervisor_node()}
 {''.join(robot_nodes)}

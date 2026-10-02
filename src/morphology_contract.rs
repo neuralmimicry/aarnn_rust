@@ -506,6 +506,154 @@ impl ReconstructionConfig {
     }
 }
 
+/// Versioned, modelled conversion for source coordinates with no declared
+/// physical unit. This is a reproducible assumption anchored to the selected
+/// soma policy, never an empirical measurement of the imported specimen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HeuristicCalibrationBasis {
+    LocalSomaSpacing,
+    EmptyOrCoincidentSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CalibrationSourceUnitStatus {
+    UndeclaredTopologyCoordinates,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HeuristicPhysicalCalibration {
+    pub policy_version: u16,
+    pub source_unit_status: CalibrationSourceUnitStatus,
+    pub basis: HeuristicCalibrationBasis,
+    pub millimetres_per_source_unit: f64,
+    pub target_soma_centre_spacing_mm: f64,
+    pub sampled_unique_positions: usize,
+    pub local_source_spacing: Option<f64>,
+    pub soma_radius_mm: f64,
+    pub neurite_radius_mm: f64,
+    pub clearance_mm: f64,
+    pub synaptic_gap_mm: f64,
+}
+
+impl HeuristicPhysicalCalibration {
+    pub fn validate(&self) -> Result<(), MorphologyError> {
+        let valid = self.policy_version == 1
+            && self.millimetres_per_source_unit.is_finite()
+            && self.millimetres_per_source_unit > 0.0
+            && self.target_soma_centre_spacing_mm.is_finite()
+            && self.target_soma_centre_spacing_mm > 0.0
+            && self.soma_radius_mm.is_finite()
+            && self.soma_radius_mm > 0.0
+            && self.neurite_radius_mm.is_finite()
+            && self.neurite_radius_mm > 0.0
+            && self.clearance_mm.is_finite()
+            && self.clearance_mm >= 0.0
+            && self.synaptic_gap_mm.is_finite()
+            && self.synaptic_gap_mm > 0.0
+            && self.sampled_unique_positions <= 512;
+        let expected_target = 4.0 * self.soma_radius_mm + self.clearance_mm;
+        let consistent = (self.target_soma_centre_spacing_mm - expected_target).abs()
+            <= 1.0e-12 * expected_target.max(1.0)
+            && match (self.basis, self.local_source_spacing) {
+                (HeuristicCalibrationBasis::LocalSomaSpacing, Some(spacing))
+                    if spacing.is_finite() && spacing > 0.0 =>
+                {
+                    let expected_scale = self.target_soma_centre_spacing_mm / spacing;
+                    (self.millimetres_per_source_unit - expected_scale).abs()
+                        <= 1.0e-12 * expected_scale.max(1.0)
+                }
+                (HeuristicCalibrationBasis::EmptyOrCoincidentSource, None) => {
+                    self.millimetres_per_source_unit == 1.0
+                }
+                _ => false,
+            };
+        if valid && consistent {
+            Ok(())
+        } else {
+            Err(MorphologyError::InvalidPhysicalCalibration)
+        }
+    }
+}
+
+/// Estimate a physical scale from a bounded, deterministic sample of source
+/// positions. The target centre spacing is two soma diameters plus clearance:
+/// enough room for growth under the existing modelled radius policy. Route
+/// admission must still verify every volume; this scale is not that proof.
+pub fn calibrate_unscaled_positions(
+    source_positions: &[Vec3],
+    config: &ReconstructionConfig,
+) -> Result<HeuristicPhysicalCalibration, MorphologyError> {
+    config.validate()?;
+    if source_positions
+        .iter()
+        .any(|position| !position.is_finite())
+    {
+        return Err(MorphologyError::NonFiniteGeometry);
+    }
+    // Stable coordinate hashing keeps the estimator independent of import
+    // order without allocating or sorting the complete source population.
+    let mut selected = BTreeMap::new();
+    for &position in source_positions {
+        let bits = [
+            position.x.to_bits(),
+            position.y.to_bits(),
+            position.z.to_bits(),
+        ];
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for component in bits {
+            hash ^= component;
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
+        selected.insert((hash, bits[0], bits[1], bits[2]), position);
+        if selected.len() > 512 {
+            selected.pop_last();
+        }
+    }
+    let sampled = selected.into_values().collect::<Vec<_>>();
+    let mut local_spacing = Vec::with_capacity(sampled.len());
+    for (index, position) in sampled.iter().enumerate() {
+        let nearest = sampled
+            .iter()
+            .enumerate()
+            .filter(|(other, _)| *other != index)
+            .map(|(_, other)| position.distance(*other))
+            .filter(|distance| distance.is_finite() && *distance > 0.0)
+            .min_by(f64::total_cmp);
+        if let Some(distance) = nearest {
+            local_spacing.push(distance);
+        }
+    }
+    local_spacing.sort_by(f64::total_cmp);
+    let source_spacing = local_spacing
+        .get(local_spacing.len().saturating_sub(1) / 10)
+        .copied();
+    let target_spacing = 4.0 * config.soma_radius_mm + config.clearance_mm;
+    let (basis, scale) = if let Some(spacing) = source_spacing {
+        (
+            HeuristicCalibrationBasis::LocalSomaSpacing,
+            target_spacing / spacing,
+        )
+    } else {
+        (HeuristicCalibrationBasis::EmptyOrCoincidentSource, 1.0)
+    };
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(MorphologyError::InvalidReconstructionConfig);
+    }
+    Ok(HeuristicPhysicalCalibration {
+        policy_version: 1,
+        source_unit_status: CalibrationSourceUnitStatus::UndeclaredTopologyCoordinates,
+        basis,
+        millimetres_per_source_unit: scale,
+        target_soma_centre_spacing_mm: target_spacing,
+        sampled_unique_positions: sampled.len(),
+        local_source_spacing: source_spacing,
+        soma_radius_mm: config.soma_radius_mm,
+        neurite_radius_mm: config.neurite_radius_mm,
+        clearance_mm: config.clearance_mm,
+        synaptic_gap_mm: config.synaptic_gap_mm,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LifecycleState {
     Proposed,
@@ -883,6 +1031,8 @@ pub enum MorphologyError {
     EmptyConnectome,
     #[error("point-only reconstruction configuration is invalid")]
     InvalidReconstructionConfig,
+    #[error("heuristic physical calibration record is invalid")]
+    InvalidPhysicalCalibration,
     #[error("overlapping soma positions cannot be resolved inside the growth environment")]
     SomaOverlap,
     #[error("soma position is outside the deterministic spatial-index range")]
@@ -1088,6 +1238,12 @@ pub struct PointOnlyReconstruction {
     /// request multi-pixel anatomical soma rendering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soma_radius_mm: Option<f64>,
+    /// Present when missing source units were transformed by an explicit
+    /// modelled policy. Original positions remain inspectable beside it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heuristic_calibration: Option<HeuristicPhysicalCalibration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_positions: Vec<(NeuronId, Vec3)>,
     pub connectome: PointOnlyConnectome,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub soma_position_repairs: Vec<SomaPositionRepair>,
@@ -1102,6 +1258,34 @@ pub struct PointOnlyReconstruction {
 
 impl PointOnlyReconstruction {
     pub const SCHEMA_VERSION: u16 = 4;
+
+    pub fn validate_calibration(&self) -> Result<(), MorphologyError> {
+        let Some(calibration) = &self.heuristic_calibration else {
+            return Ok(());
+        };
+        calibration.validate()?;
+        if self.source_positions.len() != self.connectome.neurons.len() {
+            return Err(MorphologyError::InvalidPhysicalCalibration);
+        }
+        let mut sources = BTreeMap::new();
+        for (id, position) in &self.source_positions {
+            if !position.is_finite() || sources.insert(*id, *position).is_some() {
+                return Err(MorphologyError::InvalidPhysicalCalibration);
+            }
+        }
+        for neuron in &self.connectome.neurons {
+            let Some(source) = sources.get(&neuron.id) else {
+                return Err(MorphologyError::InvalidPhysicalCalibration);
+            };
+            let expected = source.scale(calibration.millimetres_per_source_unit);
+            let error = expected.distance(neuron.position_mm);
+            let tolerance = 1.0e-9 + 1.0e-12 * expected.norm();
+            if !error.is_finite() || error > tolerance {
+                return Err(MorphologyError::InvalidPhysicalCalibration);
+            }
+        }
+        Ok(())
+    }
 
     pub fn display_snapshot(
         &self,
@@ -1387,6 +1571,13 @@ impl PointOnlyReconstruction {
                 .iter()
                 .all(|node| node.soma_radius_mm.is_some())
             && snapshot.paths.iter().all(|path| path.radius_mm > 0.0);
+        snapshot.coverage.contact_set_verified = snapshot.coverage.complete
+            && snapshot
+                .markers
+                .iter()
+                .filter(|marker| marker.kind == AnatomicalKind::Synapse)
+                .count()
+                == self.state.synapses.len();
         Ok(snapshot)
     }
 
@@ -1693,6 +1884,8 @@ pub fn reconstruct_point_only_connectome(
         source: "point_only_connectome_procedural_reconstruction".to_owned(),
         seed: config.seed,
         soma_radius_mm: Some(config.soma_radius_mm),
+        heuristic_calibration: None,
+        source_positions: Vec::new(),
         connectome: canonical_connectome,
         soma_position_repairs,
         environment,
@@ -2552,6 +2745,10 @@ pub struct DisplayCoverage {
     /// as false and cannot enable the detailed volume stages.
     #[serde(default)]
     pub volumetric_clearance_verified: bool,
+    /// The producer enumerated every committed contact in this complete view.
+    /// An empty contact set can be verified; old snapshots default to unknown.
+    #[serde(default)]
+    pub contact_set_verified: bool,
     pub complete: bool,
     pub truncated: bool,
     pub unavailable_reason: Option<String>,
@@ -2707,6 +2904,7 @@ impl DisplaySnapshot {
         nodes.truncate(max_nodes);
         let visible = nodes.iter().map(|node| node.id).collect::<BTreeSet<_>>();
         paths.sort_by_key(|path| path.id);
+        let source_path_count = paths.len();
         paths.retain(|path| {
             path.points_mm.len() >= 2
                 && path.points_mm.iter().all(|point| point.is_finite())
@@ -2714,20 +2912,23 @@ impl DisplaySnapshot {
                 && path.radius_mm >= 0.0
                 && visible.contains(&path.owner)
         });
+        let omitted_paths = paths.len() != source_path_count;
         let truncated_paths = paths.len() > max_edges;
         paths.truncate(max_edges);
+        let source_edge_count = edges.len();
         edges.retain(|edge| {
             edge.points_mm.iter().all(|point| point.is_finite())
                 && visible.contains(&edge.source)
                 && visible.contains(&edge.target)
                 && edge.multiplicity > 0
         });
+        let omitted_edges = edges.len() != source_edge_count;
         let truncated_edges = edges.len() > max_edges;
         edges.truncate(max_edges);
         assign_display_colour_slots(&mut nodes, &edges);
-        let truncated = truncated_nodes || truncated_edges || truncated_paths;
-        let complete = !nodes.is_empty()
-            && !truncated
+        let truncated =
+            truncated_nodes || truncated_edges || truncated_paths || omitted_paths || omitted_edges;
+        let complete = !truncated
             && unavailable_reason.is_none()
             && provenance != DisplayProvenance::Unavailable;
         Ok(Self {
@@ -2742,6 +2943,7 @@ impl DisplaySnapshot {
                 region: coverage_region,
                 membrane: None,
                 volumetric_clearance_verified: false,
+                contact_set_verified: false,
                 complete,
                 truncated,
                 unavailable_reason,
@@ -2790,7 +2992,12 @@ impl DisplaySnapshot {
             .iter()
             .map(|node| node.id)
             .collect::<BTreeSet<_>>();
+        let source_marker_count = markers.len();
         markers.retain(|marker| marker.position_mm.is_finite() && visible.contains(&marker.owner));
+        if markers.len() != source_marker_count {
+            snapshot.coverage.truncated = true;
+            snapshot.coverage.complete = false;
+        }
         if markers.len() > max_edges.max(1) {
             snapshot.coverage.truncated = true;
             snapshot.coverage.complete = false;
@@ -2884,6 +3091,74 @@ fn assign_display_colour_slots(nodes: &mut [DisplayNode], edges: &[DisplayEdge])
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn modelled_calibration_is_deterministic_and_explicit_about_missing_units() {
+        use super::{
+            CalibrationSourceUnitStatus, HeuristicCalibrationBasis, ReconstructionConfig, Vec3,
+            calibrate_unscaled_positions,
+        };
+        let positions = vec![
+            Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            Vec3 {
+                x: 0.2,
+                y: 0.0,
+                z: 0.0,
+            },
+            Vec3 {
+                x: 0.4,
+                y: 0.0,
+                z: 0.0,
+            },
+            Vec3 {
+                x: 0.6,
+                y: 0.0,
+                z: 0.0,
+            },
+        ];
+        let config = ReconstructionConfig::default();
+        let first = calibrate_unscaled_positions(&positions, &config).unwrap();
+        let mut reversed = positions.clone();
+        reversed.reverse();
+        assert_eq!(
+            first,
+            calibrate_unscaled_positions(&reversed, &config).unwrap()
+        );
+        assert_eq!(first.policy_version, 1);
+        assert_eq!(
+            first.source_unit_status,
+            CalibrationSourceUnitStatus::UndeclaredTopologyCoordinates
+        );
+        assert_eq!(first.basis, HeuristicCalibrationBasis::LocalSomaSpacing);
+        assert!((first.local_source_spacing.unwrap() - 0.2).abs() < 1.0e-12);
+        assert!((first.millimetres_per_source_unit - 0.81).abs() < 1.0e-12);
+        assert_eq!(first.soma_radius_mm, config.soma_radius_mm);
+        assert_eq!(first.neurite_radius_mm, config.neurite_radius_mm);
+
+        let coincident = vec![positions[0]; 3];
+        let fallback = calibrate_unscaled_positions(&coincident, &config).unwrap();
+        assert_eq!(
+            fallback.basis,
+            HeuristicCalibrationBasis::EmptyOrCoincidentSource
+        );
+        assert_eq!(fallback.millimetres_per_source_unit, 1.0);
+        assert_eq!(fallback.local_source_spacing, None);
+        assert!(
+            calibrate_unscaled_positions(
+                &[Vec3 {
+                    x: f64::NAN,
+                    y: 0.0,
+                    z: 0.0
+                }],
+                &config
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn anatomy_identity_json_preserves_full_unsigned_range_and_legacy_input() {
         for value in [1, (1u64 << 60) + 1, (1u64 << 60) + 2, u64::MAX] {
@@ -3578,7 +3853,34 @@ mod tests {
                 .iter()
                 .any(|marker| marker.kind == AnatomicalKind::Synapse)
         );
+        assert!(snapshot.coverage.contact_set_verified);
+        let clipped = reconstruction.display_snapshot(2, 64, 1).unwrap();
+        assert!(!clipped.coverage.complete);
+        assert!(!clipped.coverage.contact_set_verified);
         snapshot.validate().unwrap();
+    }
+
+    #[test]
+    fn zero_connection_reconstruction_has_verified_empty_contact_view() {
+        let mut connectome = point_connectome(false);
+        connectome.connections.clear();
+        let reconstruction = reconstruct_point_only_connectome(
+            connectome,
+            reconstruction_environment(),
+            ReconstructionConfig::default(),
+        )
+        .unwrap();
+        let snapshot = reconstruction.display_snapshot(1, 64, 128).unwrap();
+        assert!(snapshot.coverage.complete);
+        assert!(snapshot.coverage.volumetric_clearance_verified);
+        assert!(snapshot.coverage.contact_set_verified);
+        assert!(snapshot.edges.is_empty());
+        assert!(snapshot.paths.is_empty());
+        assert!(snapshot.markers.is_empty());
+        assert_eq!(
+            crate::visualization::highest_supported_stage(None, Some(&snapshot)),
+            Some(crate::visualization::VisualizationStage::AnatomicalContacts)
+        );
     }
 
     #[test]
@@ -3616,6 +3918,10 @@ mod tests {
             reconstruction.connectome.connections.len()
         );
         assert!(snapshot.edges.iter().any(|edge| edge.kind == "connectome"));
+        assert_eq!(
+            snapshot.coverage.contact_set_verified, snapshot.coverage.complete,
+            "rejected graph links are not committed contacts"
+        );
     }
 
     #[test]

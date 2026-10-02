@@ -144,11 +144,12 @@ def build_eye_sensors() -> str:
 
     fieldOfView ≈ 163° — wide lateral angle matching real zebrafish.
     Per-camera retina size is overridden to 1×1 via env vars exported by
-    run_multi_robot_webots.sh so S=32 is preserved.
+    run_multi_robot_webots.sh. DeviceMapper then emits the model's luminance
+    and temporal-gradient channels so S=32 is preserved.
     """
     eye_specs = [
-        ("zebrafish_eye_left",   HEAD_LENGTH * 0.28,  BODY_RADIUS * 0.72,  0.28),
-        ("zebrafish_eye_right",  HEAD_LENGTH * 0.28, -BODY_RADIUS * 0.72, -0.28),
+        ("zebrafish_s_16_eye_left",   HEAD_LENGTH * 0.28,  BODY_RADIUS * 0.72,  0.28),
+        ("zebrafish_s_18_eye_right",  HEAD_LENGTH * 0.28, -BODY_RADIUS * 0.72, -0.28),
     ]
     lines = []
     for cam_name, ex, ez, yaw in eye_specs:

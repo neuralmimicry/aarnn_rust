@@ -6347,6 +6347,12 @@ impl Runner {
         let snapshot_time_ms = snap.t_ms.max(0.0);
         let snapshot_rng_seed = snap.rng_seed;
         let snapshot_runtime_state = snap.runtime_state.take();
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        let has_snapshot_morphology = snapshot_runtime_state
+            .as_ref()
+            .is_some_and(|state| state.morph.is_some());
+        #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
+        let has_snapshot_morphology = false;
         #[cfg(feature = "growth3d")]
         let snapshot_procedural_reconstruction = snap.procedural_reconstruction.take();
         #[cfg(feature = "growth3d")]
@@ -6474,7 +6480,24 @@ impl Runner {
             } else {
                 self.rebuild_default_topology();
             }
-            self.procedural_reconstruction = snapshot_procedural_reconstruction;
+            self.procedural_reconstruction = snapshot_procedural_reconstruction.and_then(
+                |reconstruction| match reconstruction.validate_calibration() {
+                    Ok(()) if self.reconstruction_positions_match_topology(&reconstruction) => {
+                        Some(reconstruction)
+                    }
+                    result => {
+                        let reason = result
+                            .err()
+                            .map(|error| error.to_string())
+                            .unwrap_or_else(|| "source topology changed".to_owned());
+                        nm_log!(
+                            "[import-morphology] stale or invalid stored reconstruction; rebuilding derived anatomy: {}",
+                            reason
+                        );
+                        None
+                    }
+                },
+            );
             self.procedural_reconstruction_error = snapshot_procedural_reconstruction_error;
             if self.procedural_reconstruction.is_none() {
                 match self.reconstruct_point_only_import(
@@ -6553,7 +6576,9 @@ impl Runner {
                 + self.w_hh_rec.iter().map(|m| m.len()).sum::<usize>();
             let rt_force_morpho_off = rt_policy.enabled
                 && morpho_synapse_upper_bound > rt_policy.morpho_safe_max_synapses;
-            if rt_policy.disable_morpho || rt_force_morpho_off {
+            if has_snapshot_morphology {
+                nm_log!("[info] Import morphology rebuild skipped; restoring persisted morphology");
+            } else if rt_policy.disable_morpho || rt_force_morpho_off {
                 nm_log!(
                     "[info] Import morphology rebuild skipped for realtime IPC \
                      (upper_bound_synapses={} safe_max={})",
@@ -6575,7 +6600,7 @@ impl Runner {
         }
 
         // Clear all runtime state after structural update
-        self.reset();
+        self.reset_with_morphology_rebuild(!has_snapshot_morphology);
         #[cfg(feature = "growth3d")]
         // reset clears dynamic values but does not rebuild per-neuron biology;
         // restore it from the authoritative imported topology before applying
@@ -6729,6 +6754,11 @@ impl Runner {
     }
 
     pub fn reset(&mut self) {
+        self.reset_with_morphology_rebuild(true);
+    }
+
+    #[allow(unused_variables)]
+    fn reset_with_morphology_rebuild(&mut self, rebuild_morphology: bool) {
         self.t = 0;
         self.t_ms = 0.0;
         self.theta_phase = 0.0;
@@ -6846,7 +6876,10 @@ impl Runner {
                 + self.w_hh_rec.iter().map(|m| m.len()).sum::<usize>();
             let rt_force_morpho_off = rt_policy.enabled
                 && morpho_synapse_upper_bound > rt_policy.morpho_safe_max_synapses;
-            if rt_policy.disable_morpho || rt_force_morpho_off {
+            if !rebuild_morphology {
+                // Snapshot import restores its authoritative Morphology after
+                // reset, so rebuilding morphology here would be discarded.
+            } else if rt_policy.disable_morpho || rt_force_morpho_off {
                 nm_log!(
                     "[info] Reset morphology rebuild skipped for realtime IPC \
                      (upper_bound_synapses={} safe_max={})",
@@ -7342,6 +7375,39 @@ impl Runner {
     /// dense matrix indices into stable neuron identities and delegates all
     /// geometry, ordering and swept-volume admission to the portable contract.
     #[cfg(feature = "growth3d")]
+    fn reconstruction_positions_match_topology(
+        &self,
+        reconstruction: &crate::morphology_contract::PointOnlyReconstruction,
+    ) -> bool {
+        if reconstruction.heuristic_calibration.is_none() {
+            return true;
+        }
+        let positions = self
+            .topo
+            .sensory_nodes
+            .iter()
+            .chain(self.topo.layers.iter().flatten())
+            .chain(self.topo.output_nodes.iter());
+        let mut count = 0usize;
+        for (source, node) in reconstruction.source_positions.iter().zip(positions) {
+            let current = crate::morphology_contract::Vec3 {
+                x: f64::from(node.x),
+                y: f64::from(node.y),
+                z: f64::from(node.z),
+            };
+            if source.1.distance(current) > 1.0e-9 {
+                return false;
+            }
+            count += 1;
+        }
+        count == reconstruction.source_positions.len()
+            && count
+                == self.topo.sensory_nodes.len()
+                    + self.topo.layers.iter().map(Vec::len).sum::<usize>()
+                    + self.topo.output_nodes.len()
+    }
+
+    #[cfg(feature = "growth3d")]
     fn reconstruct_point_only_import(
         &self,
         seed: u64,
@@ -7513,10 +7579,33 @@ impl Runner {
                 kind,
             })
             .collect::<Vec<_>>();
-        let connectome = PointOnlyConnectome {
+        let mut connectome = PointOnlyConnectome {
             neurons,
             connections,
         };
+        let mut config = ReconstructionConfig::default();
+        config.seed = seed.max(1);
+        config.conduction_velocity_m_per_s = self.net.aarnn_velocity.max(1.0e-6) as f64;
+        let source_positions = connectome
+            .neurons
+            .iter()
+            .map(|neuron| (neuron.id, neuron.position_mm))
+            .collect::<Vec<_>>();
+        let calibration = crate::morphology_contract::calibrate_unscaled_positions(
+            &source_positions
+                .iter()
+                .map(|(_, position)| *position)
+                .collect::<Vec<_>>(),
+            &config,
+        )?;
+        for neuron in &mut connectome.neurons {
+            neuron.position_mm = neuron
+                .position_mm
+                .scale(calibration.millimetres_per_source_unit);
+            if !neuron.position_mm.is_finite() {
+                return Err(crate::morphology_contract::MorphologyError::NonFiniteGeometry);
+            }
+        }
         let (min, max) = connectome.neurons.iter().fold(
             (
                 Vec3 {
@@ -7546,7 +7635,8 @@ impl Runner {
                 )
             },
         );
-        let margin = 0.25;
+        let lattice_side = (connectome.neurons.len() as f64).cbrt().ceil().max(1.0);
+        let margin = (0.5 * lattice_side * calibration.target_soma_centre_spacing_mm).max(0.25);
         let environment = GrowthEnvironment {
             revision: 1,
             frame: Default::default(),
@@ -7565,14 +7655,14 @@ impl Runner {
             forbidden: Vec::new(),
             clearance_mm: 0.002,
         };
-        let mut config = ReconstructionConfig::default();
-        config.seed = seed.max(1);
-        config.conduction_velocity_m_per_s = self.net.aarnn_velocity.max(1.0e-6) as f64;
-        let reconstruction = crate::morphology_contract::reconstruct_point_only_connectome(
+        let mut reconstruction = crate::morphology_contract::reconstruct_point_only_connectome(
             connectome,
             environment,
             config,
         )?;
+        reconstruction.heuristic_calibration = Some(calibration);
+        reconstruction.source_positions = source_positions;
+        reconstruction.validate_calibration()?;
         if !reconstruction.soma_position_repairs.is_empty() {
             nm_log!(
                 "[import-morphology] resolved {} overlapping soma positions in procedural geometry; source coordinates and network weights were preserved",
@@ -7842,6 +7932,10 @@ impl Runner {
         self.stp_u_s = stp_u_s;
         self.stp_x_s = stp_x_s;
         self.net.num_sensory_neurons = n_s_new;
+        // Keep persisted spike-history frames aligned in every build profile;
+        // snapshot resizing must not leave stale-width sensory history when
+        // the morphology feature is disabled.
+        self.extend_sensory_history(n_s_new);
         #[cfg(feature = "opencl")]
         self.mark_all_weights_dirty();
         #[cfg(feature = "growth3d")]
@@ -7857,8 +7951,6 @@ impl Runner {
         }
         #[cfg(feature = "growth3d")]
         {
-            // Ensure sensory history frames match new sensory count
-            self.extend_sensory_history(n_s_new);
             // Update topology nodes
             let s_count = n_s_new;
             let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
@@ -17032,7 +17124,6 @@ impl Runner {
         }
     }
 
-    #[cfg(feature = "growth3d")]
     fn extend_sensory_history(&mut self, new_len: usize) {
         for fr in self.spk_hist_s.iter_mut() {
             if fr.len() != new_len {
@@ -24439,7 +24530,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "growth3d")]
-    fn import_network_json_preserves_snapshot_topology() {
+    fn import_network_json_preserves_snapshot_topology_and_physical_calibration() {
         let mut r = mk_runner();
         let mut snap = r.snapshot();
         let topo = snap
@@ -24469,6 +24560,164 @@ mod tests {
             "point-only imported topology should receive procedural route reconstruction: {:?}",
             r.procedural_reconstruction_error
         );
+        let reconstructed = r.procedural_reconstruction.as_ref().unwrap();
+        let calibration = reconstructed.heuristic_calibration.as_ref().unwrap();
+        assert_eq!(calibration.policy_version, 1);
+        assert!(calibration.millimetres_per_source_unit.is_finite());
+        assert_eq!(
+            reconstructed.source_positions.len(),
+            reconstructed.connectome.neurons.len()
+        );
+        for (id, source) in &reconstructed.source_positions {
+            let physical = reconstructed
+                .connectome
+                .neurons
+                .iter()
+                .find(|neuron| neuron.id == *id)
+                .unwrap()
+                .position_mm;
+            assert!(
+                (physical.x - source.x * calibration.millimetres_per_source_unit).abs() < 1.0e-9
+            );
+            assert!(
+                (physical.y - source.y * calibration.millimetres_per_source_unit).abs() < 1.0e-9
+            );
+            assert!(
+                (physical.z - source.z * calibration.millimetres_per_source_unit).abs() < 1.0e-9
+            );
+        }
+        let exported = serde_json::to_string(&r.snapshot()).unwrap();
+        let before = reconstructed.clone();
+        r.import_network_json(&exported).unwrap();
+        let restored = r.procedural_reconstruction.as_ref().unwrap();
+        assert_eq!(restored.schema_version, before.schema_version);
+        assert_eq!(restored.seed, before.seed);
+        assert_eq!(restored.neuron_order, before.neuron_order);
+        assert_eq!(restored.connections, before.connections);
+        let original_policy = before.heuristic_calibration.as_ref().unwrap();
+        let restored_policy = restored.heuristic_calibration.as_ref().unwrap();
+        assert_eq!(
+            restored_policy.policy_version,
+            original_policy.policy_version
+        );
+        assert_eq!(
+            restored_policy.source_unit_status,
+            original_policy.source_unit_status
+        );
+        assert_eq!(restored_policy.basis, original_policy.basis);
+        assert_eq!(
+            restored_policy.sampled_unique_positions,
+            original_policy.sampled_unique_positions
+        );
+        assert!(
+            (restored_policy.millimetres_per_source_unit
+                - original_policy.millimetres_per_source_unit)
+                .abs()
+                < 1.0e-15
+        );
+        for ((id, source), (restored_id, restored_source)) in before
+            .source_positions
+            .iter()
+            .zip(&restored.source_positions)
+        {
+            assert_eq!(id, restored_id);
+            assert!((source.x - restored_source.x).abs() < 1.0e-15);
+            assert!((source.y - restored_source.y).abs() < 1.0e-15);
+            assert!((source.z - restored_source.z).abs() < 1.0e-15);
+        }
+
+        let mut stale = r.snapshot();
+        stale.topo.as_mut().unwrap().layers[0][0].x = 0.5;
+        r.import_network_json(&serde_json::to_string(&stale).unwrap())
+            .unwrap();
+        let rebuilt = r.procedural_reconstruction.as_ref().unwrap();
+        assert!((rebuilt.source_positions[0].1.x - 0.5).abs() < 1.0e-6);
+        rebuilt.validate_calibration().unwrap();
+
+        let mut tampered = r.snapshot();
+        tampered
+            .procedural_reconstruction
+            .as_mut()
+            .unwrap()
+            .heuristic_calibration
+            .as_mut()
+            .unwrap()
+            .millimetres_per_source_unit = -1.0;
+        r.import_network_json(&serde_json::to_string(&tampered).unwrap())
+            .unwrap();
+        r.procedural_reconstruction
+            .as_ref()
+            .unwrap()
+            .validate_calibration()
+            .unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "growth3d")]
+    fn shipped_default_topology_has_reproducible_physical_calibration() {
+        let mut net: NetworkConfig =
+            serde_json::from_str(include_str!("../config.json")).expect("shipped config");
+        assert_eq!(net.num_hidden_layers, 3);
+        assert_eq!(net.num_hidden_per_layer_initial, 70);
+        net.use_morphology = false;
+        let runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        let positions = runner
+            .topo
+            .sensory_nodes
+            .iter()
+            .chain(runner.topo.layers.iter().flatten())
+            .chain(runner.topo.output_nodes.iter())
+            .map(|node| crate::morphology_contract::Vec3 {
+                x: f64::from(node.x),
+                y: f64::from(node.y),
+                z: f64::from(node.z),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(positions.len(), 210);
+        let config = crate::morphology_contract::ReconstructionConfig::default();
+        let first = crate::morphology_contract::calibrate_unscaled_positions(&positions, &config)
+            .expect("modelled default calibration");
+        assert_eq!(
+            first.basis,
+            crate::morphology_contract::HeuristicCalibrationBasis::LocalSomaSpacing
+        );
+        let mut reversed = positions.clone();
+        reversed.reverse();
+        assert_eq!(
+            first,
+            crate::morphology_contract::calibrate_unscaled_positions(&reversed, &config)
+                .expect("order-independent default calibration")
+        );
+        first.validate().unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "morpho")]
+    fn import_network_json_restores_persisted_morphology() {
+        let mut runner = mk_aarnn_growth_runner();
+        let mut snapshot = runner.snapshot();
+        let persisted_soma_x = 0.314159;
+        snapshot
+            .runtime_state
+            .as_mut()
+            .and_then(|state| state.morph.as_mut())
+            .expect("snapshot should include persisted morphology")
+            .somas[0][0]
+            .pos
+            .x = persisted_soma_x;
+
+        let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
+        runner
+            .import_network_json(&json)
+            .expect("import snapshot with persisted morphology");
+
+        assert_eq!(runner.morph.somas[0][0].pos.x, persisted_soma_x);
     }
 
     #[test]
