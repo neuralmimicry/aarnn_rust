@@ -549,6 +549,7 @@ private fun DashboardScreen(
                 )
             }
             item { LayerActivityCard(snapshot) }
+            item { SpikeRastersCard(snapshot) }
             item { DistributedNodesCard(snapshot) }
         }
     }
@@ -1654,6 +1655,48 @@ private fun NeuralNetworkCanvas(snapshot: RemoteWorkspaceSnapshot) {
                 StatusDot(if (index == 0) Color(0xFF4D9DE0) else if (index == labels.lastIndex) Color(0xFFFFC857) else Color(0xFF9B7CFF), size = 7.dp)
                 Spacer(Modifier.width(4.dp))
                 Text(label, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpikeRastersCard(snapshot: RemoteWorkspaceSnapshot) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Spike rasters", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("Committed activity history by neural step", style = MaterialTheme.typography.labelSmall)
+            SpikeRaster("Input", snapshot.activity.sensoryHistory, snapshot.summary.sensoryNeurons, Color(0xFF71E0B1))
+            SpikeRaster("Output", snapshot.activity.outputHistory, snapshot.summary.outputNeurons, Color(0xFFFFC857))
+        }
+    }
+}
+
+@Composable
+private fun SpikeRaster(label: String, history: List<RemoteSpikeFrame>, neuronCount: Int, colour: Color) {
+    val frames = history.takeLast(128)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text("$label raster", modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+            Text("${frames.size} frames", style = MaterialTheme.typography.labelSmall)
+        }
+        if (frames.isEmpty() || neuronCount <= 0) {
+            Text("No ${label.lowercase()} spikes yet", style = MaterialTheme.typography.bodySmall)
+        } else {
+            Canvas(modifier = Modifier.fillMaxWidth().height(100.dp).background(Color(0xFF171717))) {
+                val rows = minOf(64, neuronCount)
+                val columnWidth = size.width / frames.size
+                val rowHeight = size.height / rows
+                frames.forEachIndexed { column, frame ->
+                    frame.indices.asSequence().filter { it in 0 until neuronCount }
+                        .map { it * rows / neuronCount }.distinct().forEach { row ->
+                            drawRect(
+                                colour,
+                                topLeft = Offset(column * columnWidth, (rows - row - 1) * rowHeight),
+                                size = Size(maxOf(1f, columnWidth), maxOf(1f, rowHeight)),
+                            )
+                        }
+                }
             }
         }
     }

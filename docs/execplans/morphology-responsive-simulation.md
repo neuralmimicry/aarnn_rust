@@ -517,6 +517,7 @@ must show when source geometry cannot safely support a requested stage.
   deterministic. Evidence: the repeatability/step-bound test, 8 morphology
   tests, 9 native presentation tests, 14 cross-interface tests and JavaScript
   syntax validation.
+- [x] `2026-10-02 10:22Z` User selected automatic heuristic calibration for new and incomplete imported models. The existing point-only import reconstruction now stores a versioned modelled scale, explicit undeclared-unit status, original positions and size assumptions; the persisted record is validated and rebuilt from source topology if tampered. The shared estimator is bounded to 512 deterministically chosen positions. `cargo xtask qa run --suite morphology-physical-calibration` passed 3/3 tests under `MORPH-CAL-001`. This reference slice does not migrate `Morphology::evolve` or satisfy the structural activation/checkpoint gate, so the derived geometry remains separate from live route authority.
 
 ## Validation and acceptance
 

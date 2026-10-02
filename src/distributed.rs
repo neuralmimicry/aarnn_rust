@@ -31,7 +31,7 @@ use self::sysinfo_dummy::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System
 #[cfg(feature = "openmpi")]
 use prost::Message;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 #[cfg(feature = "sysinfo")]
@@ -4193,6 +4193,91 @@ fn validate_sensory_rpc_source<T>(
     Ok(())
 }
 
+/// Bounded read-only activity samples. Biological delay histories can be just
+/// two steps long; they must not be enlarged merely to satisfy a slow UI poll.
+const DISPLAY_ACTIVITY_HISTORY_STEPS: usize = 128;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DisplayActivityFrame {
+    step: u64,
+    spikes: Vec<(u32, i8)>,
+}
+
+impl DisplayActivityFrame {
+    fn from_dense(step: u64, spikes: impl Iterator<Item = (usize, i8)>) -> Self {
+        Self {
+            step,
+            spikes: spikes
+                .filter_map(|(index, spike)| {
+                    if spike == 0 {
+                        None
+                    } else {
+                        u32::try_from(index).ok().map(|index| (index, spike))
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    fn into_proto(self, ts_us: u64) -> SpikeIndices {
+        let aer_events = self
+            .spikes
+            .iter()
+            .map(|&(index, spike)| crate::aer::AerEvent {
+                ts_us,
+                addr: index,
+                value: u8::from(spike > 0),
+            })
+            .collect::<Vec<_>>();
+        SpikeIndices {
+            indices: self.spikes.into_iter().map(|(index, _)| index).collect(),
+            aer_payload: crate::aer::encode_events(&aer_events),
+            aer_base: 0,
+        }
+    }
+}
+
+#[derive(Default)]
+struct DisplayActivityHistory {
+    sensory: VecDeque<DisplayActivityFrame>,
+    output: VecDeque<DisplayActivityFrame>,
+}
+
+impl DisplayActivityHistory {
+    fn record(&mut self, sensory: DisplayActivityFrame, output: DisplayActivityFrame) {
+        debug_assert_eq!(sensory.step, output.step);
+        let step = sensory.step;
+        if let Some(previous) = self.sensory.front() {
+            if previous.step == step {
+                self.sensory.pop_front();
+                self.output.pop_front();
+            } else if previous.step.checked_add(1) != Some(step) {
+                self.sensory.clear();
+                self.output.clear();
+            }
+        }
+        self.sensory.push_front(sensory);
+        self.output.push_front(output);
+        self.sensory.truncate(DISPLAY_ACTIVITY_HISTORY_STEPS);
+        self.output.truncate(DISPLAY_ACTIVITY_HISTORY_STEPS);
+    }
+
+    fn runner_step_frames(runner: &Runner) -> (DisplayActivityFrame, DisplayActivityFrame) {
+        let step = runner.t as u64;
+        let sensory = DisplayActivityFrame::from_dense(
+            step,
+            runner.spk_hist_s.front().into_iter().flat_map(|frame| {
+                frame.iter().copied().enumerate()
+            }),
+        );
+        let output = DisplayActivityFrame::from_dense(
+            step,
+            runner.last_spk_o.iter().copied().enumerate(),
+        );
+        (sensory, output)
+    }
+}
+
 pub struct ManagedNetwork {
     pub id: String,
     pub runner: Runner,
@@ -4227,6 +4312,7 @@ pub struct ManagedNetwork {
     /// separate from the Runner lock so input admission remains responsive
     /// while a biological step is running.
     external_sensory_ingress: ExternalSensoryIngressHandle,
+    display_activity: DisplayActivityHistory,
     pub avg_step_time_ms: f32,
     pub desired_aarnn_depth: u32,
     pub playing: bool,
@@ -4355,6 +4441,7 @@ impl ManagedNetwork {
             remote_spike_steps_bwd: HashMap::new(),
             external_sensory_spikes: None,
             external_sensory_ingress,
+            display_activity: DisplayActivityHistory::default(),
             avg_step_time_ms: 0.0,
             desired_aarnn_depth: initial_config.aarnn_layer_depth as u32,
             playing: false,
@@ -6452,7 +6539,6 @@ impl DistributedNode {
         // The authenticated orchestrator owns source identity. Never accept a
         // client-selected source_node_id for the committed frame identity.
         frame.source_node_id = source_node_id;
-        let has_local_ingress = local_ingress.is_some();
         let identity = external_sensory_identity(&frame);
 
         // Prepare the selected bridge before commit. This two-phase boundary
@@ -6470,8 +6556,11 @@ impl DistributedNode {
             Ok(())
         };
         if let Err(error) = preparation {
-            self.abort_prepared_sensory_frame(&identity, has_local_ingress, &targets)
-                .await;
+            // A failed remote prepare acknowledgement is ambiguous: the
+            // selected owner may have reserved this exact frame already. An
+            // Abort RPC could arrive after the next same-identity retry and
+            // erase its reservation before commit. Keep that bounded slot for
+            // idempotent retry or the receiver's reservation expiry instead.
             return Err(format!(
                 "sensory frame {} was not admitted: {error}",
                 frame.frame_sequence
@@ -6586,7 +6675,16 @@ impl DistributedNode {
                     "sensory I/O bridge {bridge_node_id} for {network_id} is disconnected"
                 ));
             };
-            if !sensory_ingress_owner_is_ready(&state, network_id, &bridge_node_id) {
+            // Only the orchestrator owns the expected load fingerprint. It
+            // advertises a sensory bridge to workers only after the selected
+            // owner reports that exact assignment as loaded. A worker has no
+            // copy of that expectation, so rechecking it here would reject
+            // every worker-origin frame. The destination still validates its
+            // live mailbox, assigned target layer, playing state and width at
+            // prepare time; a stale advertised route cannot admit a frame.
+            if state.is_orchestrator
+                && !sensory_ingress_owner_is_ready(&state, network_id, &bridge_node_id)
+            {
                 let expected_load_fingerprint = state
                     .network_expected_load_fingerprints
                     .get(network_id)
@@ -6849,48 +6947,6 @@ impl DistributedNode {
             ));
         }
         Ok(())
-    }
-
-    async fn abort_remote_sensory_frame(
-        &self,
-        node_id: &str,
-        address: &str,
-        frame_id: proto::SensoryInputFrameId,
-    ) {
-        let cached_client = self.state.read().await.clients.get(node_id).cloned();
-        let Ok(mut client) = (match cached_client {
-            Some(client) => Ok(client),
-            None => connect_peer_with_timeout(address, EXTERNAL_SENSORY_INGRESS_TIMEOUT).await,
-        }) else {
-            return;
-        };
-        let sender = self.state.read().await.node_id.clone();
-        let Ok(request) = authenticated_request(frame_id, &sender) else {
-            return;
-        };
-        let _ = tokio::time::timeout(
-            EXTERNAL_SENSORY_INGRESS_TIMEOUT,
-            client.abort_sensory_input(request),
-        )
-        .await;
-    }
-
-    async fn abort_prepared_sensory_frame(
-        &self,
-        identity: &ExternalSensoryFrameIdentity,
-        has_local: bool,
-        targets: &[(String, String)],
-    ) {
-        if has_local {
-            if let Some(ingress) = self.local_sensory_ingress(&identity.network_id) {
-                self.abort_local_sensory_frame(&ingress, identity).await;
-            }
-        }
-        let frame_id = sensory_frame_id(identity);
-        futures_util::future::join_all(targets.iter().map(|(node_id, address)| {
-            self.abort_remote_sensory_frame(node_id, address, frame_id.clone())
-        }))
-        .await;
     }
 
     #[cfg(feature = "replicated_durability")]
@@ -10156,6 +10212,7 @@ impl DistributedNode {
                                 .collect(),
                             external_sensory_spikes: recovered_channel.external_sensory_spikes,
                             external_sensory_ingress: sensory_ingress,
+                            display_activity: DisplayActivityHistory::default(),
                             avg_step_time_ms: 0.0,
                             desired_aarnn_depth: desired_depth,
                             playing,
@@ -10683,6 +10740,13 @@ impl DistributedNode {
                     }
                 }
             }
+
+            // Capture a bounded display projection after the managed step and
+            // any durable commit gate succeed. This never feeds the Runner or
+            // extends its biological delay buffers.
+            let (sensory_frame, output_frame) =
+                DisplayActivityHistory::runner_step_frames(&net.runner);
+            net.display_activity.record(sensory_frame, output_frame);
 
             if let (Some(identity), Some(sensory)) = (
                 consumed_sensory_identity.as_ref(),
@@ -12678,16 +12742,37 @@ impl DistributedNeuromorphic for DistributedNode {
         // this read for a short, bounded interval. The guard is held only while
         // copying the bounded projection; encoding runs after it is dropped so
         // no lock crosses an await or CPU-heavy conversion.
-        let raw_activity = tokio::time::timeout(Duration::from_millis(250), async {
+        let raw_activity = tokio::time::timeout(Duration::from_secs(6), async {
             let net = net_arc.read().await;
             let sim_step = net.runner.t as u64;
             let sim_time_ms = net.runner.t_ms;
-            let sensory_vec: Vec<i8> = net
-                .runner
-                .spk_hist_s
-                .front()
-                .map(|frame| frame.iter().copied().collect())
-                .unwrap_or_else(|| vec![0; net.runner.net.num_sensory_neurons]);
+            let sensory_target_layer = net.runner.get_io_layers().0;
+            let sensory_target_layer_u32 = sensory_target_layer.min(u32::MAX as usize) as u32;
+            let sensory_stage_assigned = if net.assigned_layers.is_empty() {
+                net.runner.layer_range.is_none()
+            } else {
+                net.assigned_layers.contains(&sensory_target_layer_u32)
+            };
+            let (sensory_vec, sensory_history_vecs) = if sensory_stage_assigned {
+                let history = if net.display_activity.sensory.front()
+                    .is_some_and(|frame| frame.step == sim_step)
+                {
+                    net.display_activity.sensory.iter().cloned().collect::<Vec<_>>()
+                } else {
+                    net.runner.spk_hist_s.iter().take(DISPLAY_ACTIVITY_HISTORY_STEPS)
+                        .enumerate()
+                        .filter_map(|(offset, frame)| sim_step.checked_sub(offset as u64)
+                            .map(|step| DisplayActivityFrame::from_dense(
+                                step, frame.iter().copied().enumerate())))
+                        .collect::<Vec<_>>()
+                };
+                let current = net.runner.spk_hist_s.front()
+                    .map(|frame| frame.iter().copied().collect::<Vec<i8>>())
+                    .unwrap_or_else(|| vec![0; net.runner.net.num_sensory_neurons]);
+                (current, history)
+            } else {
+                (Vec::new(), Vec::new())
+            };
             let hidden_vecs = net
                 .runner
                 .last_spk_h
@@ -12709,20 +12794,28 @@ impl DistributedNeuromorphic for DistributedNode {
                 net.assigned_layers.contains(&output_source_layer_u32)
             };
             let (output_vec, output_history_vecs) = if output_stage_assigned {
+                let history = if net.display_activity.output.front()
+                    .is_some_and(|frame| frame.step == sim_step)
+                {
+                    net.display_activity.output.iter().cloned().collect::<Vec<_>>()
+                } else {
+                    net.runner.spk_hist_o.iter().take(DISPLAY_ACTIVITY_HISTORY_STEPS)
+                        .enumerate()
+                        .filter_map(|(offset, frame)| sim_step.checked_sub(offset as u64)
+                            .map(|step| DisplayActivityFrame::from_dense(
+                                step, frame.iter().copied().enumerate())))
+                        .collect::<Vec<_>>()
+                };
                 (
                     net.runner.last_spk_o.iter().copied().collect::<Vec<i8>>(),
-                    net.runner
-                        .spk_hist_o
-                        .iter()
-                        .take(128)
-                        .map(|frame| frame.iter().copied().collect::<Vec<i8>>())
-                        .collect::<Vec<_>>(),
+                    history,
                 )
             } else {
                 (Vec::new(), Vec::new())
             };
             (
                 sensory_vec,
+                sensory_history_vecs,
                 hidden_vecs,
                 output_vec,
                 output_history_vecs,
@@ -12730,6 +12823,8 @@ impl DistributedNeuromorphic for DistributedNode {
                 sim_time_ms,
                 output_source_layer_u32,
                 output_stage_assigned,
+                sensory_target_layer_u32,
+                sensory_stage_assigned,
             )
         })
         .await
@@ -12737,6 +12832,7 @@ impl DistributedNeuromorphic for DistributedNode {
 
         let (
             sensory_vec,
+            sensory_history_vecs,
             hidden_vecs,
             output_vec,
             output_history_vecs,
@@ -12744,15 +12840,20 @@ impl DistributedNeuromorphic for DistributedNode {
             sim_time_ms,
             output_source_layer,
             output_stage_assigned,
+            sensory_target_layer,
+            sensory_stage_assigned,
         ) = raw_activity;
         let ts_us = (sim_time_ms * 1000.0) as u64;
-        let (sensory, hidden, output, output_history) = tokio::task::spawn_blocking(move || {
+        let (sensory, sensory_history, hidden, output, output_history) = tokio::task::spawn_blocking(move || {
             let sensory_exchange = encode_exchange(ts_us, 0, &sensory_vec);
             let sensory = SpikeIndices {
                 indices: sensory_exchange.spike_indices,
                 aer_payload: sensory_exchange.aer_payload,
                 aer_base: sensory_exchange.aer_base,
             };
+            let sensory_history = sensory_history_vecs.into_iter()
+                .map(|frame| frame.into_proto(ts_us))
+                .collect::<Vec<_>>();
             let hidden = hidden_vecs
                 .iter()
                 .map(|layer_vec| {
@@ -12774,18 +12875,10 @@ impl DistributedNeuromorphic for DistributedNode {
             } else {
                 SpikeIndices::default()
             };
-            let output_history = output_history_vecs
-                .iter()
-                .map(|frame_vec| {
-                    let exchange = encode_exchange(ts_us, 0, frame_vec);
-                    SpikeIndices {
-                        indices: exchange.spike_indices,
-                        aer_payload: exchange.aer_payload,
-                        aer_base: exchange.aer_base,
-                    }
-                })
+            let output_history = output_history_vecs.into_iter()
+                .map(|frame| frame.into_proto(ts_us))
                 .collect::<Vec<_>>();
-            (sensory, hidden, output, output_history)
+            (sensory, sensory_history, hidden, output, output_history)
         })
         .await
         .map_err(|error| Status::internal(format!("activity task failed: {error}")))?;
@@ -12800,6 +12893,9 @@ impl DistributedNeuromorphic for DistributedNode {
             output_history,
             output_source_layer,
             output_stage_assigned,
+            sensory_history,
+            sensory_stage_assigned,
+            sensory_target_layer,
         }))
     }
 }
@@ -12808,6 +12904,37 @@ impl DistributedNeuromorphic for DistributedNode {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn sparse_display_history_retains_intermittent_spikes_without_extending_biological_delay() {
+        let mut history = DisplayActivityHistory::default();
+        for step in 1..=140 {
+            let sensory = DisplayActivityFrame {
+                step,
+                spikes: if step % 10 == 0 { vec![(3, 1)] } else { Vec::new() },
+            };
+            let output = DisplayActivityFrame {
+                step,
+                spikes: if step % 17 == 0 { vec![(1, 1)] } else { Vec::new() },
+            };
+            history.record(sensory, output);
+        }
+        assert_eq!(history.sensory.len(), DISPLAY_ACTIVITY_HISTORY_STEPS);
+        assert_eq!(history.output.len(), DISPLAY_ACTIVITY_HISTORY_STEPS);
+        assert_eq!(history.sensory.front().unwrap().step, 140);
+        assert_eq!(history.sensory.back().unwrap().step, 13);
+        assert_eq!(history.sensory.iter().find(|frame| frame.step == 130).unwrap().spikes, vec![(3, 1)]);
+        assert_eq!(history.output.iter().find(|frame| frame.step == 136).unwrap().spikes, vec![(1, 1)]);
+        let encoded = history.sensory.front().unwrap().clone().into_proto(140_000);
+        assert_eq!(encoded.indices, vec![3]);
+        assert_eq!(crate::aer::decode_events(&encoded.aer_payload).unwrap()[0].addr, 3);
+
+        // A reset or imported step discontinuity starts a new presentation trace.
+        history.record(DisplayActivityFrame { step: 7, spikes: vec![(2, 1)] },
+            DisplayActivityFrame { step: 7, spikes: Vec::new() });
+        assert_eq!(history.sensory.len(), 1);
+        assert_eq!(history.sensory.front().unwrap().step, 7);
+    }
 
     #[test]
     fn a_pending_checkpoint_load_is_reused_until_the_worker_handles_it() {
@@ -14033,6 +14160,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn network_activity_rpc_preserves_spikes_between_sparse_worker_polls() {
+        use proto::distributed_neuromorphic_server::DistributedNeuromorphic;
+
+        let node = DistributedNode::new("sparse-activity-node".to_owned(), true);
+        let mut config = NetworkConfig::default();
+        config.num_sensory_neurons = 2;
+        config.num_hidden_layers = 1;
+        config.num_hidden_per_layer_initial = 3;
+        config.num_output_neurons = 2;
+        node.handle_command(NetworkCommand {
+            r#type: proto::network_command::CommandType::LoadNetwork as i32,
+            network_id: "sparse-activity".to_owned(),
+            config_json: serde_json::to_vec(&config).unwrap(),
+            layers: vec![0, 1],
+            redundant_layers: Vec::new(),
+            desired_aarnn_depth: 1,
+            neuron_model: "lif".to_owned(),
+            learning_rule: "stdp".to_owned(),
+        }).await;
+        let network = node.state.read().await.networks.get("sparse-activity").unwrap().clone();
+        {
+            let mut network = network.write().await;
+            assert!(network.runner.spk_hist_s.len() < DISPLAY_ACTIVITY_HISTORY_STEPS);
+            network.runner.t = 140;
+            network.runner.t_ms = 140.0;
+            network.assigned_layers.clear();
+            network.runner.layer_range = None;
+            for step in 13..=140 {
+                network.display_activity.record(
+                    DisplayActivityFrame { step, spikes: if step % 10 == 0 { vec![(1, 1)] } else { Vec::new() } },
+                    DisplayActivityFrame { step, spikes: if step % 17 == 0 { vec![(0, 1)] } else { Vec::new() } },
+                );
+            }
+        }
+        let response = node.get_network_activity(Request::new(NetworkActivityRequest {
+            network_id: "sparse-activity".to_owned(),
+        })).await.unwrap().into_inner();
+        assert_eq!(response.sim_step, 140);
+        assert_eq!(response.sensory_history.len(), DISPLAY_ACTIVITY_HISTORY_STEPS);
+        assert_eq!(response.sensory_history[10].indices, vec![1], "step 130 survives a two-step biological ring");
+        assert_eq!(response.output_history[4].indices, vec![0], "step 136 survives a two-step biological ring");
+    }
+
+    #[tokio::test]
     async fn heartbeat_resource_snapshots_use_cached_values_while_network_is_busy() {
         let node = DistributedNode::new("resource-lock-test".to_string(), false);
         let mut config = NetworkConfig::default();
@@ -14220,6 +14391,7 @@ mod tests {
             let mut network = network.write().await;
             network.runner.last_spk_o[0] = 1;
             network.runner.spk_hist_o[0][0] = 1;
+            network.runner.spk_hist_s[0][1] = 1;
             assert_eq!(network.runner.layer_range, Some(0..1));
         }
 
@@ -14235,6 +14407,9 @@ mod tests {
         assert!(!response.output_stage_assigned);
         assert!(response.output.expect("output envelope").indices.is_empty());
         assert!(response.output_history.is_empty());
+        assert!(response.sensory_stage_assigned);
+        assert_eq!(response.sensory_target_layer, 0);
+        assert_eq!(response.sensory_history[0].indices, vec![1]);
 
         node.handle_command(NetworkCommand {
             r#type: proto::network_command::CommandType::LoadNetwork as i32,
@@ -14268,6 +14443,9 @@ mod tests {
             .into_inner();
         assert_eq!(owner_response.output_source_layer, 2);
         assert!(owner_response.output_stage_assigned);
+        assert!(!owner_response.sensory_stage_assigned);
+        assert!(owner_response.sensory.expect("sensory envelope").indices.is_empty());
+        assert!(owner_response.sensory_history.is_empty());
         assert_eq!(
             owner_response
                 .output
@@ -14403,6 +14581,7 @@ mod tests {
             remote_spike_steps_bwd: HashMap::new(),
             external_sensory_spikes: None,
             external_sensory_ingress: sensory_ingress,
+            display_activity: DisplayActivityHistory::default(),
             avg_step_time_ms: 0.0,
             desired_aarnn_depth: 0,
             playing: true,
@@ -14491,6 +14670,7 @@ mod tests {
             remote_spike_steps_bwd: HashMap::new(),
             external_sensory_spikes: None,
             external_sensory_ingress: sensory_ingress,
+            display_activity: DisplayActivityHistory::default(),
             avg_step_time_ms: 0.0,
             desired_aarnn_depth: 0,
             playing: false,
@@ -16139,6 +16319,68 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn uncertain_sensory_prepare_can_retry_without_losing_its_reservation() {
+        let node = DistributedNode::new("sender".to_owned(), false);
+        let ingress = Arc::new(std::sync::Mutex::new(ExternalSensoryIngress::new(
+            1,
+            0,
+            vec![0],
+            true,
+            false,
+        )));
+        let identity = ExternalSensoryFrameIdentity {
+            network_id: "audio-brain".to_owned(),
+            source_node_id: "sender".to_owned(),
+            session_id: "ipc-session".to_owned(),
+            sequence: 0,
+        };
+        assert_eq!(
+            try_prepare_external_sensory_frame(&ingress, &identity, &[1], &[1])
+                .expect("first prepare"),
+            Some(false)
+        );
+        // Model a lost prepare acknowledgement: the sender retries the same
+        // identity while the receiver still owns its bounded reservation.
+        assert_eq!(
+            try_prepare_external_sensory_frame(&ingress, &identity, &[1], &[1])
+                .expect("idempotent prepare retry"),
+            Some(false)
+        );
+        node.commit_local_sensory_frame(&ingress, &identity)
+            .await
+            .expect("retry can commit the original reservation");
+        assert_eq!(
+            lock_external_sensory_ingress(&ingress)
+                .committed
+                .as_ref()
+                .map(|frame| frame.identity.clone()),
+            Some(identity.clone())
+        );
+        node.finish_local_sensory_step(&ingress, Some(&identity), false);
+
+        let abandoned = ExternalSensoryFrameIdentity {
+            sequence: 1,
+            ..identity.clone()
+        };
+        try_prepare_external_sensory_frame(&ingress, &abandoned, &[1], &[1])
+            .expect("prepare abandoned frame");
+        lock_external_sensory_ingress(&ingress)
+            .pending
+            .as_mut()
+            .expect("reservation exists")
+            .reserved_at = std::time::Instant::now() - EXTERNAL_SENSORY_RESERVATION_TTL;
+        let next = ExternalSensoryFrameIdentity {
+            sequence: 2,
+            ..identity
+        };
+        assert_eq!(
+            try_prepare_external_sensory_frame(&ingress, &next, &[1], &[1])
+                .expect("expired reservation is replaced"),
+            Some(false)
+        );
+    }
+
     #[test]
     fn external_sensory_gateway_enforces_the_configured_bearer() {
         assert_eq!(
@@ -16551,6 +16793,44 @@ mod tests {
             .expect_err("indices beyond the loaded sensory width are rejected");
         assert!(invalid_index.contains("exceeds network sensory width"));
 
+        // The IPC owner is itself a worker. It receives only the
+        // orchestrator-published, load-verified route, not the orchestrator's
+        // expected fingerprint map. It must still be able to send directly
+        // to the selected bridge without holding its node-state lock across
+        // the remote prepare/commit acknowledgement.
+        {
+            let mut state = worker.state.write().await;
+            state.peers.insert(
+                "worker-b".to_owned(),
+                format!("http://{downstream_address}"),
+            );
+            state
+                .network_sensory_ingress_node
+                .insert("audio-brain".to_owned(), "worker-b".to_owned());
+            assert!(state.network_expected_load_fingerprints.is_empty());
+        }
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            worker.inject_external_sensory_frame("audio-brain", "ipc-session", 0, 0, &[1]),
+        )
+        .await
+        .expect("worker-to-worker admission remains bounded")
+        .expect("the published bridge accepts the IPC owner's first frame");
+        {
+            let state = downstream_worker.state.read().await;
+            let ingress = state
+                .sensory_ingress_mailboxes
+                .get("audio-brain")
+                .expect("configured bridge ingress");
+            let frame = lock_external_sensory_ingress(ingress)
+                .committed
+                .clone()
+                .expect("IPC owner frame committed at the selected bridge");
+            assert_eq!(frame.identity.source_node_id, "worker-a");
+            assert_eq!(frame.identity.sequence, 0);
+            assert_eq!(frame.spikes, [1]);
+        }
+
         let _ = shutdown_tx.send(());
         server.await.expect("join test worker RPC server");
         let _ = downstream_shutdown_tx.send(());
@@ -16951,6 +17231,7 @@ mod tests {
             remote_spike_steps_bwd: HashMap::new(),
             external_sensory_spikes: None,
             external_sensory_ingress: sensory_ingress.clone(),
+            display_activity: DisplayActivityHistory::default(),
             avg_step_time_ms: 0.0,
             desired_aarnn_depth: 1,
             playing: true,

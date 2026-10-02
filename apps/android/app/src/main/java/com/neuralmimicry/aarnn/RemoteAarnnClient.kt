@@ -147,7 +147,21 @@ class RemoteAarnnClient(
             sensory = root.optJSONArray("sensory")?.toIntList().orEmpty(),
             hidden = root.optJSONArray("hidden")?.toIntLists().orEmpty(),
             output = root.optJSONArray("output")?.toIntList().orEmpty(),
+            sensoryHistory = parseSpikeHistory(root.optJSONArray("sensory_history")),
+            outputHistory = parseSpikeHistory(root.optJSONArray("output_history")),
         )
+    }
+
+    private fun parseSpikeHistory(values: JSONArray?): List<RemoteSpikeFrame> {
+        if (values == null) return emptyList()
+        return buildList(minOf(values.length(), 128)) {
+            for (index in 0 until minOf(values.length(), 128)) {
+                val value = values.optJSONObject(index) ?: continue
+                val step = value.optLong("step", -1)
+                if (step < 0) continue
+                add(RemoteSpikeFrame(step, value.optJSONArray("indices")?.toIntList().orEmpty()))
+            }
+        }.sortedBy { it.step }
     }
 
     private fun parseTopology(body: String): RemoteTopology {
@@ -310,6 +324,7 @@ class RemoteAarnnClient(
             complete = coverage?.optBoolean("complete") ?: false,
             truncated = coverage?.optBoolean("truncated") ?: false,
             volumetricClearanceVerified = coverage?.optBoolean("volumetric_clearance_verified") ?: false,
+            contactSetVerified = coverage?.optBoolean("contact_set_verified") ?: false,
             unavailableReason = coverage?.optString("unavailable_reason")?.takeIf { it.isNotBlank() },
             region = region,
             membrane = coverage?.optJSONObject("membrane")?.let { value ->
@@ -426,7 +441,11 @@ data class RemoteActivity(
     val sensory: List<Int>,
     val hidden: List<List<Int>>,
     val output: List<Int>,
+    val sensoryHistory: List<RemoteSpikeFrame>,
+    val outputHistory: List<RemoteSpikeFrame>,
 )
+
+data class RemoteSpikeFrame(val step: Long, val indices: List<Int>)
 
 data class RemoteWorkspaceSnapshot(
     val summary: RemoteWorkspaceSummary,
@@ -455,6 +474,7 @@ data class RemoteDisplaySnapshot(
     val complete: Boolean,
     val truncated: Boolean,
     val volumetricClearanceVerified: Boolean,
+    val contactSetVerified: Boolean,
     val unavailableReason: String?,
     val region: RemoteDisplayBounds?,
     val membrane: RemoteDisplayMembrane?,

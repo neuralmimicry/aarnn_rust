@@ -182,6 +182,37 @@ class ContentParity(unittest.TestCase):
         shared = (ROOT / 'sim/unreal/Source/NmAerBridge/Private/NmSharedContent.cpp').read_text()
         self.assertIn('bOutputs ? TEXT("output_names") : TEXT("sensor_names")', shared)
 
+    def test_webots_neural_outputs_have_motor_routes_for_every_local_robot(self):
+        """A quiet actuator must be a neural value, not an unmatched device name."""
+        proto_by_kind = {
+            'celegans': ('CelegansRobot.proto', 24),
+            'drosophila_banc': ('DrosophilaBancRobot.proto', 26),
+            'drosophila_fafb': ('DrosophilaFafbRobot.proto', 26),
+            'hexapod': ('HexapodRobot.proto', 0),
+            'zebrafish': ('ZebrafishRobot.proto', 1),
+        }
+        profiles = {p['id']: p for p in self.catalogue['profiles']}
+        for kind, (proto, derived_count) in proto_by_kind.items():
+            with self.subTest(robot=kind):
+                text = (ROOT / 'webots_world/protos' / proto).read_text()
+                motors = re.findall(
+                    r'(?:RotationalMotor|LinearMotor)\s*\{\s*name\s+"([^"]+)"',
+                    text,
+                )
+                outputs = profiles[kind]['output_names']
+                self.assertEqual(len(motors), len(set(motors)))
+                self.assertEqual(outputs, sorted(set(outputs) & set(motors)))
+                self.assertEqual(len(motors) - len(outputs), derived_count)
+
+        # NAO is an official external Webots PROTO. Its 40-channel contract is
+        # checked here; live device discovery remains the runtime oracle.
+        nao_config = json.loads(
+            (ROOT / 'webots_world/configs/config_nao_webots.json').read_text()
+        )
+        self.assertEqual(nao_config['num_output_neurons'], 40)
+        builder = (ROOT / 'scripts/build_webots_multi_world.py').read_text()
+        self.assertIn('softbank/nao/protos/Nao.proto', builder)
+
         webgl = (ROOT / 'web_ui/webgl-world.js').read_text()
         for marker in (
             'function hexapodJointTransform',

@@ -15,10 +15,12 @@
 #include <webots/Motor.hpp>
 #include <webots/Accelerometer.hpp>
 #include <webots/Gyro.hpp>
+#include <webots/Supervisor.hpp>
 #include <webots/DistanceSensor.hpp>
 #include <webots/Keyboard.hpp>
 #include <webots/utils/motion.h>
 #include <device_mapper.hpp>
+#include <celegans_muscle_response.hpp>
 #include <keyboard_mapper.hpp>
 
 #include <sys/socket.h>
@@ -753,6 +755,7 @@ static std::vector<std::string> split(const std::string& s, char delim) {
 }
 
 struct CelegansMuscleBridge {
+    aarnn::webots::CelegansMuscleResponse response;
     std::vector<int> spine_indices;  // 1-based segment joints, size 24
     std::vector<int> mdl_indices;
     std::vector<int> mdr_indices;
@@ -779,7 +782,9 @@ struct CelegansMuscleBridge {
     size_t apply_counter = 0;
     size_t debug_interval = 0;
 
-    CelegansMuscleBridge() {
+    explicit CelegansMuscleBridge(float timestep_ms)
+      : response(timestep_ms,
+                 env_float_range("NM_CELEGANS_NEURAL_BEND_GAIN", 3.0f, 1.0f, 6.0f)) {
         spine_indices.assign(24, -1);
         mdl_indices.assign(24, -1);
         mdr_indices.assign(24, -1);
@@ -843,6 +848,8 @@ struct CelegansMuscleBridge {
         active = matched_spine >= 8 && matched_muscle >= 24;
         if (active) {
             std::cout << "[nao_nn_controller_uds] Celegans muscle bridge active"
+                      << " (response_v=" << aarnn::webots::CelegansMuscleResponse::kVersion
+                      << ", neural_gain=" << response.neural_gain() << ")"
                       << " (spine motors=" << matched_spine
                       << ", muscle channels=" << matched_muscle
                       << ", twitch_fallback=" << (twitch_fallback ? 1 : 0)
@@ -861,20 +868,7 @@ struct CelegansMuscleBridge {
     }
 
     inline float contract_from_output(float raw, float& trace) {
-        // Accept both binary spikes and graded commands:
-        // - binary 0/1 outputs still generate twitch-like contractions
-        // - graded outputs around 0.5 remain neutral; >0.5 increases contraction
-        float clamped = raw;
-        if (!std::isfinite(clamped)) clamped = 0.5f;
-        if (clamped < 0.0f) clamped = 0.0f;
-        if (clamped > 1.0f) clamped = 1.0f;
-        const float graded_drive = std::max(0.0f, (clamped - 0.5f) * 2.0f);
-        const float spike_boost = clamped >= 0.999f ? 1.0f : 0.0f;
-        const float drive = std::max(graded_drive, spike_boost);
-        trace = 0.92f * trace + 0.62f * drive;
-        if (trace > 1.0f) trace = 1.0f;
-        if (trace < 0.0f) trace = 0.0f;
-        return 0.5f + 0.5f * trace; // neutral-centered contraction command
+        return response.contraction(raw, trace);
     }
 
     void apply(std::vector<float>& all_a) {
@@ -931,9 +925,7 @@ struct CelegansMuscleBridge {
                 drive *= 0.72f;  // taper head/tail deflection
             }
 
-            float target = 0.5f + 0.44f * drive;
-            if (target < 0.05f) target = 0.05f;
-            if (target > 0.95f) target = 0.95f;
+            float target = response.target(drive);
             spine_for_seg[seg] = spine_idx;
             drive_for_seg[seg] = drive;
             target_for_seg[seg] = target;
@@ -982,8 +974,9 @@ struct CelegansMuscleBridge {
                 const float wave = std::sin(
                   twitch_phase + twitch_segment_lag * static_cast<float>(seg)
                 );
-                float driven = drive_for_seg[seg] + injected_amp * edge_taper * wave;
-                float target = 0.5f + 0.44f * driven;
+                // Keep the existing fallback amplitude independent of neural gain.
+                float target = response.target(drive_for_seg[seg]) +
+                               0.44f * injected_amp * edge_taper * wave;
                 if (target < 0.05f) target = 0.05f;
                 if (target > 0.95f) target = 0.95f;
                 target_for_seg[seg] = target;
@@ -1000,8 +993,7 @@ struct CelegansMuscleBridge {
             float target = target_for_seg[seg];
             target_min = std::min(target_min, target);
             target_max = std::max(target_max, target);
-            const float alpha = injected_twitch ? 0.34f : 0.22f;
-            smoothed_targets[seg] = (1.0f - alpha) * smoothed_targets[seg] + alpha * target;
+            smoothed_targets[seg] = response.smooth_spine(target, smoothed_targets[seg]);
             all_a[spine_idx] = smoothed_targets[seg];
             spine_min = std::min(spine_min, smoothed_targets[seg]);
             spine_max = std::max(spine_max, smoothed_targets[seg]);
@@ -2025,7 +2017,7 @@ int main(int argc, char** argv) {
     }
 
     // 2. Webots setup
-    Robot robot;
+    Supervisor robot;
     const int dt = (int)robot.getBasicTimeStep();
     // Keep NN time in lock-step with Webots time by default.
     const float ipc_dt_ms = ipc_dt_ms_override(static_cast<float>(dt));
@@ -2048,10 +2040,17 @@ int main(int argc, char** argv) {
 
     auto all_s_names = mapper.get_sensor_names();
     auto all_o_names = mapper.get_actuator_names();
-    CelegansMuscleBridge celegans_bridge;
+    CelegansMuscleBridge celegans_bridge(static_cast<float>(dt));
     celegans_bridge.discover(all_o_names);
     DrosophilaMotionBridge dros_bridge;
     dros_bridge.discover(all_o_names);
+    // A supervisor-controlled, bounded vertical force approximates aggregate
+    // wing lift. It acts on Webots physics, not pose; it is not a resolved
+    // aerodynamic model of the articulated wings.
+    Node* fly_body = nullptr;
+    if (dros_bridge.active) {
+        fly_body = robot.getSelf();
+    }
     HexapodLegBridge hexapod_bridge;
     hexapod_bridge.discover(all_o_names);
     NaoPostureBridge nao_bridge;
@@ -2215,6 +2214,11 @@ int main(int argc, char** argv) {
     // 5. Main Loop
     std::vector<float> all_s(all_s_names.size(), 0.0f);
     std::vector<float> all_a(all_o_names.size(), 0.5f);
+    double last_fly_reply_s = -1.0;
+    double fly_lift_force = 0.0;
+    size_t fly_lift_steps = 0;
+    double fly_previous_altitude = 0.0;
+    bool fly_altitude_initialized = false;
 
     while (robot.step(dt) != -1) {
         double now = monotonic_now_seconds();
@@ -2325,6 +2329,7 @@ int main(int argc, char** argv) {
             }
 
             if (xfer_ok) {
+                if (fly_body) last_fly_reply_s = now;
                 if (!b.connected) {
                     std::cout << "[nao_nn_controller_uds] Brain '" << b.id << "': Connected." << std::endl;
                 }
@@ -2473,6 +2478,58 @@ int main(int argc, char** argv) {
             hexapod_bridge.apply(all_a);
             nao_bridge.apply(all_a);
             mapper.apply_actuators(all_a);
+            if (fly_body) {
+                // 0.5 is neural neutral. Apply world-vertical lift under the
+                // world's 9.81 m/s² gravity when neural wing drive is fresh.
+                // Decay promptly when the output stream stops; never keep a
+                // flight force alive on a stale or disconnected neural frame.
+                double drive = 0.0;
+                if (last_fly_reply_s >= 0.0 && now - last_fly_reply_s <= 0.20) {
+                    for (int index : dros_bridge.dros_output_indices) {
+                        const float value = all_a[(size_t)index];
+                        if (std::isfinite(value))
+                            drive += std::fabs(std::clamp(value, 0.0f, 1.0f) - 0.5f);
+                    }
+                    if (!dros_bridge.dros_output_indices.empty()) {
+                        drive /= dros_bridge.dros_output_indices.size();
+                    }
+                }
+                const double activity = std::clamp(drive / 0.25, 0.0, 1.0);
+                double altitude = 0.0;
+                double vertical_speed = 0.0;
+                if (std::isfinite(fly_body->getPosition()[2])) {
+                    altitude = fly_body->getPosition()[2];
+                    if (fly_altitude_initialized) {
+                        vertical_speed = std::clamp(
+                            (altitude - fly_previous_altitude) / (dt * 0.001), -3.0, 3.0);
+                    }
+                    fly_previous_altitude = altitude;
+                    fly_altitude_initialized = true;
+                }
+                // Approximate 14 g articulated rig: 0.137 N to hover. The
+                // proportional and derivative terms bound takeoff and descent
+                // near a 0.32 m flight lane without forcing a suspended pose.
+                const double requested_force = std::clamp(
+                    0.014 * 9.81 + 0.45 * (0.32 - altitude) - 0.12 * vertical_speed,
+                    0.0, 0.20);
+                const double target_force = activity * requested_force;
+                fly_lift_force += std::clamp(target_force - fly_lift_force, -0.05, 0.05);
+                const double* orientation = fly_body->getOrientation();
+                // Local +Y is anatomical up; retain its world alignment for
+                // diagnostics while the flight stabiliser applies vertical lift.
+                const double up_z = std::isfinite(orientation[7]) ? orientation[7] : 0.0;
+                const double wing_force[3] = {0.0, 0.0,
+                    std::isfinite(fly_lift_force) ? fly_lift_force : 0.0};
+                fly_body->addForce(wing_force, false);
+                if (++fly_lift_steps % 10 == 0 && env_bool("NM_DROS_FLIGHT_DEBUG", false)) {
+                    std::cout << "[nao_nn_controller_uds] Fly lift robot=" << robot.getName()
+                              << " drive=" << drive << " force_N=" << fly_lift_force
+                              << " z=" << altitude << " vz=" << vertical_speed
+                              << " upright=" << up_z
+                              << " fresh=" << (last_fly_reply_s >= 0.0 && now - last_fly_reply_s <= 0.20)
+                              << std::endl;
+                }
+            }
         }
         if (webots_step_sleep_ms > 0) {
             std::this_thread::sleep_for(

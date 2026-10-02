@@ -283,6 +283,11 @@ message NetworkActivityResponse {
   // owns that active layer assignment.
   uint32 output_source_layer = 8;
   bool output_stage_assigned = 9;
+  // Newest first, bounded to the same 128 simulation steps as output_history.
+  // Only the active sensory-target owner publishes these frames.
+  repeated SpikeIndices sensory_history = 10;
+  bool sensory_stage_assigned = 11;
+  uint32 sensory_target_layer = 12;
 }
 message NetworkResources {
   uint64 num_neurons = 1;

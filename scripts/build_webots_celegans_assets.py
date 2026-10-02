@@ -352,12 +352,20 @@ def build_sensor_block() -> str:
       TouchSensor {{
         name "{CELEGANS_SENSOR_PREFIX}_06_touch_front"
         type "bumper"
-        translation 0.19 0.0 0.0
+        translation 0.19 0.010 0.0
+        # The contact face sits just beyond the head hull and above the agar,
+        # so resting on the floor is not mistaken for an object push.
+        boundingObject Box {{
+          size 0.022 0.010 0.026
+        }}
       }}
       TouchSensor {{
         name "{CELEGANS_SENSOR_PREFIX}_07_touch_rear"
         type "bumper"
-        translation -0.19 0.0 0.0
+        translation -0.19 0.010 0.0
+        boundingObject Box {{
+          size 0.022 0.010 0.026
+        }}
       }}
       # Phototaxis channels.
       LightSensor {{

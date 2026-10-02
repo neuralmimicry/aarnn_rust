@@ -1,7 +1,7 @@
 #VRML_SIM R2025a utf8
 # Generated shared habitat; source sim/content/catalog.json; 4d0d506e80f146acf04e34ee781f67ab465c6d1f336b73c799bc3e3904a6b2d8
 EXTERNPROTO "../protos/ZebrafishRobot.proto"
-WorldInfo { basicTimeStep 32 gravity 2.2 contactProperties [ ContactProperties {
+WorldInfo { basicTimeStep 32 gravity 9.81 contactProperties [ ContactProperties {
           material1 "water_body" coulombFriction 0.05 0.05 0.05 bounce 0.1 bounceVelocity 0.02
         } ] }
 Viewpoint { orientation 1 0 0 0.64 position 0 -0.75000 0.60000 }

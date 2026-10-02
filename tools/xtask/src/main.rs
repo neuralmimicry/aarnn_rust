@@ -249,6 +249,21 @@ fn scenario_manifest_is_complete(root: &Path, id: &str) -> bool {
 
 fn qa_suite(root: &Path, suite: &str) -> bool {
     match suite {
+        "morphology-physical-calibration" => {
+            scenario_manifest_is_complete(root, "MORPH-CAL-001")
+                && run(
+                    root,
+                    "cargo",
+                    &[
+                        "test",
+                        "--locked",
+                        "--features",
+                        "ui,engine_runtime,morpho,growth3d",
+                        "--lib",
+                        "calibration",
+                    ],
+                )
+        }
         "morphology-growth-cone" => {
             scenario_manifest_is_complete(root, "MORPH-GROW-001")
                 && run(root, "python3", &["scripts/qa/run_growth_cone.py"])

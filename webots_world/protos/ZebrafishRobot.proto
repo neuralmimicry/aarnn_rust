@@ -263,7 +263,7 @@ Solid { name "nm_neuromast_2_1" translation 0.021600 0.006775 0.001200 rotation 
         rotation 0 1 0 0.2800
         children [
           Camera {
-            name "zebrafish_eye_left"
+            name "zebrafish_s_16_eye_left"
             width 1
             height 1
             fieldOfView 2.85
@@ -276,7 +276,7 @@ Solid { name "nm_neuromast_2_1" translation 0.021600 0.006775 0.001200 rotation 
         rotation 0 1 0 -0.2800
         children [
           Camera {
-            name "zebrafish_eye_right"
+            name "zebrafish_s_18_eye_right"
             width 1
             height 1
             fieldOfView 2.85

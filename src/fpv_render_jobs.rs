@@ -1764,6 +1764,7 @@ mod tests {
                 complete: true,
                 truncated: false,
                 volumetric_clearance_verified: false,
+                contact_set_verified: false,
                 unavailable_reason: None,
                 region: None,
                 membrane: Some(DisplayMembrane {
@@ -1885,6 +1886,7 @@ mod tests {
         // The stage-eight/nine ceiling is available only when the immutable
         // scene carries physical radii and a producer clearance witness.
         request.scene.coverage.volumetric_clearance_verified = true;
+        request.scene.coverage.contact_set_verified = true;
         request
             .scene
             .paths

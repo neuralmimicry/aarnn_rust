@@ -135,6 +135,9 @@ const probeCountEl = document.getElementById("probe-count");
 const rasterCanvas = document.getElementById("raster-canvas");
 const rasterCtx = rasterCanvas ? rasterCanvas.getContext("2d") : null;
 const rasterFramesEl = document.getElementById("raster-frames");
+const inputRasterCanvas = document.getElementById("input-raster-canvas");
+const inputRasterCtx = inputRasterCanvas ? inputRasterCanvas.getContext("2d") : null;
+const inputRasterFramesEl = document.getElementById("input-raster-frames");
 const surfaceTabs = document.querySelectorAll("[data-surface-tab]");
 const dashboardSurface = document.getElementById("dashboard-surface");
 const fpvSurface = document.getElementById("fpv-surface");
@@ -193,6 +196,7 @@ const PROBE_HISTORY = 220;
 // so different lengths make two views of the same stream look inconsistent.
 const RASTER_HISTORY = 240;
 const MAX_RASTER_OUTPUTS = 4096;
+const MAX_INPUT_RASTER_ROWS = 512;
 const PROBE_HOLD_SAMPLES = 3;
 const PROBE_RELEASE_STEP = 0.25;
 const PROBE_COLORS = ["#71e0b1", "#ffd37a", "#7db8ff", "#ff9b7a", "#d4a8ff", "#9ce67a", "#ffcf99", "#8dd8ff"];
@@ -516,6 +520,9 @@ function loadInstrumentationState() {
     }, () => 0),
     outputRaster: [],
     lastRasterStep: null,
+    inputRaster: [],
+    inputRasterNeuronCount: 0,
+    lastInputRasterStep: null,
     screenNodes: [],
     contextTarget: null
   };
@@ -538,6 +545,9 @@ function resetInstrumentationBuffers({
   }, () => 0);
   state.instrumentation.outputRaster = [];
   state.instrumentation.lastRasterStep = null;
+  state.instrumentation.inputRaster = [];
+  state.instrumentation.inputRasterNeuronCount = 0;
+  state.instrumentation.lastInputRasterStep = null;
   state.instrumentation.screenNodes = [];
   state.instrumentation.contextTarget = null;
   if (keepProbes) {
@@ -2671,7 +2681,9 @@ async function captureFpvRouteTiles(source, overview) {
       complete: tileScenes.every(tile => tile.coverage && tile.coverage.complete),
       truncated: tileScenes.some(tile => !tile.coverage || tile.coverage.truncated),
       volumetric_clearance_verified: tileScenes.length > 0 && tileScenes.every(tile =>
-        tile.coverage && tile.coverage.volumetric_clearance_verified === true)
+        tile.coverage && tile.coverage.volumetric_clearance_verified === true),
+      contact_set_verified: tileScenes.length > 0 && tileScenes.every(tile =>
+        tile.coverage && tile.coverage.contact_set_verified === true)
     }
   };
 }
@@ -5387,6 +5399,47 @@ function drawRasterPanel() {
     rasterCtx.fillText(`spikes ${rasterSpikeCount}`, rect.width - 10, 14);
   }
 }
+function drawInputRasterPanel() {
+  if (!inputRasterCanvas || !inputRasterCtx) return;
+  const rect = preparePanelCanvas(inputRasterCanvas, inputRasterCtx);
+  if (!rect) return;
+  inputRasterCtx.fillStyle = "#171717";
+  inputRasterCtx.fillRect(0, 0, rect.width, rect.height);
+  const frames = state.instrumentation.inputRaster || [];
+  if (inputRasterFramesEl) inputRasterFramesEl.textContent = String(frames.length);
+  if (!frames.length) {
+    inputRasterCtx.fillStyle = "#8a8a8a";
+    inputRasterCtx.font = "12px sans-serif";
+    inputRasterCtx.textAlign = "center";
+    inputRasterCtx.fillText("No input spikes yet", rect.width / 2, rect.height / 2);
+    return;
+  }
+  const left = 8;
+  const top = 8;
+  const width = rect.width - 16;
+  const height = rect.height - 16;
+  const rows = Math.min(MAX_INPUT_RASTER_ROWS,
+    Math.max(1, state.instrumentation.inputRasterNeuronCount || currentSensoryCount()));
+  const cw = width / Math.max(1, frames.length);
+  const ch = height / rows;
+  inputRasterCtx.fillStyle = "rgba(255,255,255,0.06)";
+  inputRasterCtx.fillRect(left, top, width, height);
+  let spikes = 0;
+  frames.forEach((frame, column) => {
+    spikes += frame.spikeCount;
+    frame.rows.forEach(row => {
+      inputRasterCtx.fillStyle = "#71e0b1";
+      inputRasterCtx.fillRect(left + column * cw, top + (rows - row - 1) * ch,
+        Math.max(2, cw - 1), Math.max(2, ch - 1));
+    });
+  });
+  if (spikes > 0) {
+    inputRasterCtx.fillStyle = "rgba(210,210,210,0.9)";
+    inputRasterCtx.font = "10px sans-serif";
+    inputRasterCtx.textAlign = "right";
+    inputRasterCtx.fillText(`spikes ${spikes}`, rect.width - 10, 14);
+  }
+}
 function renderProbeList() {
   if (!scopeProbesEl) return;
   const probes = state.instrumentation.probes;
@@ -5428,6 +5481,7 @@ function renderProbeList() {
 function renderInstrumentation() {
   renderEqPanel();
   drawScopePanel();
+  drawInputRasterPanel();
   drawRasterPanel();
   renderProbeList();
   syncProbeControls();
@@ -5496,6 +5550,47 @@ function updateEqBands(sensoryIndices) {
     }
     return previous * 0.72 + target * 0.28;
   });
+}
+function pushInputRasterFrame(sensoryIndices, step = null) {
+  const indices = Array.isArray(sensoryIndices) ? sensoryIndices : [];
+  const inferredCount = indices.reduce((count, raw) => {
+    const index = Number(raw);
+    return Number.isInteger(index) && index >= 0 ? Math.max(count, index + 1) : count;
+  }, 0);
+  const neuronCount = Math.max(currentSensoryCount(), inferredCount);
+  if (!neuronCount) return false;
+  if (state.instrumentation.inputRasterNeuronCount !== neuronCount) {
+    state.instrumentation.inputRaster = [];
+    state.instrumentation.lastInputRasterStep = null;
+    state.instrumentation.inputRasterNeuronCount = neuronCount;
+  }
+  const numericStep = Number(step);
+  const hasStep = step !== null && step !== undefined && Number.isFinite(numericStep) && numericStep >= 0;
+  if (hasStep) {
+    const last = state.instrumentation.lastInputRasterStep;
+    if (last !== null && last !== undefined && numericStep < last && last - numericStep > RASTER_HISTORY * 4) {
+      state.instrumentation.inputRaster = [];
+      state.instrumentation.lastInputRasterStep = null;
+    } else if (last !== null && last !== undefined && numericStep <= last) {
+      return false;
+    }
+  }
+  const rowCount = Math.min(MAX_INPUT_RASTER_ROWS, neuronCount);
+  const rows = new Set();
+  let spikeCount = 0;
+  indices.forEach(raw => {
+    const index = Number(raw);
+    if (Number.isInteger(index) && index >= 0 && index < neuronCount) {
+      spikeCount += 1;
+      rows.add(Math.min(rowCount - 1, Math.floor(index * rowCount / neuronCount)));
+    }
+  });
+  state.instrumentation.inputRaster.push({ rows: Array.from(rows), spikeCount });
+  while (state.instrumentation.inputRaster.length > RASTER_HISTORY) {
+    state.instrumentation.inputRaster.shift();
+  }
+  if (hasStep) state.instrumentation.lastInputRasterStep = Math.trunc(numericStep);
+  return true;
 }
 function pushOutputRasterFrame(outputIndices, step = null) {
   const numericStep = Number(step);
@@ -5597,6 +5692,11 @@ function pushInstrumentationFrame(activity) {
   const sensoryIndices = (activity === null || activity === void 0 || (_activity$sensory2 = activity.sensory) === null || _activity$sensory2 === void 0 ? void 0 : _activity$sensory2.indices) || [];
   const outputIndices = (activity === null || activity === void 0 || (_activity$output2 = activity.output) === null || _activity$output2 === void 0 ? void 0 : _activity$output2.indices) || [];
   updateEqBands(sensoryIndices);
+  const sensoryHistory = Array.isArray(activity === null || activity === void 0 ? void 0 : activity.sensory_history) ? activity.sensory_history.slice() : [];
+  sensoryHistory.sort((a, b) => Number(a && a.step) - Number(b && b.step));
+  sensoryHistory.forEach(frame => {
+    if (frame && frame.step != null) pushInputRasterFrame(frame.indices, frame.step);
+  });
   const outputHistory = Array.isArray(activity === null || activity === void 0 ? void 0 : activity.output_history) ? activity.output_history.slice() : [];
   if (outputHistory.length) {
     const ordered = outputHistory.sort((a, b) => {
@@ -5817,12 +5917,14 @@ function normalizeActivityPayload(activity) {
       output: {
         indices: []
       },
+      sensory_history: [],
       output_history: []
     };
   }
   const normalizeHistoryFrame = (frame, fallbackStep) => {
     const envelope = normalizeIndicesEnvelope(frame);
-    const rawStep = Number(frame && frame.step != null ? frame.step : fallbackStep);
+    const stepValue = frame && frame.step != null ? frame.step : fallbackStep;
+    const rawStep = stepValue == null ? NaN : Number(stepValue);
     return {
       step: Number.isFinite(rawStep) && rawStep >= 0 ? Math.trunc(rawStep) : null,
       indices: envelope.indices
@@ -5833,6 +5935,8 @@ function normalizeActivityPayload(activity) {
     const fallbackStep = Number.isFinite(simStep) ? simStep - offset : null;
     return normalizeHistoryFrame(frame, fallbackStep);
   }) : [];
+  const sensoryHistory = Array.isArray(activity.sensory_history)
+    ? activity.sensory_history.map(frame => normalizeHistoryFrame(frame, null)) : [];
   return {
     ...activity,
     sim_step: Number.isFinite(simStep) ? Math.trunc(simStep) : null,
@@ -5840,6 +5944,7 @@ function normalizeActivityPayload(activity) {
     sensory: normalizeIndicesEnvelope(activity.sensory),
     hidden: Array.isArray(activity.hidden) ? activity.hidden.map(layer => normalizeIndicesEnvelope(layer)) : [],
     output: normalizeIndicesEnvelope(activity.output),
+    sensory_history: sensoryHistory,
     output_history: history
   };
 }

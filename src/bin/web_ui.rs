@@ -2900,6 +2900,19 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               "sim_step": { "type": "integer", "format": "uint64" },
               "sim_time_ms": { "type": "number", "format": "double" },
               "sensory": { "$ref": "#/components/schemas/ActivityIndices" },
+              "sensory_history": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "step": { "type": "integer", "format": "uint64" },
+                    "indices": { "type": "array", "items": { "type": "integer", "format": "uint32" } }
+                  },
+                  "required": ["step", "indices"]
+                }
+              },
+              "sensory_target_layer": { "type": "integer", "format": "uint32", "nullable": true },
+              "sensory_source": { "type": "string", "nullable": true },
               "hidden": { "type": "array", "items": { "$ref": "#/components/schemas/ActivityIndices" } },
               "output": { "$ref": "#/components/schemas/ActivityIndices" },
               "output_history": {
@@ -2915,7 +2928,7 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
               },
               "source": { "type": "string" }
             },
-            "required": ["network_id", "sim_step", "sim_time_ms", "sensory", "hidden", "output", "output_history", "source"]
+            "required": ["network_id", "sim_step", "sim_time_ms", "sensory", "sensory_history", "hidden", "output", "output_history", "source"]
           },
           "WorkspaceTopologyResponse": {
             "type": "object",
@@ -6992,60 +7005,63 @@ async fn activity(
         match client.get_network_activity(request).await {
             Ok(response) => {
                 activity_candidates.push((target_addr.clone(), response.into_inner()));
-                let Some(candidate_index) =
-                    network_activity_candidate_index(&activity_candidates, require_output_owner)
-                else {
-                    let output_layer = activity_candidates
-                        .last()
-                        .map(|(_, response)| response.output_source_layer)
-                        .unwrap_or_default();
-                    last_error = format!(
-                        "activity candidate {} does not own output-source layer {}; checking other active shards",
-                        target_addr, output_layer
-                    );
-                    continue;
-                };
-                let (target_addr, resp) = activity_candidates.swap_remove(candidate_index);
-                let sim_step = resp.sim_step;
-                let sim_time_ms = resp.sim_time_ms;
-                let output_source_layer = resp.output_source_layer;
-                let output_stage_assigned = resp.output_stage_assigned;
-                let sensory = resp.sensory.map(|s| s.indices).unwrap_or_default();
-                let hidden: Vec<Vec<u32>> = resp.hidden.into_iter().map(|h| h.indices).collect();
-                let output = resp.output.map(|o| o.indices).unwrap_or_default();
-                let output_history = resp
-                    .output_history
-                    .into_iter()
-                    .enumerate()
-                    .map(|(offset, frame)| {
-                        json!({
-                            "step": sim_step.saturating_sub(offset as u64),
-                            "indices": frame.indices,
-                        })
-                    })
-                    .collect::<Vec<_>>();
-
-                return (
-                    StatusCode::OK,
-                    Json(json!({
-                        "network_id": resp.network_id,
-                        "sim_step": sim_step,
-                        "sim_time_ms": sim_time_ms,
-                        "sensory": { "indices": sensory },
-                        "hidden": hidden.into_iter().map(|indices| json!({ "indices": indices })).collect::<Vec<_>>(),
-                        "output": { "indices": output },
-                        "output_history": output_history,
-                        "output_source_layer": output_source_layer,
-                        "output_stage_assigned": output_stage_assigned,
-                        "source": target_addr,
-                    })),
-                )
-                    .into_response();
+                if network_activity_candidate_index(&activity_candidates, require_output_owner)
+                    .is_some()
+                    && activity_candidates.iter().any(|(_, response)| response.sensory_stage_assigned)
+                {
+                    break;
+                }
             }
             Err(e) => {
                 last_error = format!("activity failed via {}: {}", target_addr, e);
             }
         }
+    }
+
+    if let Some(candidate_index) =
+        network_activity_candidate_index(&activity_candidates, require_output_owner)
+    {
+        let sensory_owner = network_sensory_owner_index(&activity_candidates)
+            .and_then(|index| activity_candidates.get(index));
+        let sensory = sensory_owner
+            .and_then(|(_, response)| response.sensory.as_ref())
+            .map(|frame| frame.indices.clone())
+            .unwrap_or_default();
+        let sensory_history = sensory_owner
+            .map(|(_, response)| response.sensory_history.iter().enumerate()
+                .map(|(offset, frame)| json!({
+                    "step": response.sim_step.saturating_sub(offset as u64),
+                    "indices": frame.indices,
+                }))
+                .collect::<Vec<_>>())
+            .unwrap_or_default();
+        let sensory_source = sensory_owner.map(|(addr, _)| addr.clone());
+        let sensory_target_layer = sensory_owner.map(|(_, response)| response.sensory_target_layer);
+        let (target_addr, resp) = activity_candidates.swap_remove(candidate_index);
+        let sim_step = resp.sim_step;
+        let hidden: Vec<Vec<u32>> = resp.hidden.into_iter().map(|h| h.indices).collect();
+        let output = resp.output.map(|o| o.indices).unwrap_or_default();
+        let output_history = resp.output_history.into_iter().enumerate()
+            .map(|(offset, frame)| json!({
+                "step": sim_step.saturating_sub(offset as u64),
+                "indices": frame.indices,
+            }))
+            .collect::<Vec<_>>();
+        return (StatusCode::OK, Json(json!({
+            "network_id": resp.network_id,
+            "sim_step": sim_step,
+            "sim_time_ms": resp.sim_time_ms,
+            "sensory": { "indices": sensory },
+            "sensory_history": sensory_history,
+            "sensory_target_layer": sensory_target_layer,
+            "sensory_source": sensory_source,
+            "hidden": hidden.into_iter().map(|indices| json!({ "indices": indices })).collect::<Vec<_>>(),
+            "output": { "indices": output },
+            "output_history": output_history,
+            "output_source_layer": resp.output_source_layer,
+            "output_stage_assigned": resp.output_stage_assigned,
+            "source": target_addr,
+        }))).into_response();
     }
 
     if require_output_owner && !activity_candidates.is_empty() {
@@ -9667,6 +9683,10 @@ async fn resolve_network_addr(
     }
 }
 
+fn network_sensory_owner_index(candidates: &[(String, NetworkActivityResponse)]) -> Option<usize> {
+    candidates.iter().position(|(_, response)| response.sensory_stage_assigned)
+}
+
 fn network_activity_candidate_index(
     candidates: &[(String, NetworkActivityResponse)],
     require_output_owner: bool,
@@ -9755,6 +9775,24 @@ mod tests {
         )];
 
         assert_eq!(network_activity_candidate_index(&candidates, true), None);
+    }
+
+    #[test]
+    fn activity_selection_keeps_sensory_and_output_owners_distinct() {
+        let candidates = vec![
+            ("output-owner".to_owned(), NetworkActivityResponse {
+                output_stage_assigned: true,
+                ..NetworkActivityResponse::default()
+            }),
+            ("sensory-owner".to_owned(), NetworkActivityResponse {
+                sensory_stage_assigned: true,
+                sensory_history: vec![SpikeIndices { indices: vec![2], ..SpikeIndices::default() }],
+                ..NetworkActivityResponse::default()
+            }),
+        ];
+        assert_eq!(network_activity_candidate_index(&candidates, true), Some(0));
+        assert_eq!(network_sensory_owner_index(&candidates), Some(1));
+        assert_eq!(candidates[network_sensory_owner_index(&candidates).unwrap()].1.sensory_history[0].indices, vec![2]);
     }
 
     #[test]

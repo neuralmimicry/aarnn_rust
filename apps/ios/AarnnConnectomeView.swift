@@ -6,6 +6,9 @@ import SwiftUI
 public struct AarnnConnectomeView: View {
     public let views: AarnnRemoteSession.DisplayViews
     public let activeNodeIDs: Set<AarnnRemoteSession.DisplayID>
+    public let activity: AarnnRemoteSession.Activity?
+    public let sensoryCount: Int
+    public let outputCount: Int
 
     @State private var stage = 5
     @State private var automatic = true
@@ -16,10 +19,16 @@ public struct AarnnConnectomeView: View {
 
     public init(
         views: AarnnRemoteSession.DisplayViews,
-        activeNodeIDs: Set<AarnnRemoteSession.DisplayID> = []
+        activeNodeIDs: Set<AarnnRemoteSession.DisplayID> = [],
+        activity: AarnnRemoteSession.Activity? = nil,
+        sensoryCount: Int = 0,
+        outputCount: Int = 0
     ) {
         self.views = views
         self.activeNodeIDs = activeNodeIDs
+        self.activity = activity
+        self.sensoryCount = sensoryCount
+        self.outputCount = outputCount
     }
 
     private var highestAvailableStage: Int {
@@ -102,6 +111,9 @@ public struct AarnnConnectomeView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ContentUnavailableView("Display unavailable", systemImage: "point.3.connected.trianglepath.dotted")
+            }
+            if let activity {
+                AarnnSpikeRastersView(activity: activity, sensoryCount: sensoryCount, outputCount: outputCount)
             }
         }
         .padding()

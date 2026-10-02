@@ -14,6 +14,7 @@ PROTO DrosophilaRobot [
 ]
 {
   Robot {
+    supervisor TRUE
     translation IS translation
     rotation IS rotation
     name IS name
@@ -3752,6 +3753,7 @@ Solid { name "nm_ommatidium_1_31" translation 0.009216 0.001038 -0.004117 rotati
     physics Physics {
       density -1
       mass 0.0018
+      damping Damping { linear 0.08 angular 0.12 }
     }
   }
 }

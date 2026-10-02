@@ -856,6 +856,7 @@ PROTO {proto_name} [
 ]
 {{
   Robot {{
+    supervisor TRUE
     translation IS translation
     rotation IS rotation
     name IS name
@@ -899,6 +900,7 @@ PROTO {proto_name} [
     physics Physics {{
       density -1
       mass 0.0018
+      damping Damping {{ linear 0.08 angular 0.12 }}
     }}
   }}
 }}

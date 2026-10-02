@@ -49,20 +49,25 @@
 
   function highestSupported(synthetic, anatomical) {
     const hasSynthetic = Boolean(synthetic && Array.isArray(synthetic.nodes) && synthetic.nodes.length);
-    if (!anatomical || !Array.isArray(anatomical.nodes) || !anatomical.nodes.length) {
+    if (!anatomical || !Array.isArray(anatomical.nodes)) {
       return hasSynthetic ? 3 : 1;
+    }
+    const coverage = anatomical.coverage || {};
+    if (!anatomical.nodes.length) {
+      return coverage.complete === true && coverage.volumetric_clearance_verified === true &&
+        coverage.contact_set_verified === true ? 9 : (hasSynthetic ? 3 : 1);
     }
     let highest = 4;
     if (Array.isArray(anatomical.edges) && anatomical.edges.length) highest = 6;
-    const coverage = anatomical.coverage || {};
-    if (coverage.volumetric_clearance_verified && Array.isArray(anatomical.paths) && anatomical.paths.length) {
+    if (coverage.volumetric_clearance_verified === true && Array.isArray(anatomical.paths) &&
+        (anatomical.paths.length || coverage.contact_set_verified === true)) {
       const physicalSomas = anatomical.nodes.every(node => Number.isFinite(Number(node.soma_radius_mm)) && Number(node.soma_radius_mm) > 0);
       const physicalNeurites = anatomical.paths.every(path => Number.isFinite(Number(path.radius_mm)) && Number(path.radius_mm) > 0);
       if (physicalSomas && physicalNeurites) {
         // Clearance is meaningful only when the published physical radii are
         // present as well as the producer's collision-check witness.
         highest = 8;
-        if (Array.isArray(anatomical.markers) && anatomical.markers.length) highest = 9;
+        if (coverage.complete === true && coverage.contact_set_verified === true) highest = 9;
       }
     }
     return highest;

@@ -13,6 +13,11 @@ anatomical presets from that same contract, including stored axon, dendrite
 and route centre-lines. The source names match `src/ui.rs`, `web_ui/app.js`,
 Android and the CLI.
 
+The remote session also fetches bounded workspace activity history;
+`AarnnSpikeRastersView.swift` renders paired input and output rasters by neural
+step when the shell passes activity and workspace sensory/output counts into
+`AarnnConnectomeView`.
+
 This checkout does not currently contain an Xcode project or generated Rust
 XCFramework. The signed application, entitlements, privacy strings and
 generated bindings remain the iOS packaging gate described by the Phase 8
