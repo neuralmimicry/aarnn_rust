@@ -10681,6 +10681,19 @@ impl DistributedNode {
                 }
             }
 
+            if let (Some(identity), Some(sensory)) = (
+                consumed_sensory_identity.as_ref(),
+                external_sensory.as_ref(),
+            ) {
+                nm_log!(
+                    "[info] consumed AER sensory frame network={} sequence={} input_spikes={} runner_step={}",
+                    net.id,
+                    identity.sequence,
+                    sensory.iter().filter(|&&spike| spike != 0).count(),
+                    net.runner.t
+                );
+            }
+
             let elapsed = step_start.elapsed().as_secs_f32() * 1000.0;
             if net.avg_step_time_ms == 0.0 {
                 net.avg_step_time_ms = elapsed;
