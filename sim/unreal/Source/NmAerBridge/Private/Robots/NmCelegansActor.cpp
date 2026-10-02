@@ -100,6 +100,10 @@ void UNmCelegansComponent::CollectSensors(TArray<float>& OutSensors)
     };
     OutSensors[6] = Probe(Head, Forward, 4.f);
     OutSensors[7] = Probe(Tail, -Forward, 4.f);
+    OutSensors[6] = FMath::Max(OutSensors[6], FrontTouch);
+    OutSensors[7] = FMath::Max(OutSensors[7], RearTouch);
+    FrontTouch = 0.f;
+    RearTouch = 0.f;
     for (int32 I = 8; I <= 18; ++I)
     {
         const FString Cue = I < 10 ? TEXT("light") : I < 12 ? TEXT("heat") : TEXT("chemical");
@@ -368,6 +372,15 @@ void ANmCelegansActor::BeginPlay()
 {
     Super::BeginPlay();
 
+    for (UStaticMeshComponent* Segment : SegmentMeshes)
+    {
+        if (Segment)
+        {
+            Segment->SetNotifyRigidBodyCollision(true);
+            Segment->OnComponentHit.AddDynamic(this, &ANmCelegansActor::OnSegmentHit);
+        }
+    }
+
     // Lay the segments out in WORLD space using their *actual world* diameter.
     // This keeps spacing robust against actor scaling and avoids collapsing into
     // a tiny overlap cluster.
@@ -438,6 +451,28 @@ void ANmCelegansActor::BeginPlay()
                *SegmentMeshes[0]->GetComponentLocation().ToString(),
                *SegmentMeshes.Last()->GetComponentLocation().ToString(),
                Spacing);
+    }
+}
+
+void ANmCelegansActor::OnSegmentHit(UPrimitiveComponent* HitComp, AActor* OtherActor,
+                                    UPrimitiveComponent* /*OtherComp*/, FVector NormalImpulse,
+                                    const FHitResult& Hit)
+{
+    if (!CelegansComponent || !HitComp || OtherActor == this ||
+        FMath::Abs(Hit.Normal.Z) > .7f) return;
+    // Scale impulse by the actual segment mass. Horizontal pushes reach the
+    // worm's front/rear touch channels; static floor support is filtered out.
+    const float Strength = FMath::Clamp(NormalImpulse.Size() /
+        FMath::Max(.0001f, HitComp->GetMass() * 15.f), 0.f, 1.f);
+    for (int32 i = 0; i < SegmentMeshes.Num(); ++i)
+    {
+        if (SegmentMeshes[i] == HitComp)
+        {
+            float& Touch = i < SegmentMeshes.Num() / 2
+                ? CelegansComponent->FrontTouch : CelegansComponent->RearTouch;
+            Touch = FMath::Max(Touch, Strength);
+            break;
+        }
     }
 }
 

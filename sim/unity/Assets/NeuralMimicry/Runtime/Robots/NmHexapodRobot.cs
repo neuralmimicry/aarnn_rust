@@ -386,7 +386,7 @@ namespace NeuralMimicry
                 for (int j = 0; j < JointsPerLeg; j++, idx++)
                 {
                     if (idx >= outputs.Length) return;
-                    DriveArticulationNorm(_legJoints[l, j], outputs[idx], 0);
+                    DriveArticulationActivation(_legJoints[l, j], outputs[idx], 0);
                 }
         }
     }

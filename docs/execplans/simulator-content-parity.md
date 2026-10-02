@@ -76,6 +76,45 @@ compatibility sensor/transport discrepancies are recorded instead of claimed equ
 
 ## Progress
 
+- [~] `2026-10-02 20:50Z` Cross-engine robot follow-up on clean `main` at
+  `19fb394`. `cargo metadata --no-deps --format-version 1` confirms the root
+  workspace and xtask. Canonical adapters are `sim/unity/Assets/NeuralMimicry/Runtime/`,
+  `sim/unreal/Source/NmAerBridge/`, and `sim/minecraft/{src,bedrock}`; generated
+  content comes from `scripts/sim_content.py` and Bedrock packs from
+  `scripts/build_minecraft_bedrock.py`. The separate `simulation_environment`
+  checkout contains Webots only, with three unrelated untracked `.idea` files.
+  Existing Unity `NmRobotBase.FixedUpdate` performs a blocking TCP step and
+  maps zero spike output to a negative joint limit in several robots. Unreal
+  fly wing targets have no physical lift. Minecraft Java appends participant
+  boxes as `internal`, then `Senses.ray` skips them. Checking these against
+  Section 16.17/16.19 and `INV-010`, `INV-015`–`INV-017`; all remain sandbox
+  adapters, not a claim that the Phase 8 production gate has passed.
+- [x] `2026-10-02 20:56Z` Unity now admits at most one bounded background TCP
+  exchange per robot, with handshake on each reconnect and neutral sparse
+  outputs while no frame is ready. Silent hexapod, NAO, fish-fin and fly
+  channels return to joint centre. C. elegans uses the Webots 55/80 ms muscle
+  and spine response with 3× bounded gain; head/tail collision relays capture
+  lateral pushes into the existing touch inputs. Unreal adds aggregate
+  output-driven bounded fly lift under world gravity, animated kinematic wing
+  meshes, and segment-hit impulses into worm front/rear touch inputs.
+  Minecraft Java participant bounds now occlude sensory rays, matching the
+  existing Bedrock/browser route. No schema or generated content changed.
+- [x] `2026-10-02 20:56Z` Unreal 5.8 Editor target builds after the final worm
+  and fly edits. Minecraft Java 1.21.1 test and 26.2 build/test pass; Bedrock
+  six-profile simulated API test including participant-to-worm touch passes;
+  all eight simulator-content tests and generated asset freshness pass. The
+  separate shared-Webots repository's 27-file source parity and Webots-only
+  generated habitat check pass. No live multi-robot world was launched.
+- [x] `2026-10-02 20:58Z` Rebuilt Unreal after the collision and fly activity
+  edits and reran the simulator-content contract: both pass. Final evidence is
+  `target/qa/simulator-content/contract-j5mhxutv/`; `git diff --check` passes.
+- [ ] `2026-10-02 20:56Z` Unity Editor/play-mode and native one-robot movement,
+  contact, and raster observation remain unverified on this host; Unity Editor
+  is not installed. Minecraft remains a kinematic sensory/visual reference, not
+  a gravity/flight physics replacement. Use sequential one-robot probes for
+  native acceptance, with an explicit sensory-frame and motor diagnostic for
+  each profile.
+
 - [x] `2026-09-15` Discovery: manifests, phase and cross-review plans, relevant
   specification, ADRs, deployment/mobile/CI definitions and dirty tree inspected.
 - [x] `2026-09-15 10:57Z` Shared catalogue/compiler integrated into all four adapters;
@@ -190,6 +229,32 @@ Compare objects/materials/anatomy against one catalogue digest; numerical render
 and rigid-body differences need separate calibration, not a content hash.
 
 Recorded commands (all from the repository root):
+
+- `python3 scripts/qa/test_simulator_content.py` and
+  `python3 scripts/regenerate_simulator_assets.py --check`: pass after this
+  follow-up. `git diff --check` passes.
+- `cargo xtask qa run --suite simulator-content`: passes all eight contract
+  tests; final evidence is `target/qa/simulator-content/contract-j5mhxutv/`.
+- `cargo xtask qa run --suite simulator-minecraft` and
+  `cargo xtask qa run --suite simulator-minecraft-bedrock`: pass the CI-mapped
+  adapter lanes, including both Java sensory tests and Bedrock type checking;
+  evidence is under `target/qa/minecraft/contract-whkn3zq8/` and
+  `target/qa/minecraft/bedrock-oa6fhgfz/`.
+- `cd sim/minecraft && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./gradlew
+  test --offline --no-daemon`: passes 1.21.1, including the new native
+  participant-to-worm-touch assertion. Java 25 `./gradlew --offline --no-daemon
+  build -Pminecraft_version=26.2 -Ploader_version=0.19.5
+  -Pfabric_version=0.160.0+26.2 -Pno_remap=true -Pjava_release=25` passes.
+- `node --experimental-vm-modules scripts/qa/test_minecraft_bedrock.cjs`:
+  all six profiles and participant-to-worm-touch assertion pass; native
+  Bedrock client rendering was not run.
+- `/home/pbisaacs/Developer/Engine/Build/BatchFiles/Linux/Build.sh
+  NeuralMimicrySimEditor Linux Development
+  -Project=/home/pbisaacs/Developer/neuralmimicry/aarnn_rust/sim/unreal/NeuralMimicrySim.uproject
+  -WaitMutex -NoHotReload`: passes with the final fly and worm edits.
+- From `simulation_environment`, `python3 scripts/check_aarnn_webots_parity.py`
+  and `python3 scripts/sim_content.py --check --webots-only`: pass; its three
+  pre-existing untracked `.idea` files remain untouched.
 
 - `python3 scripts/regenerate_simulator_assets.py --check`: every export and maintained
   Webots PROTO/world matches its generator; no network/config/editor settings regenerated.
@@ -315,6 +380,15 @@ Old native I/O maps differ: verify by names, do not infer equivalence from vecto
 
 ## Decision Log
 
+- `2026-10-02 SIM-008`: The Unity, Unreal and Minecraft source adapters remain
+  in AARNN because `simulation_environment` has no native-engine projects.
+  Preserve that repository's distinct shared Webots habitat and verify source
+  parity instead of copying platform projects. Treat zero AER output as silent
+  unipolar motor activation, with a centre joint target and bounded transient
+  response; retain existing explicit exceptions for opposing muscle groups.
+  This is sandbox actuator behavior only. Native dynamics remain a sequential
+  one-robot acceptance gate under Sections 16.17/16.19 and `INV-015`–`INV-017`.
+
 - `2026-09-15 SIM-001`: Use repository-native procedural geometry and shared authored
   content rather than external raster/asset dependencies. Reference dimensions and
   idealised anatomy are documented; no scientific measurement is invented.
@@ -349,6 +423,14 @@ Old native I/O maps differ: verify by names, do not infer equivalence from vecto
   regenerating from that source instead of manually combining generated files.
 
 ## Outcomes & Retrospective
+
+The 2026-10-02 follow-up closes source-level sensory and actuator gaps in the
+three native adapters. Unreal and both supported Minecraft Java versions build;
+the Minecraft and simulator-content contract lanes pass. The separate shared
+Webots scene remains aligned without copying platform projects into its
+checkout. Unity Editor and live single-robot physics/raster acceptance remain
+open, so this outcome is adapter parity, not calibrated cross-engine motion or
+completion of the Phase 8 production I/O gate.
 
 The shared-content implementation and browser/reference validation are in place.
 The final shared catalogue contains 602 objects, including explicit fish water;

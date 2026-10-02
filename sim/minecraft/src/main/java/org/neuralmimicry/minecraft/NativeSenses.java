@@ -47,12 +47,18 @@ public final class NativeSenses {
         actors.sort(Comparator.comparing(e->e.getUUID().toString()));
         for(var actor:actors) {
             double k=Content.HALF_EXTENT;var box=actor.getBoundingBox();var centre=box.getCenter();
-            parts.add(new Content.Part("participant_"+actor.getUUID(),"box",
+            parts.add(participantPart(actor.getUUID().toString(),
                 new double[]{(centre.x-robot.originX())/k,-(centre.z-robot.originZ())/k,(centre.y-robot.originY())/k},
-                new double[]{Math.max(.01,box.getXsize()/k),Math.max(.01,box.getZsize()/k),Math.max(.01,box.getYsize()/k)},
-                new double[]{.25,.65,.85},0,false,"participant","",0,0,"root",true));
+                new double[]{Math.max(.01,box.getXsize()/k),Math.max(.01,box.getZsize()/k),Math.max(.01,box.getYsize()/k)}));
         }
         return new Content.Habitat(original.id(),original.substrate(),original.half_extent_m(),parts);
+    }
+    static Content.Part participantPart(String id,double[] position,double[] size) {
+        // Participants are transient sensory occluders, like the Bedrock and
+        // browser adapters. Marking them internal hid them from Senses.ray and
+        // made a nearby player/NPC invisible to worm touch/proximity channels.
+        return new Content.Part("participant_"+id,"box",position,size,
+            new double[]{.25,.65,.85},0,false,"participant","",0,0,"root",false);
     }
     private static boolean isFood(ItemEntity e) {
         var item=e.getItem();

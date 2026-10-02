@@ -9,6 +9,7 @@
 class UStaticMeshComponent;
 class UPhysicsConstraintComponent;
 class USceneComponent;
+class UPrimitiveComponent;
 
 // ---------------------------------------------------------------------------
 // Component — holds all sensor/actuator logic
@@ -33,6 +34,8 @@ public:
     // Joint refs (NumSegments - 1 joints)
     UPROPERTY()
     TArray<TObjectPtr<UPhysicsConstraintComponent>> Joints;
+    float FrontTouch = 0.f;
+    float RearTouch = 0.f;
 
     // UNmRobotBase interface
     virtual void CollectSensors(TArray<float>& OutSensors) override;
@@ -86,6 +89,11 @@ protected:
     virtual void Tick(float DeltaSeconds) override;
 
 private:
+    UFUNCTION()
+    void OnSegmentHit(UPrimitiveComponent* HitComp, AActor* OtherActor,
+                      UPrimitiveComponent* OtherComp, FVector NormalImpulse,
+                      const FHitResult& Hit);
+
     void UpdateVisualBody();
 
     UPROPERTY()

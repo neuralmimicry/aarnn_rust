@@ -500,15 +500,15 @@ namespace NeuralMimicry
 
             // --- Pectoral fins [22-23]: applied as Z-axis (dorsal-ventral) on seg 1 and 2.
             if (22 < outputs.Length && NumBodySegments > 1 && _segments[1] != null)
-                DriveArticulationNorm(_segments[1], outputs[22], axis: 2);
+                DriveArticulationActivation(_segments[1], outputs[22], axis: 2);
             if (23 < outputs.Length && NumBodySegments > 2 && _segments[2] != null)
-                DriveArticulationNorm(_segments[2], outputs[23], axis: 2);
+                DriveArticulationActivation(_segments[2], outputs[23], axis: 2);
 
             // --- Dorsal/ventral fins [24-25]: modulate Z drive on mid-body segments.
             if (24 < outputs.Length && NumBodySegments > 3 && _segments[3] != null)
-                DriveArticulationNorm(_segments[3], outputs[24], axis: 2);
+                DriveArticulationActivation(_segments[3], outputs[24], axis: 2);
             if (25 < outputs.Length && NumBodySegments > 4 && _segments[4] != null)
-                DriveArticulationNorm(_segments[4], outputs[25], axis: 2);
+                DriveArticulationActivation(_segments[4], outputs[25], axis: 2);
 
             // Channels 26..31: reserved, not applied.
         }

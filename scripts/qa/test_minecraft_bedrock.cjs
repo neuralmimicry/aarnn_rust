@@ -13,6 +13,15 @@ async function main(){
     await m.link((specifier,ref)=>specifier==='@minecraft/server'?api:module(path.resolve(path.dirname(ref.identifier),specifier)));return m;
   }
   const reference=await module(path.join(packs,'server/scripts/reference.generated.js'));await reference.evaluate();
+  {
+    const worm=content.profiles.find(p=>p.id==='celegans');
+    const agar=content.habitats.find(h=>h.id===worm.habitat);
+    const pushed=reference.namespace.reference.sense(worm,agar,{
+      x:0,z:0,heading:0,actuators:new Array(worm.output).fill(0),
+      participants:[{id:'nearby-player',position:[.06,0,worm.body_height],size:[.04,.04,.04]}]
+    },{});
+    assert.equal(pushed[6],1,'a nearby participant must reach Bedrock worm touch input');
+  }
   const sessionModule=await module(path.join(packs,'server/scripts/session.js'));await sessionModule.evaluate();
   const {Session}=sessionModule.namespace;
   for(const p of content.profiles){

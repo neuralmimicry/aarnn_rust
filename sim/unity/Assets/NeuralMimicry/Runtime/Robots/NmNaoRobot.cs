@@ -611,7 +611,7 @@ namespace NeuralMimicry
             for (int j = 0; j < NumMotorJoints && j < outputs.Length; j++)
             {
                 if (_joints[j] == null) continue;
-                DriveArticulationNorm(_joints[j], outputs[j], 0);
+                DriveArticulationActivation(_joints[j], outputs[j], 0);
             }
 
             // Channels 26..31: LED channels — no physics, values logged only.

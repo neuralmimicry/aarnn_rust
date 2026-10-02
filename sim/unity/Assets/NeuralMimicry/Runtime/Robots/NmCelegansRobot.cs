@@ -85,6 +85,11 @@ namespace NeuralMimicry
 
         // Previous-frame world velocities for mechanoreception (finite-difference).
         private Vector3[] _prevSegmentPos;
+        private readonly float[] _muscleTrace = new float[TotalActuators];
+        private readonly float[] _dvTrace = new float[NumSegments];
+        private readonly float[] _lateralTrace = new float[NumSegments];
+        private float _frontContact;
+        private float _rearContact;
 
         // ------------------------------------------------------------------ //
         // Abstract property implementations
@@ -120,11 +125,18 @@ namespace NeuralMimicry
         {
             _segments = new ArticulationBody[NumSegments];
             _prevSegmentPos = new Vector3[NumSegments];
+            for (int i = 0; i < NumSegments; i++)
+            {
+                _dvTrace[i] = .5f;
+                _lateralTrace[i] = .5f;
+            }
 
             // Segment 0 is the root ArticulationBody on this GameObject.
             ArticulationBody root = GetComponent<ArticulationBody>();
             ConfigureRootArticulation(root);
             _segments[0] = root;
+            var frontRelay = gameObject.AddComponent<NmCelegansContactRelay>();
+            frontRelay.Configure(this, true);
 
             Transform parent = transform;
 
@@ -197,6 +209,11 @@ namespace NeuralMimicry
                 ab.twistLock    = ArticulationDofLock.LockedMotion;
 
                 _segments[i] = ab;
+                if (i == NumSegments - 1)
+                {
+                    var rearRelay = go.AddComponent<NmCelegansContactRelay>();
+                    rearRelay.Configure(this, false);
+                }
                 parent = go.transform;
             }
 
@@ -245,8 +262,10 @@ namespace NeuralMimicry
             for (int i = 0; i < 3; i++) { values[i] = Mathf.Clamp01(.5f + a[i] / 20f); values[3+i] = Mathf.Clamp01(.5f + g[i] / 20f); }
             Vector3 head = _segments[0].transform.position;
             Vector3 tail = _segments[23].transform.position;
-            values[6] = Probe(head, transform.forward, _segmentRadius * 2);
-            values[7] = Probe(tail, -transform.forward, _segmentRadius * 2);
+            values[6] = Mathf.Max(Probe(head, transform.forward, _segmentRadius * 2), _frontContact);
+            values[7] = Mathf.Max(Probe(tail, -transform.forward, _segmentRadius * 2), _rearContact);
+            _frontContact = 0f;
+            _rearContact = 0f;
             if (Habitat != null)
             {
                 values[8] = Habitat.Sample("light", head - transform.right * _segmentRadius);
@@ -269,6 +288,15 @@ namespace NeuralMimicry
             return 1f - Mathf.Clamp01(distance / range);
         }
 
+        internal void RecordContact(bool front, float relativeSpeed)
+        {
+            // Relative motion distinguishes a push/impact from static support
+            // on the agar floor. 5 cm/s is a heuristic input full-scale.
+            float strength = Mathf.Clamp01(relativeSpeed / .05f);
+            if (front) _frontContact = Mathf.Max(_frontContact, strength);
+            else _rearContact = Mathf.Max(_rearContact, strength);
+        }
+
         // ------------------------------------------------------------------ //
         // Actuator application
         // ------------------------------------------------------------------ //
@@ -280,6 +308,11 @@ namespace NeuralMimicry
 
             // Named body-wall quadrants determine opposing dorsal/ventral and
             // left/right drives; MVULVA never participates in locomotion.
+            // Match the bounded Webots simulated-muscle time constants. These
+            // are engineering response values, not measured worm biomechanics.
+            float muscleAlpha = 1f - Mathf.Exp(-Time.fixedDeltaTime / .055f);
+            float spineAlpha = 1f - Mathf.Exp(-Time.fixedDeltaTime / .080f);
+            string[] names = ActuatorNames;
 
             for (int seg = 1; seg < NumSegments; seg++)
             {
@@ -287,23 +320,29 @@ namespace NeuralMimicry
 
                 // The canonical vector is grouped by muscle labels; MVULVA is a
                 // separate readout. Missing MVL24 remains absent, never another muscle.
-                string[] names = ActuatorNames;
                 float Muscle(string group)
                 {
                     int channel = Array.FindIndex(names, n => n.EndsWith($"_{group}{seg + 1:D2}"));
-                    return channel >= 0 && channel < outputs.Length ? Mathf.Clamp01(outputs[channel]) : 0f;
+                    if (channel < 0 || channel >= outputs.Length) return 0f;
+                    float raw = float.IsNaN(outputs[channel]) || float.IsInfinity(outputs[channel])
+                        ? 0f : outputs[channel];
+                    float drive = Mathf.Clamp01((raw - .5f) * 2f);
+                    _muscleTrace[channel] += muscleAlpha * (drive - _muscleTrace[channel]);
+                    return _muscleTrace[channel];
                 }
                 float mdl = Muscle("MDL"), mdr = Muscle("MDR"), mvl = Muscle("MVL"), mvr = Muscle("MVR");
 
-                // Dorsal-ventral drive (Z): 0.5 = neutral, >0.5 = dorsal bend.
-                float dvNorm = 0.5f + 0.25f * (mvl + mvr - mdl - mdr);
-                DriveArticulationNorm(_segments[seg], Mathf.Clamp01(dvNorm), axis: 2);
-
-                // Lateral drive (Y): 0.5 = neutral, >0.5 = right bend.
-                float latNorm = 0.5f + 0.25f * (mdr + mvr - mdl - mvl);
-                DriveArticulationNorm(_segments[seg], Mathf.Clamp01(latNorm), axis: 1);
+                float dv = Mathf.Clamp((mvl + mvr - mdl - mdr) * .5f, -1f, 1f);
+                float lateral = Mathf.Clamp((mdr + mvr - mdl - mvl) * .5f, -1f, 1f);
+                float dvTarget = .5f + .44f * (float)Math.Tanh(3f * dv);
+                float lateralTarget = .5f + .44f * (float)Math.Tanh(3f * lateral);
+                _dvTrace[seg] += spineAlpha * (dvTarget - _dvTrace[seg]);
+                _lateralTrace[seg] += spineAlpha * (lateralTarget - _lateralTrace[seg]);
+                DriveArticulationNorm(_segments[seg], _dvTrace[seg], axis: 2);
+                DriveArticulationNorm(_segments[seg], _lateralTrace[seg], axis: 1);
             }
             // MVULVA is a separate readout and is not a body-wall joint.
         }
     }
+
 }

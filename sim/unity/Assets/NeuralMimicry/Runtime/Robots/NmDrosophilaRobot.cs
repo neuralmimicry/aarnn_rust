@@ -124,6 +124,7 @@ namespace NeuralMimicry
         private Vector3 _prevVelocity;
 
         private bool _bodyBuilt;
+        private float _flightActivity;
 
         // Cached sensor names (computed once).
         private string[] _sensorNamesCache;
@@ -483,7 +484,7 @@ namespace NeuralMimicry
                 for (int j = 0; j < JointsPerLeg; j++, idx++)
                 {
                     if (idx >= outputs.Length) return;
-                    DriveArticulationNorm(_legJoints[l, j], outputs[idx], 0);
+                    DriveArticulationActivation(_legJoints[l, j], outputs[idx], 0);
                 }
 
             // --- Wing joints [24..27].
@@ -491,10 +492,28 @@ namespace NeuralMimicry
                 for (int d = 0; d < 2; d++, idx++)
                 {
                     if (idx >= outputs.Length) return;
-                    DriveArticulationNorm(_wingJoints[w, d], outputs[idx], 0);
+                    DriveArticulationActivation(_wingJoints[w, d], outputs[idx], 0);
                 }
 
             // Channels 28..47 are reserved and not applied.
+            // Webots uses the mean sparse output activity for bounded wing lift;
+            // the imported 48 channels have no validated per-muscle flight map.
+            // ForceMode.Acceleration keeps gravity active and scales with rig mass.
+            float activity = 0f;
+            for (int i = 0; i < Mathf.Min(TotalActuators, outputs.Length); i++)
+                activity += Mathf.Clamp01((outputs[i] - .5f) * 2f);
+            activity = Mathf.Clamp01(activity / (TotalActuators * .25f));
+            float alpha = 1f - Mathf.Exp(-Time.fixedDeltaTime / .055f);
+            _flightActivity += alpha * (activity - _flightActivity);
+            if (_thorax != null && _flightActivity > .001f)
+            {
+                float floor = Habitat != null ? Habitat.transform.position.y : 0f;
+                float lane = (Habitat != null ? Habitat.Radius : 1f) * .32f;
+                float height = _thorax.transform.position.y - floor;
+                float acceleration = Mathf.Clamp(-Physics.gravity.y +
+                    3.2f * (lane - height) - 1.5f * _thorax.velocity.y, 0f, 14.3f);
+                _thorax.AddForce(Vector3.up * (_flightActivity * acceleration), ForceMode.Acceleration);
+            }
         }
     }
 }

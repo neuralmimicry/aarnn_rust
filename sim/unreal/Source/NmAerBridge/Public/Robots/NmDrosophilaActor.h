@@ -78,6 +78,7 @@ public:
     // Prev body velocity for accel derivative
     FVector PrevLinearVel  = FVector::ZeroVector;
     FVector PrevAngularVel = FVector::ZeroVector;
+    float FlightActivity = 0.f;
 
     // Previous eye luminance for event-delta encoding.
     TArray<float> PrevEyeLeftLum;

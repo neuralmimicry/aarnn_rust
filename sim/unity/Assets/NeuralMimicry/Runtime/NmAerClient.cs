@@ -108,9 +108,15 @@ namespace NeuralMimicry
             {
                 DropConnection();
                 _tcp = new TcpClient();
-                _tcp.Connect(_host, _port);
+                var connecting = _tcp.ConnectAsync(_host, _port);
+                if (!connecting.Wait(TimeSpan.FromSeconds(2)))
+                {
+                    DropConnection();
+                    throw new TimeoutException("AARNN bridge connect timed out after 2 s");
+                }
                 _tcp.NoDelay = true;
                 _tcp.ReceiveTimeout = 1000; // 1 s read timeout
+                _tcp.SendTimeout = 1000;
                 _stream = _tcp.GetStream();
                 _connected = true;
             }
@@ -182,11 +188,10 @@ namespace NeuralMimicry
 
             lock (_lock)
             {
-                if (!_connected)
-                {
-                    TryReconnect();
-                    if (!_connected) return false;
-                }
+                // The owning robot must handshake again after any reconnect.
+                // Reconnecting inside Step would send sensory data on a socket
+                // that has not declared its channel map.
+                if (!_connected) return false;
 
                 try
                 {
@@ -424,27 +429,6 @@ namespace NeuralMimicry
         // ------------------------------------------------------------------ //
         // Connection management
         // ------------------------------------------------------------------ //
-
-        private void TryReconnect()
-        {
-            try
-            {
-                DropConnection();
-                _tcp = new TcpClient();
-                _tcp.Connect(_host, _port);
-                _tcp.NoDelay = true;
-                _tcp.ReceiveTimeout = 1000;
-                _stream = _tcp.GetStream();
-                _connected = true;
-                Debug.Log($"[NmAerClient] Reconnected to {_host}:{_port}");
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[NmAerClient] Reconnect failed: {ex.Message}");
-                _connected = false;
-            }
-        }
-
         private void DropConnection()
         {
             _connected = false;

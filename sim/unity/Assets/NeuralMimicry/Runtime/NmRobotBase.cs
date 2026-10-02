@@ -8,6 +8,7 @@
 //   ActuatorNames      — human-readable channel labels
 
 using System;
+using System.Threading.Tasks;
 using UnityEngine;
 
 namespace NeuralMimicry
@@ -55,16 +56,25 @@ namespace NeuralMimicry
         /// <summary>The AARNN TCP client created from <see cref="brainConnector"/>.</summary>
         protected NmAerClient client;
 
-        private float[] _sensorBuffer;
-        private float[] _outputBuffer;
-
+        private Task<StepResult> _pendingStep;
+        private float[] _neutralOutputs;
+        private bool _connected;
+        private bool _attemptedConnection;
+        private float _nextRetryTime;
         private bool _handshakeSent;
+
+        private struct StepResult
+        {
+            public bool ok;
+            public float[] outputs;
+            public string error;
+        }
 
         /// <summary>Running simulation clock in milliseconds.</summary>
         public float SimulationTimeMs { get; private set; }
 
         /// <summary>Returns <c>true</c> when the TCP connection is active.</summary>
-        public bool IsConnected => client?.IsConnected ?? false;
+        public bool IsConnected => _connected;
 
         /// <summary>Total number of successful brain steps this session.</summary>
         public int StepCount { get; private set; }
@@ -122,9 +132,7 @@ namespace NeuralMimicry
             }
 
             client = brainConnector.CreateClient();
-            _outputBuffer = new float[ActuatorNames.Length];
-
-            TryConnect();
+            _neutralOutputs = new float[ActuatorNames.Length];
         }
 
         /// <summary>
@@ -135,33 +143,72 @@ namespace NeuralMimicry
         {
             if (client == null) return;
 
-            // Attempt reconnect if disconnected and autoReconnect is enabled.
-            if (!IsConnected)
-            {
-                if (autoReconnect)
-                    TryConnect();
-                return;
-            }
-
-            // Advance simulation clock.
             SimulationTimeMs += Time.fixedDeltaTime * 1000f * timeScale;
 
-            // Gather sensor data.
-            _sensorBuffer = CollectSensors();
-
-            if (_sensorBuffer == null || _sensorBuffer.Length == 0)
-                return;
-
-            // Ensure output buffer is sized correctly.
-            if (_outputBuffer == null || _outputBuffer.Length != ActuatorNames.Length)
-                _outputBuffer = new float[ActuatorNames.Length];
-
-            // Send → receive.
-            bool ok = client.Step(SimulationTimeMs, _sensorBuffer, _outputBuffer);
-            if (ok)
+            bool freshOutput = false;
+            if (_pendingStep != null)
             {
-                StepCount++;
-                ApplyActuators(_outputBuffer);
+                if (_pendingStep.IsCompleted)
+                {
+                    StepResult completed;
+                    try { completed = _pendingStep.GetAwaiter().GetResult(); }
+                    catch (Exception ex) { completed = new StepResult { error = ex.Message }; }
+                    _pendingStep = null;
+                    _connected = completed.ok;
+                    if (completed.ok)
+                    {
+                        StepCount++;
+                        ApplyActuators(completed.outputs);
+                        freshOutput = true;
+                    }
+                    else
+                    {
+                        _nextRetryTime = Time.realtimeSinceStartup + 1f;
+                        if (!string.IsNullOrEmpty(completed.error))
+                            Debug.LogWarning($"[NmRobotBase] {name}: brain step failed — {completed.error}", this);
+                    }
+                }
+            }
+            // Apply each sparse frame once; on other ticks drive muscles toward
+            // rest. Physics still advances while a network reply is pending.
+            if (!freshOutput) ApplyActuators(_neutralOutputs);
+            if (_pendingStep != null) return;
+            if ((!autoReconnect && !_connected && _attemptedConnection) ||
+                Time.realtimeSinceStartup < _nextRetryTime) return;
+
+            // One bounded exchange per robot. A slow brain cannot block Unity's
+            // physics/render thread or create an unbounded queue of old samples.
+            var sensors = CollectSensors();
+            if (sensors == null || sensors.Length != SensorNames.Length) return;
+            var timeMs = SimulationTimeMs;
+            var sensorNames = SensorNames;
+            var actuatorNames = ActuatorNames;
+            var transport = client;
+            _attemptedConnection = true;
+            _pendingStep = Task.Run(() => Exchange(transport, timeMs, sensors, sensorNames, actuatorNames));
+        }
+
+        private StepResult Exchange(NmAerClient transport, float timeMs, float[] sensors,
+                                    string[] sensorNames, string[] actuatorNames)
+        {
+            try
+            {
+                if (!transport.IsConnected || !_handshakeSent)
+                {
+                    transport.Connect();
+                    transport.SendHandshake(sensorNames, actuatorNames);
+                    _handshakeSent = true;
+                }
+                var outputs = new float[actuatorNames.Length];
+                if (transport.Step(timeMs, sensors, outputs))
+                    return new StepResult { ok = true, outputs = outputs };
+                _handshakeSent = false;
+                return new StepResult { error = "connection lost" };
+            }
+            catch (Exception ex)
+            {
+                _handshakeSent = false;
+                return new StepResult { error = ex.Message };
             }
         }
 
@@ -170,43 +217,32 @@ namespace NeuralMimicry
         /// </summary>
         protected virtual void OnDestroy()
         {
-            client?.Dispose();
+            // Dispose after an in-flight exchange, off the physics thread. The
+            // client socket has a bounded receive timeout and owns its lock.
+            var pending = _pendingStep;
+            var closingClient = client;
+            if (closingClient != null)
+                _ = Task.Run(() =>
+                {
+                    try { pending?.Wait(); }
+                    catch (AggregateException) { /* Disposal still closes the socket. */ }
+                    finally { closingClient.Dispose(); }
+                });
             client = null;
         }
 
         /// <summary>
-        /// Called when the component is disabled — drops the TCP connection but
-        /// does not destroy the client so it can reconnect on re-enable.
+        /// A disabled component stops sampling; an in-flight bounded exchange
+        /// may finish and is consumed after re-enable or disposed on destruction.
         /// </summary>
         protected virtual void OnDisable()
         {
-            // Let the client attempt a clean close; reconnect will happen in
-            // FixedUpdate when re-enabled and autoReconnect is true.
-            _handshakeSent = false;
+            _connected = false;
         }
 
         // ------------------------------------------------------------------ //
         // Helpers
         // ------------------------------------------------------------------ //
-
-        private void TryConnect()
-        {
-            if (client == null) return;
-            try
-            {
-                client.Connect();
-                if (!_handshakeSent)
-                {
-                    client.SendHandshake(SensorNames, ActuatorNames);
-                    _handshakeSent = true;
-                }
-                Debug.Log($"[NmRobotBase] {name}: connected to brain '{brainConnector.brainId}'.");
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[NmRobotBase] {name}: connect failed — {ex.Message}");
-            }
-        }
 
         // ------------------------------------------------------------------ //
         // Utility helpers for subclasses
@@ -263,6 +299,14 @@ namespace NeuralMimicry
                 case 2: body.zDrive = drive; break;
                 default: body.xDrive = drive; break;
             }
+        }
+
+        /// <summary>Map an unipolar spike activation to a neutral-centred joint.
+        /// A silent output must not command the negative mechanical limit.</summary>
+        protected static void DriveArticulationActivation(ArticulationBody body,
+                                                          float activation, int axis = 0)
+        {
+            DriveArticulationNorm(body, 0.5f + 0.5f * Mathf.Clamp01(activation), axis);
         }
     }
 }

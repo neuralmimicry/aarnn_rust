@@ -50,6 +50,18 @@ final class ParityTest {
         assertNotEquals(Content.profile("drosophila_banc").output_names(),Content.profile("drosophila_fafb").output_names());
     }
 
+    @Test void nearbyNativeParticipantReachesWormTouchInput() {
+        var p=Content.profile("celegans");
+        var actor=NativeSenses.participantPart("pushed-player",
+                new double[]{.06,0,p.body_height()},new double[]{.04,.04,.04});
+        var habitat=new Content.Habitat("contact",new double[]{.3,.3,.3},1,List.of(actor));
+        var values=Senses.sample(p,habitat,new Senses.Pose(0,0,0,new double[p.output()]),new HashMap<>());
+        assertEquals(1.0,values[6],"forward contact must reach the admitted sensory vector");
+        assertTrue(Senses.ray(habitat,new double[]{0,0,p.body_height()},
+                new double[]{1,0,0},.6).distance()<.06,
+                "the same participant must occlude proximity and vision rays");
+    }
+
     @Test void hexapodMotorChannelsUseNamedEndpointsAndMoveTheirLegGeometry() {
         var p=Content.profile("hexapod");
         var expected=List.of(

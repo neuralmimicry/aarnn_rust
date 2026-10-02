@@ -190,7 +190,10 @@ Assembly `NeuralMimicry` (`Assets/NeuralMimicry/`):
 - `NmAerClient` — TCP client speaking the AER1 protocol (`Runtime/NmAerClient.cs`).
 - `NmBrainConnector` — `ScriptableObject` holding one brain's host/port/threshold; creates
   clients and self-registers by `brainId` (`Runtime/NmBrainConnector.cs`).
-- `NmRobotBase` — `MonoBehaviour` base that drives the client every `FixedUpdate`
+- `NmRobotBase` — `MonoBehaviour` base that captures on `FixedUpdate` and runs at
+  most one TCP brain exchange per robot on a background task. Sparse output is
+  applied once; idle physics ticks return unipolar joint drives to neutral and
+  decay simulated muscle/flight response.
   (`Runtime/NmRobotBase.cs`).
 - `NmSimulationManager` — scene singleton tracking robots with a debug overlay
   (`Runtime/NmSimulationManager.cs`).

@@ -157,7 +157,9 @@ void UNmDrosophilaComponent::CollectSensors(TArray<float>& OutSensors)
 }
 
 // ----------------------------------------------------------------------------
-// ApplyActuators — 48 channels (first 28 used)
+// ApplyActuators — 48 channels (first 28 joint targets; all contribute to
+// bounded aggregate flight drive because the imported IDs have no validated
+// per-muscle aerodynamic map).
 // [0..23]  6×4 leg joint angular drive targets (normalized -1..1 → ±60°)
 // [24..27] 2×2 wing joint drives
 // [28..47] unused (reserved)
@@ -193,6 +195,42 @@ void UNmDrosophilaComponent::ApplyActuators(const TArray<float>& Actuators)
             const float Target = FMath::Clamp(Actuators[24 + w], -1.f, 1.f) * MaxWingAngleDeg;
             Joint->SetAngularOrientationTarget(FRotator(Target, 0.f, 0.f));
         }
+    }
+    // Wing meshes are attached kinematically to the thorax, so a constraint
+    // target alone cannot visibly flap them. Animate only from the same fresh
+    // committed output vector; zero activity returns each wing to its rest pose.
+    for (int32 w = 0; w < FMath::Min(2, WingMeshes.Num()); ++w)
+    {
+        if (UStaticMeshComponent* Wing = WingMeshes[w])
+        {
+            const float Flap = FMath::Clamp(Actuators[24 + 2 * w], 0.f, 1.f) * 90.f;
+            const float Rotate = FMath::Clamp(Actuators[25 + 2 * w], 0.f, 1.f) * 45.f;
+            Wing->SetRelativeRotation(FRotator(Rotate, 0.f, (w == 0 ? 1.f : -1.f) * Flap));
+        }
+    }
+
+    float Activity = 0.f;
+    for (int32 i = 0; i < FMath::Min(NumActuators, Actuators.Num()); ++i)
+    {
+        if (FMath::IsFinite(Actuators[i]))
+        {
+            Activity += FMath::Clamp((Actuators[i] - .5f) * 2.f, 0.f, 1.f);
+        }
+    }
+    Activity = FMath::Clamp(Activity / (NumActuators * .25f), 0.f, 1.f);
+    const float Dt = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.f;
+    const float Alpha = 1.f - FMath::Exp(-FMath::Max(0.f, Dt) / .055f);
+    FlightActivity += Alpha * (Activity - FlightActivity);
+    if (Thorax && Thorax->IsSimulatingPhysics() && GetWorld() && FlightActivity > .001f)
+    {
+        // Unreal force units are kg·cm/s². Acceleration mode lets the native
+        // gravity and articulated body mass continue to determine the result.
+        const float HeightCm = Thorax->GetComponentLocation().Z - HabitatCentre.Z;
+        const float SpeedCmS = Thorax->GetPhysicsLinearVelocity().Z;
+        const float HoverAccel = -GetWorld()->GetGravityZ();
+        const float Requested = FMath::Clamp(HoverAccel +
+            3.2f * (32.f - HeightCm) - 1.5f * SpeedCmS, 0.f, 1430.f);
+        Thorax->AddForce(FVector(0.f, 0.f, FlightActivity * Requested), NAME_None, true);
     }
 }
 

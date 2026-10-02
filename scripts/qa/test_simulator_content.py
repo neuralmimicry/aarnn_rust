@@ -165,9 +165,11 @@ class ContentParity(unittest.TestCase):
             'public override string[] ActuatorNames => NmHabitat.Profile(this).output_names;',
             'ArticulationJointType.RevoluteJoint',
             'private float _coxaLimit', 'private float _femurLimit', 'private float _tibiaLimit',
-            'DriveArticulationNorm(_legJoints[l, j], outputs[idx], 0)',
+            'DriveArticulationActivation(_legJoints[l, j], outputs[idx], 0)',
         ):
             self.assertIn(marker, unity)
+        self.assertIn('0.5f + 0.5f * Mathf.Clamp01(activation)',
+                      (ROOT / 'sim/unity/Assets/NeuralMimicry/Runtime/NmRobotBase.cs').read_text())
 
         unreal = (ROOT / 'sim/unreal/Source/NmAerBridge/Private/Robots/NmHexapodActor.cpp').read_text()
         for marker in (
