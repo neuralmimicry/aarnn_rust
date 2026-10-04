@@ -461,7 +461,10 @@ jobs:
             deb_arch: arm64
             container_platform: arm64
           - runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            # The hosted arm runner loses contact ~70 min into this build
+            # (v0.1.37, twice); the estate's native arm64 runner (qc00:
+            # 46 cores, 64 GB) has the headroom and podman this job needs.
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             ubuntu_series: "25.04"
             ubuntu_label: ubuntu25.04
             rust_target: aarch64-unknown-linux-gnu
