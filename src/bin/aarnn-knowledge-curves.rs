@@ -7,7 +7,17 @@
 
 use aarnn_rust::config::{AarnnBioParams, IzhikevichParams, LIFParams};
 use aarnn_rust::knowledge::{KnowledgeNeuron, current_grid, transfer_curve, transfer_curve_noisy};
+use serde::Serialize;
 use std::process::ExitCode;
+
+/// A measured curve plus the exact neuron configuration it was measured on,
+/// which Evelyn copies verbatim into knowledge-region mesh descriptions.
+#[derive(Serialize)]
+struct CurveWithSpec {
+    #[serde(flatten)]
+    curve: aarnn_rust::knowledge::TransferCurve,
+    spec: KnowledgeNeuron,
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -60,7 +70,10 @@ fn main() -> ExitCode {
                 .zip(&plain.rates)
                 .find(|(_, r)| **r >= 0.98 * max)
                 .map_or(rheo, |(c, _)| *c);
-            transfer_curve_noisy(n, g, steps * 5, steps / 10, 0.2 * (sat - rheo).max(1e-6))
+            CurveWithSpec {
+                curve: transfer_curve_noisy(n, g, steps * 5, steps / 10, 0.2 * (sat - rheo).max(1e-6)),
+                spec: n.clone(),
+            }
         })
         .collect();
     match serde_json::to_string(&curves) {

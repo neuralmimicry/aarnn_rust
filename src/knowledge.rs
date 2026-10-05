@@ -333,3 +333,18 @@ mod tests {
         );
     }
 }
+
+/// Steady-state firing rate (spikes per step) of one AARNN neuron under a
+/// constant current with Gaussian membrane noise, simulated with the crate's
+/// own kernels. This is the per-neuron primitive knowledge regions are built
+/// from. `seed` selects an independent, reproducible noise stream.
+pub fn steady_rate(
+    neuron: &KnowledgeNeuron,
+    current: f64,
+    steps: usize,
+    warmup: usize,
+    noise_std: f64,
+    seed: u64,
+) -> f64 {
+    rate_at(neuron, current, steps, warmup, noise_std, seed)
+}
