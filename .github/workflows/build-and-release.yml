@@ -141,9 +141,9 @@ jobs:
       matrix:
         include:
           - runner_arch: X64
-            runs_on: '["ubuntu-24.04"]'
+            runs_on: '["self-hosted", "Linux", "X64"]'
           - runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
     defaults:
       run:
         working-directory: repo-build-release
@@ -240,7 +240,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "repo-build-release -> target"
-          # Self-hosted ARM runners restore existing caches, but do not spend
+          # Self-hosted runners restore existing caches, but do not spend
           # the post-job phase archiving multi-gigabyte target trees on the
           # same hosts that run the product workloads.
           save-if: ${{ runner.environment == 'github-hosted' }}
@@ -349,7 +349,7 @@ jobs:
     name: Release Metadata
     needs: verify
     if: needs.verify.result == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     defaults:
       run:
         working-directory: repo-build-release
@@ -448,7 +448,7 @@ jobs:
       matrix:
         include:
           - runner_arch: X64
-            runs_on: '["ubuntu-24.04"]'
+            runs_on: '["self-hosted", "Linux", "X64"]'
             ubuntu_series: "24.04"
             ubuntu_label: ubuntu24.04
             rust_target: x86_64-unknown-linux-gnu
@@ -456,7 +456,7 @@ jobs:
             deb_arch: amd64
             container_platform: amd64
           - runner_arch: X64
-            runs_on: '["ubuntu-24.04"]'
+            runs_on: '["self-hosted", "Linux", "X64"]'
             ubuntu_series: "25.04"
             ubuntu_label: ubuntu25.04
             rust_target: x86_64-unknown-linux-gnu
@@ -464,7 +464,7 @@ jobs:
             deb_arch: amd64
             container_platform: amd64
           - runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             ubuntu_series: "24.04"
             ubuntu_label: ubuntu24.04
             rust_target: aarch64-unknown-linux-gnu
@@ -472,7 +472,10 @@ jobs:
             deb_arch: arm64
             container_platform: arm64
           - runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            # The hosted arm runner loses contact ~70 min into this build
+            # (v0.1.37, twice); the estate's native arm64 runner (qc00:
+            # 46 cores, 64 GB) has the headroom and podman this job needs.
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             ubuntu_series: "25.04"
             ubuntu_label: ubuntu25.04
             rust_target: aarch64-unknown-linux-gnu
@@ -720,7 +723,7 @@ jobs:
     needs:
       - release-meta
       - package-linux
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     if: >-
       always() &&
       needs.release-meta.outputs.publish_release == 'true' &&
@@ -860,6 +863,11 @@ jobs:
 
           gh release create "${args[@]}"
 
+      - name: Remove downloaded release artifacts from the persistent runner
+        if: always()
+        shell: bash
+        run: rm -rf ./dist
+
   container-build:
     name: Container Build (${{ matrix.workload }}, ${{ matrix.variant }}, ${{ matrix.runner_arch }})
     if: >-
@@ -888,55 +896,55 @@ jobs:
           - workload: orchestrator
             arch: amd64
             runner_arch: X64
-            runs_on: '["ubuntu-24.04"]'
+            runs_on: '["self-hosted", "Linux", "X64"]'
             variant: amd64
             page_size: 4k
           - workload: orchestrator
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             variant: arm64-4k
             page_size: 4k
           - workload: orchestrator
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             variant: arm64-64k-hwe
             page_size: 64k-hwe
           - workload: node
             arch: amd64
             runner_arch: X64
-            runs_on: '["ubuntu-24.04"]'
+            runs_on: '["self-hosted", "Linux", "X64"]'
             variant: amd64
             page_size: 4k
           - workload: node
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             variant: arm64-4k
             page_size: 4k
           - workload: node
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             variant: arm64-64k-hwe
             page_size: 64k-hwe
           - workload: web-ui
             arch: amd64
             runner_arch: X64
-            runs_on: '["ubuntu-24.04"]'
+            runs_on: '["self-hosted", "Linux", "X64"]'
             variant: amd64
             page_size: 4k
           - workload: web-ui
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             variant: arm64-4k
             page_size: 4k
           - workload: web-ui
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             variant: arm64-64k-hwe
             page_size: 64k-hwe
     runs-on: ${{ fromJSON(matrix.runs_on) }}
@@ -1191,7 +1199,7 @@ jobs:
       max-parallel: 3
       matrix:
         workload: [orchestrator, node, web-ui]
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     env:
       # Recovery publication must point at the immutable build that already
       # exists in GHCR, rather than at the SHA of this recovery dispatch.
@@ -1375,7 +1383,7 @@ jobs:
          inputs.publish_only &&
          needs.container-manifest.result == 'success')
       )
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     # Mutable tags are updated by one serialized promotion boundary. This
     # prevents concurrent manifest matrix jobs or recovery dispatches from
     # racing on :latest and the role aliases.
@@ -1502,7 +1510,7 @@ jobs:
          needs.container-latest.result == 'success') ||
         (github.event_name == 'workflow_dispatch' && inputs.environment != '')
       )
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       packages: write
     steps:
@@ -1560,7 +1568,7 @@ jobs:
          !startsWith(github.event.head_commit.message, 'chore: bump version ')) ||
         (github.event_name == 'workflow_dispatch' && inputs.run_version_bump)
       )
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: write
     defaults:
@@ -1655,7 +1663,7 @@ jobs:
     if: >-
       (github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')) ||
       (github.event_name == 'workflow_dispatch' && inputs.sync_wiki)
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: write
     steps:
