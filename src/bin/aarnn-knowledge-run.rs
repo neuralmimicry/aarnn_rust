@@ -4,7 +4,7 @@
 //! input vectors (little-endian f32, row-major), writes the region outputs in
 //! the same format, and prints JSON statistics (cost, timing) to stdout.
 
-use aarnn_rust::knowledge_region::{read_f32_file, FfnRegion};
+use aarnn_rust::knowledge_region::{FfnRegion, read_f32_file};
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
@@ -12,15 +12,23 @@ use std::time::Instant;
 
 fn run(a: &[String]) -> Result<(), String> {
     if a.len() < 5 {
-        return Err("usage: aarnn-knowledge-run <mesh.json> <inputs.f32> <count> <outputs.f32> [shards]".into());
+        return Err(
+            "usage: aarnn-knowledge-run <mesh.json> <inputs.f32> <count> <outputs.f32> [shards]"
+                .into(),
+        );
     }
     let count: usize = a[3].parse().map_err(|_| "invalid count")?;
-    let shards: usize = a.get(5).map_or(Ok(0), |s| s.parse()).map_err(|_| "invalid shards")?;
+    let shards: usize = a
+        .get(5)
+        .map_or(Ok(0), |s| s.parse())
+        .map_err(|_| "invalid shards")?;
     let t0 = Instant::now();
     let region = FfnRegion::load(Path::new(&a[1])).map_err(|e| format!("load mesh: {e}"))?;
-    let xs = read_f32_file(Path::new(&a[2]), count * region.inputs()).map_err(|e| format!("inputs: {e}"))?;
+    let xs = read_f32_file(Path::new(&a[2]), count * region.inputs())
+        .map_err(|e| format!("inputs: {e}"))?;
     let load_s = t0.elapsed().as_secs_f64();
-    let mut out = std::io::BufWriter::new(std::fs::File::create(&a[4]).map_err(|e| format!("outputs: {e}"))?);
+    let mut out =
+        std::io::BufWriter::new(std::fs::File::create(&a[4]).map_err(|e| format!("outputs: {e}"))?);
     let mut per_token = Vec::with_capacity(count);
     let mut neurons = 0u64;
     let mut neuron_steps = 0u64;
@@ -31,7 +39,8 @@ fn run(a: &[String]) -> Result<(), String> {
         neurons = stats.neurons;
         neuron_steps += stats.neuron_steps;
         for v in y {
-            out.write_all(&v.to_le_bytes()).map_err(|e| format!("write: {e}"))?;
+            out.write_all(&v.to_le_bytes())
+                .map_err(|e| format!("write: {e}"))?;
         }
     }
     out.flush().map_err(|e| format!("flush: {e}"))?;

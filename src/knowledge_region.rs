@@ -24,7 +24,7 @@
 //! distributed across estate nodes. Noise streams are seeded per neuron, so a
 //! run is reproducible on any node and in any shard layout.
 
-use crate::knowledge::{steady_rate, KnowledgeNeuron};
+use crate::knowledge::{KnowledgeNeuron, steady_rate};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, BufReader, Read};
@@ -88,10 +88,18 @@ pub fn read_f32_file(path: &Path, n: usize) -> io::Result<Vec<f32>> {
     if bytes.len() != n * 4 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("{}: expected {} values, found {}", path.display(), n, bytes.len() / 4),
+            format!(
+                "{}: expected {} values, found {}",
+                path.display(),
+                n,
+                bytes.len() / 4
+            ),
         ));
     }
-    Ok(bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect())
 }
 
 struct Dense {
@@ -102,13 +110,27 @@ struct Dense {
 
 impl Dense {
     fn load(ir: &DenseIr, base: &Path) -> io::Result<Self> {
-        let path = if ir.weights_file.is_absolute() { ir.weights_file.clone() } else { base.join(&ir.weights_file) };
-        Ok(Self { inputs: ir.inputs, outputs: ir.outputs, w: read_f32_file(&path, ir.inputs * ir.outputs)? })
+        let path = if ir.weights_file.is_absolute() {
+            ir.weights_file.clone()
+        } else {
+            base.join(&ir.weights_file)
+        };
+        Ok(Self {
+            inputs: ir.inputs,
+            outputs: ir.outputs,
+            w: read_f32_file(&path, ir.inputs * ir.outputs)?,
+        })
     }
 
     fn forward(&self, x: &[f32]) -> Vec<f32> {
         (0..self.outputs)
-            .map(|o| self.w[o * self.inputs..(o + 1) * self.inputs].iter().zip(x).map(|(w, v)| w * v).sum())
+            .map(|o| {
+                self.w[o * self.inputs..(o + 1) * self.inputs]
+                    .iter()
+                    .zip(x)
+                    .map(|(w, v)| w * v)
+                    .sum()
+            })
             .collect()
     }
 }
@@ -136,24 +158,45 @@ impl FfnRegion {
     /// Load a mesh description (JSON) and its weight files, validating shapes.
     pub fn load(mesh_json: &Path) -> io::Result<Self> {
         let text = std::fs::read_to_string(mesh_json)?;
-        let mesh: FfnMesh = serde_json::from_str(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let mesh: FfnMesh = serde_json::from_str(&text)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let base = mesh_json.parent().unwrap_or(Path::new("."));
-        let (gate, up, down) = (Dense::load(&mesh.gate, base)?, Dense::load(&mesh.up, base)?, Dense::load(&mesh.down, base)?);
+        let (gate, up, down) = (
+            Dense::load(&mesh.gate, base)?,
+            Dense::load(&mesh.up, base)?,
+            Dense::load(&mesh.down, base)?,
+        );
         if gate.outputs != up.outputs || down.inputs != gate.outputs || gate.inputs != up.inputs {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "inconsistent mesh shapes"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "inconsistent mesh shapes",
+            ));
         }
         let up_scale = match &mesh.up_scale_file {
             Some(f) => {
-                let path = if f.is_absolute() { f.clone() } else { base.join(f) };
+                let path = if f.is_absolute() {
+                    f.clone()
+                } else {
+                    base.join(f)
+                };
                 let v = read_f32_file(&path, gate.outputs)?;
                 if v.iter().any(|s| !s.is_finite() || *s <= 0.0) {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, "up scales must be finite and positive"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "up scales must be finite and positive",
+                    ));
                 }
                 Some(v)
             }
             None => None,
         };
-        Ok(Self { mesh, gate, up, down, up_scale })
+        Ok(Self {
+            mesh,
+            gate,
+            up,
+            down,
+            up_scale,
+        })
     }
 
     pub fn inputs(&self) -> usize {
@@ -182,7 +225,14 @@ impl FfnRegion {
                 continue;
             }
             let current = code.rheobase + u.gain * drive;
-            let rate = steady_rate(&m.neuron, current, m.steps, m.warmup, m.noise_std, seed_base ^ (k as u64 + 1));
+            let rate = steady_rate(
+                &m.neuron,
+                current,
+                m.steps,
+                m.warmup,
+                m.noise_std,
+                seed_base ^ (k as u64 + 1),
+            );
             value += u.weight * (rate / code.max_rate.max(1e-12)) as f32;
             neurons += 1;
         }
@@ -193,12 +243,20 @@ impl FfnRegion {
     /// shards of hidden channels (0 = one per available core).
     pub fn run(&self, x: &[f32], shards: usize) -> io::Result<(Vec<f32>, RegionStats)> {
         if x.len() != self.inputs() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "input width mismatch"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "input width mismatch",
+            ));
         }
         let z = self.gate.forward(x);
         let u = self.up.forward(x);
         let hidden = z.len();
-        let shards = if shards == 0 { std::thread::available_parallelism().map_or(1, |n| n.get()) } else { shards }.clamp(1, hidden);
+        let shards = if shards == 0 {
+            std::thread::available_parallelism().map_or(1, |n| n.get())
+        } else {
+            shards
+        }
+        .clamp(1, hidden);
         let chunk = hidden.div_ceil(shards);
         let parts: Vec<(Vec<f32>, u64)> = std::thread::scope(|s| {
             let handles: Vec<_> = (0..shards)
@@ -212,7 +270,8 @@ impl FfnRegion {
                             let seed = 0xA5A5_0000_0000_0000 ^ ((i as u64) << 20);
                             let (g, ng) = self.decode(&self.mesh.gate_code, z[i], seed);
                             let scale = self.up_scale.as_ref().map_or(1.0, |s| s[i]);
-                            let (v, nu) = self.decode(&self.mesh.up_code, u[i] / scale, seed ^ 0x5A5A);
+                            let (v, nu) =
+                                self.decode(&self.mesh.up_code, u[i] / scale, seed ^ 0x5A5A);
                             let v = v * scale; // synaptic scaling restores magnitude
                             h.push(g * v); // active dendritic multiplication
                             neurons += ng + nu;
@@ -221,11 +280,18 @@ impl FfnRegion {
                     })
                 })
                 .collect();
-            handles.into_iter().map(|h| h.join().expect("region shard panicked")).collect()
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("region shard panicked"))
+                .collect()
         });
         let neurons: u64 = parts.iter().map(|p| p.1).sum();
         let h: Vec<f32> = parts.into_iter().flat_map(|p| p.0).collect();
-        let stats = RegionStats { neurons, neuron_steps: neurons * (self.mesh.steps + self.mesh.warmup) as u64, shards };
+        let stats = RegionStats {
+            neurons,
+            neuron_steps: neurons * (self.mesh.steps + self.mesh.warmup) as u64,
+            shards,
+        };
         Ok((self.down.forward(&h), stats))
     }
 }

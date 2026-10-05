@@ -71,7 +71,13 @@ fn main() -> ExitCode {
                 .find(|(_, r)| **r >= 0.98 * max)
                 .map_or(rheo, |(c, _)| *c);
             CurveWithSpec {
-                curve: transfer_curve_noisy(n, g, steps * 5, steps / 10, 0.2 * (sat - rheo).max(1e-6)),
+                curve: transfer_curve_noisy(
+                    n,
+                    g,
+                    steps * 5,
+                    steps / 10,
+                    0.2 * (sat - rheo).max(1e-6),
+                ),
                 spec: n.clone(),
             }
         })
