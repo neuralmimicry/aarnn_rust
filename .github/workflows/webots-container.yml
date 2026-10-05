@@ -189,7 +189,15 @@ jobs:
           image="ghcr.io/neuralmimicry/webots"
           manifest="${image}:sha-${GITHUB_SHA}"
           podman manifest rm "${manifest}" >/dev/null 2>&1 || true
-          podman manifest create "${manifest}"
+          # Index annotations let GHCR link the multi-arch package to this repo.
+          index_annotations=()
+          if podman manifest create --help 2>/dev/null | grep -q -- '--annotation'; then
+            index_annotations=(
+              --annotation "org.opencontainers.image.source=https://github.com/neuralmimicry/aarnn_rust"
+              --annotation "org.opencontainers.image.description=NeuralMimicry Webots broker service for AARNN embodied simulation"
+            )
+          fi
+          podman manifest create "${index_annotations[@]}" "${manifest}"
           podman manifest add "${manifest}" "docker://${image}:sha-${GITHUB_SHA}-amd64"
           podman manifest add "${manifest}" "docker://${image}:sha-${GITHUB_SHA}-arm64"
           podman manifest push --all "${manifest}" "docker://${manifest}"
