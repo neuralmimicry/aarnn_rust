@@ -27,9 +27,9 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner_labels: '["ubuntu-24.04"]'
+            runner_labels: '["self-hosted", "Linux", "X64"]'
           - arch: arm64
-            runner_labels: '["ubuntu-24.04-arm"]'
+            runner_labels: '["self-hosted", "Linux", "ARM64"]'
     runs-on: ${{ fromJSON(matrix.runner_labels) }}
     permissions:
       contents: read
@@ -132,7 +132,7 @@ jobs:
   publish:
     if: github.ref == 'refs/heads/main'
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     env:
       AARNN_MIN_FREE_GIB: "5"
     permissions:
