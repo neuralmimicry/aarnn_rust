@@ -153,6 +153,17 @@ jobs:
         with:
           clean: false
           path: repo-build-release
+      - name: Check OCI source labels
+        shell: bash
+        run: |
+          # GHCR links a package to its repo via org.opencontainers.image.source;
+          # every Containerfile/Dockerfile (incl. templates) must carry it.
+          want="org.opencontainers.image.source=\"https://github.com/${GITHUB_REPOSITORY}\""
+          status=0
+          while IFS= read -r f; do
+            grep -qF "$want" "$f" || { echo "::error file=$f::missing $want"; status=1; }
+          done < <(git ls-files | grep -iE '(^|/)(containerfile|dockerfile)[^/]*$|\.(containerfile|dockerfile)(\.j2)?$' | grep -viE '\.(md|py|sh|txt|ya?ml|json)$')
+          exit "$status"
 
       - name: Prepare self-hosted verification runner disk
         if: runner.environment == 'self-hosted'
@@ -1108,6 +1119,7 @@ jobs:
             --build-arg "PYTHON_MIN_VERSION=3.12"
             --build-arg "PYTHON_FULL_VERSION=3.12.2"
             --build-arg "TARGET_PAGE_SIZE=${{ matrix.page_size }}"
+            --build-arg "VCS_REF=${GITHUB_SHA}"
             .
           )
 
