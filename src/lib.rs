@@ -67,6 +67,10 @@ pub mod fpaa;
 pub mod fpv_render_jobs;
 /// Rust output generated from the versioned management protobuf schema.
 pub mod generated_management;
+/// Measured neuron transfer curves for Evelyn knowledge regions.
+pub mod knowledge;
+/// Transformer feed-forward layers executed as AARNN neuron meshes.
+pub mod knowledge_region;
 /// Opt-in live managed-network durability owner.
 pub mod managed_durability;
 /// Bounded placement-aware runtime for partial stable-shard workers.
