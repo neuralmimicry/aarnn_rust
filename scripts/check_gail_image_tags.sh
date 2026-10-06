@@ -5,25 +5,21 @@ set -euo pipefail
 repo_root="${1:-$(pwd)}"
 
 # Reject pinned Gail image tags to keep AARNN decoupled from Gail release cadence.
-# Use grep from the base runner image so this check does not silently pass when
-# optional ripgrep is missing. --text lets grep inspect manifests with CRLF or
-# embedded binary-looking metadata; generated third-party and Git data is out.
+# Use git grep so generated, ignored build output cannot trigger a false
+# positive. This also keeps the check independent of optional ripgrep.
 pattern='(ghcr[.]io/)?neuralmimicry/gail:[[:alnum:]_.-]+'
-if ! command -v grep >/dev/null 2>&1; then
-  echo "::error::grep is required for the Gail image tag policy check."
+if ! command -v git >/dev/null 2>&1; then
+  echo "::error::git is required for the Gail image tag policy check."
   exit 2
 fi
 
 set +e
-candidates="$(grep -RInEo --text \
-  --exclude-dir=.git \
-  --exclude-dir=third_party \
-  "${pattern}" "${repo_root}")"
+candidates="$(git -C "${repo_root}" grep -nEo "${pattern}" -- . ':!third_party/**')"
 grep_status=$?
 set -e
 
 if (( grep_status > 1 )); then
-  echo "::error::Gail image tag policy scan failed (grep exit ${grep_status})."
+  echo "::error::Gail image tag policy scan failed (git grep exit ${grep_status})."
   exit "${grep_status}"
 fi
 
