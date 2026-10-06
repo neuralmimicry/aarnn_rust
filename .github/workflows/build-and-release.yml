@@ -342,7 +342,12 @@ jobs:
         run: cargo run --locked --release --all-features --bin aarnn-knowledge-serve -- --help
 
       - name: Validate release script
-        run: bash -n scripts/package-release.sh
+        run: |
+          set -euo pipefail
+          bash -n scripts/package-release.sh
+          bash -n .github/scripts/prepare-release-assets.sh
+          bash -n .github/scripts/test-prepare-release-assets.sh
+          bash .github/scripts/test-prepare-release-assets.sh
 
       - name: Clean self-hosted verification artifacts
         if: always() && runner.environment == 'self-hosted'
@@ -737,6 +742,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
       - name: Validate publish target
         shell: bash
         run: |
@@ -785,8 +793,10 @@ jobs:
           # artifacts contain generic names such as result.json and run.log;
           # upload only the release formats emitted by package-linux so
           # evidence files cannot collide with release assets.
+          release_assets_dir="$(mktemp -d "${RUNNER_TEMP}/aarnn-release-assets.XXXXXX")"
+          bash .github/scripts/prepare-release-assets.sh dist "${release_assets_dir}"
           mapfile -d '' files < <(
-            find dist -type f \
+            find "${release_assets_dir}" -maxdepth 1 -type f \
               \( -name '*.deb' -o -name '*.tar.gz' -o -name '*.sha256.txt' \) \
               -print0 | sort -z
           )
