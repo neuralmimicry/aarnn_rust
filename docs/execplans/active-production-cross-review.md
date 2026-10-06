@@ -3607,3 +3607,40 @@ no native engine content hash is presented as biological or physics equivalence.
 - [!] The shared SNN remains active and `tenant-aarnn` remains untouched. Do
   not stop services for the paired `qc00`/`qc01` power-cycle yet; first resolve
   the missing neural output and pass the full live I/O gate.
+
+## Progress update — 2026-10-06 09:06Z: Stage 5 engine-history test repair
+
+- [x] Reproduced `engine::tests::workspace_activity_history_tracks_admitted_sensory_steps`
+  in the PR #34 worktree. The default network computes a one-frame delay
+  history (`aarnn_velocity = 10.0`, `dt = 1.0 ms`), while the test indexes a
+  previous frame after the second step. Set the test fixture's velocity to
+  `1.0`, which yields three retained frames and tests the intended current / prior
+  sensory history without changing runtime defaults.
+- [x] Gated the morphology contact-view unit test on `feature = "ui"`; it
+  references `crate::visualization`, which is absent in the default feature
+  profile. The default `cargo test --release --locked` had failed while
+  compiling that unrelated binary test before it reached the engine test.
+- [x] `cargo test --release --locked --lib
+  engine::tests::workspace_activity_history_tracks_admitted_sensory_steps --
+  --exact` passes (1 test); `cargo fmt --all -- --check` and `git diff --check`
+  pass.
+- [x] `CARGO_TARGET_DIR=/var/tmp/codex-aarnn-pr34-target NM_DISABLE_OPENCL=1
+  cargo test --release --locked --all-features --lib
+  engine::tests::workspace_activity_history_tracks_admitted_sensory_steps --
+  --exact` passes (1 test). Its first attempt using the worktree's `/tmp`
+  target failed before test execution because the shared tmpfs quota was
+  exhausted by feature dependencies; generated worktree build files were
+  removed and the retry used the root filesystem. The full CI unit-test command
+  then passed: `CARGO_TARGET_DIR=/var/tmp/codex-aarnn-pr34-target
+  NM_DISABLE_OPENCL=1 cargo test --locked --all-features --lib --bin web_ui
+  --quiet` reported 585 passed / 2 ignored for the library and 28 passed for
+  `web_ui`. GitHub PR checks remain pending; no merge or deployment has been
+  made.
+
+### Decision Log — ACTIVITY-HISTORY-TEST-FIX
+
+- `2026-10-06 / ACTIVITY-HISTORY-TEST-FIX`: configure the isolated test fixture
+  to retain enough delay history for its two-frame assertion; do not increase
+  the production history limit or change neural timing semantics to satisfy a
+  test assumption. Authority: existing `Runner` history-length formula and
+  current test scope; no `INV-*` behaviour changes.

@@ -3860,6 +3860,7 @@ mod tests {
         snapshot.validate().unwrap();
     }
 
+    #[cfg(feature = "ui")]
     #[test]
     fn zero_connection_reconstruction_has_verified_empty_contact_view() {
         let mut connectome = point_connectome(false);

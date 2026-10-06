@@ -2010,6 +2010,8 @@ mod tests {
     fn workspace_activity_history_tracks_admitted_sensory_steps() {
         let mut spec = EngineSpec::default();
         spec.net.num_sensory_neurons = 4;
+        // Keep enough delay history to inspect the current and previous step.
+        spec.net.aarnn_velocity = 1.0;
         let mut engine = RunnerEngine::new(spec).expect("engine");
         let first = engine.step(Some(&[0, 1, 0, 0]));
         let activity = engine.activity();
