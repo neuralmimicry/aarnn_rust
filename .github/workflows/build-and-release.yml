@@ -103,7 +103,7 @@ env:
   # whose metadata still declares an older runtime during the transition.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   CARGO_FEATURES: all-features
-  CARGO_BUILD_TARGETS: aarnn_rust web_ui
+  CARGO_BUILD_TARGETS: aarnn_rust web_ui aarnn-knowledge-serve
   REGISTRY: ghcr.io
   IMAGE_NAME: neuralmimicry/aarnn_rust
   UBUNTU_NATIVE_BUILD_DEPS: >-
@@ -327,7 +327,7 @@ jobs:
         # on the live ARM runner consumes several GiB and can evict the
         # runner before the package/container matrix starts.
         if: matrix.runner_arch != 'ARM64'
-        run: cargo build --locked --release --all-features --bin aarnn_rust --bin web_ui
+        run: cargo build --locked --release --all-features --bin aarnn_rust --bin web_ui --bin aarnn-knowledge-serve
 
       - name: Smoke test CLI help
         if: matrix.runner_arch != 'ARM64'
@@ -336,6 +336,10 @@ jobs:
       - name: Smoke test web UI help
         if: matrix.runner_arch != 'ARM64'
         run: cargo run --locked --release --all-features --bin web_ui -- --help
+
+      - name: Smoke test knowledge service help
+        if: matrix.runner_arch != 'ARM64'
+        run: cargo run --locked --release --all-features --bin aarnn-knowledge-serve -- --help
 
       - name: Validate release script
         run: bash -n scripts/package-release.sh
@@ -687,9 +691,11 @@ jobs:
 
           test -x /usr/bin/aarnn_rust
           test -x /usr/bin/web_ui
+          test -x /usr/bin/aarnn-knowledge-serve
           test -f /usr/share/aarnn-rust/config.json
           aarnn_rust --help >/dev/null
           web_ui --help >/dev/null
+          aarnn-knowledge-serve --help >/dev/null
           dpkg-query -W -f='${Version}\n' aarnn-rust
           SCRIPT
 
@@ -1104,6 +1110,8 @@ jobs:
               test -n "$deb"
               aarnn_apt_install_with_retry -y --no-install-recommends "$deb"
               test -x /usr/bin/aarnn_rust
+              test -x /usr/bin/aarnn-knowledge-serve
+              aarnn-knowledge-serve --help >/dev/null
             '
 
       - name: Build and push architecture image
@@ -1145,7 +1153,10 @@ jobs:
           fi
 
           if [[ "${{ matrix.workload }}" == "web-ui" ]]; then
-            podman run --rm --entrypoint ffmpeg "${arch_tag}" -version >/dev/null
+            # Rootless pasta cannot open a user network namespace on our
+            # self-hosted Actions runners; this smoke check needs no isolated
+            # network, so use the host network just like the other checks.
+            podman run --rm --network host --entrypoint ffmpeg "${arch_tag}" -version >/dev/null
           fi
 
           # GHCR can return 403 for cross-tag blob-reuse checks even after a
