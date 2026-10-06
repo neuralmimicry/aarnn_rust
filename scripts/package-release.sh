@@ -22,7 +22,7 @@ Options:
   --artifact-suffix NAME         Optional extra suffix appended to artifact filenames.
   --deb-arch ARCH                Also build a Debian package for linux using ARCH (amd64 or arm64).
   --cargo-features FEATURES      Cargo feature selection. Default: cargo defaults.
-  --cargo-build-targets TARGETS  Space-delimited cargo binary targets. Default: "aarnn_rust web_ui".
+  --cargo-build-targets TARGETS  Space-delimited cargo binary targets. Default: "aarnn_rust web_ui aarnn-knowledge-serve".
   --skip-build                   Reuse existing release binaries instead of building them.
   -h, --help                     Show this help text.
 
@@ -272,7 +272,7 @@ TARGET_TRIPLE=
 PLATFORM=
 DEB_ARCH=
 CARGO_FEATURES=
-CARGO_BUILD_TARGETS="aarnn_rust web_ui"
+CARGO_BUILD_TARGETS="aarnn_rust web_ui aarnn-knowledge-serve"
 ARTIFACT_SUFFIX=
 SKIP_BUILD=0
 BUILD_TARGET_LIST=()

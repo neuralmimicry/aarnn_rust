@@ -78,6 +78,10 @@ fn serve(region: Arc<FfnRegion>, stream: TcpStream, shards: usize) -> std::io::R
 
 fn main() -> ExitCode {
     let a: Vec<String> = std::env::args().collect();
+    if a.len() == 2 && matches!(a[1].as_str(), "-h" | "--help") {
+        println!("usage: aarnn-knowledge-serve <mesh.json> <listen-addr> [shards]");
+        return ExitCode::SUCCESS;
+    }
     if a.len() < 3 {
         eprintln!("usage: aarnn-knowledge-serve <mesh.json> <listen-addr> [shards]");
         return ExitCode::from(2);
