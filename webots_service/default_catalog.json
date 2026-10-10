@@ -38,7 +38,7 @@
     "summary": "Humanoid embodiment with dense visual sensory ingress.",
     "description": "Launch the NAO Webots world and inspect the high-bandwidth sensory and actuator profile exported from AARNN.",
     "aliases": ["nao", "humanoid"],
-    "world_path": "webots_world/worlds/neuroworld.wbt",
+    "world_path": "webots_world/worlds/nao_neuroworld.wbt",
     "config_path": "webots_world/configs/config_nao_webots.json",
     "workspace_hint": "nao-lab"
   }

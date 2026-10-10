@@ -78,6 +78,16 @@ compatibility sensor/transport discrepancies are recorded instead of claimed equ
 
 ## Progress
 
+- [~] 2026-10-10 14:22Z — Repaired the exact-head `simulator-content`
+  regressions from AARNN main by preserving the NAO-specific edited scene as
+  `webots_world/worlds/nao_neuroworld.wbt` and restoring
+  `multi_neuroworld.wbt` from its canonical generated parent. The NAO catalog
+  and combo launcher now select the preserved world alongside the existing
+  `config_nao_webots.json`; the launcher rewrites the NAO controller arguments
+  for the selected runtime network. Added contract assertions for that mapping
+  and rewrite. `git diff --check` passed. Exact generated-asset/runtime tests
+  are pending on the existing X64/ARM64 runner matrix; no merge is claimed.
+
 - [~] `2026-10-02 20:50Z` Cross-engine robot follow-up on clean `main` at
   `19fb394`. `cargo metadata --no-deps --format-version 1` confirms the root
   workspace and xtask. Canonical adapters are `sim/unity/Assets/NeuralMimicry/Runtime/`,
@@ -446,6 +456,13 @@ Old native I/O maps differ: verify by names, do not infer equivalence from vecto
   `scripts/regenerate_simulator_assets.py` and asserted by
   `scripts/qa/test_simulator_content.py`. Resolve generated-world conflicts by
   regenerating from that source instead of manually combining generated files.
+- `2026-10-10 SIM-008`: Keep the generated mixed C. elegans scene at
+  `multi_neuroworld.wbt`; preserve the authored NAO test scene at the separate
+  `nao_neuroworld.wbt` path and keep its NAO config reference explicit. The
+  combo launcher must rewrite the selected network identity in the preserved
+  NAO block rather than relying on one exact generated controller-argument
+  template. This keeps generated-world parity and retains the user's intended
+  NAO test scene without overloading a compiler-owned asset.
 
 ## Outcomes & Retrospective
 

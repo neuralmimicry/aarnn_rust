@@ -10,8 +10,10 @@ import sys
 import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 import sim_content
 from robot_profiles import PROFILES
+from run_nao_combo_webots import create_nao_runtime_world
 
 ROOT = sim_content.ROOT
 
@@ -157,6 +159,30 @@ class ContentParity(unittest.TestCase):
         self.assertEqual(len(re.findall(r'(?m)^CelegansRobot\s*\{', multi_world)), 2)
         self.assertEqual(re.findall(r'"NM_BRAINS=([^"]+)"', multi_world),
                          ['celegans_01', 'celegans_02'])
+
+        nao_catalog = next(
+            item for item in json.loads((ROOT / 'webots_service/default_catalog.json').read_text())
+            if item['id'] == 'nao'
+        )
+        self.assertEqual(nao_catalog['world_path'], 'webots_world/worlds/nao_neuroworld.wbt')
+        self.assertEqual(nao_catalog['config_path'], 'webots_world/configs/config_nao_webots.json')
+        nao_world = ROOT / nao_catalog['world_path']
+        nao_text = nao_world.read_text()
+        self.assertIn('name "NAO_01"', nao_text)
+        self.assertIn('"NM_BRAINS=nao_01"', nao_text)
+        self.assertEqual(len(re.findall(r'(?m)^Nao\s*\{', nao_text)), 1)
+
+        with tempfile.TemporaryDirectory() as folder:
+            runtime_world = Path(folder) / 'nao-runtime.wbt'
+            create_nao_runtime_world(
+                network_id='nao-contract-test',
+                base_world=nao_world,
+                target_world=runtime_world,
+            )
+            runtime_text = runtime_world.read_text()
+        self.assertIn('"NM_BRAINS=nao-contract-test"', runtime_text)
+        self.assertIn('"NM_SENSORS_nao-contract-test=', runtime_text)
+        self.assertNotIn('"NM_BRAINS=nao_01"', runtime_text)
 
         unity = (ROOT / 'sim/unity/Assets/NeuralMimicry/Runtime/Robots/NmHexapodRobot.cs').read_text()
         for marker in (
