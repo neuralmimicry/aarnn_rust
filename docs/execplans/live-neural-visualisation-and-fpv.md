@@ -205,6 +205,39 @@ Requirements: all. Run matched neural/view/capture/export benchmarks, long-sessi
   and ARM64 runner checks. Do not merge or deploy this FPV fix until all
   required checks pass.
 
+### FPV incident and restore-memory audit — 2026-10-10 22:04Z
+
+- [x] Re-opened the supplied authenticated FPV Studio screenshot. It shows
+  `Projection request failed (503)` and an inactive `Submit render` control;
+  it does not show a failed HTTP POST. `web_ui/app.js::submitFpvJob()` awaits
+  route-tile projection reads before issuing `POST /api/fpv/jobs`, so a failed
+  projection can stop the submit path before any job request is sent.
+- [x] Correlated the best retained incident evidence: the web-ui had no Ready
+  upstream and was OOM-killed at its 12 GiB cgroup limit while restoring the
+  271,824,490-byte workspace snapshot. Do not label the screenshot as a worker
+  rejection; a deliberate browser POST still needs request, ingress, API and
+  worker correlation.
+- [x] Audited the merged decoder path. `Runner::import_network_json()` calls
+  `decode_snapshot_with_profile_backfill()`, which first materialises the
+  complete JSON as `serde_json::Value`, converts that value into `Snapshot`,
+  and then copies matrix vectors into ndarray storage. Runtime workspace
+  restore also reads the entire file into a `String`. This source-confirmed
+  peak amplification is a plausible, directly actionable cause of restore
+  OOM; it has not yet been measured against the production cgroup.
+- [~] Implement a seekable-reader decoder that first parses only small
+  metadata while ignoring checkpoint arrays, then deserialises the snapshot
+  directly from the file. Move owned matrix buffers into ndarray allocations
+  and use the reader path for startup restore, disk refresh and FPV projection.
+  Keep JSON import compatibility and profile backfill behaviour unchanged.
+- [ ] Validate decoder parity and exact snapshot restoration on existing X64
+  and ARM64 runners; measure process/cgroup high-water against the exact saved
+  workspace after Ansible deployment. Keep large projection and render
+  submission disabled until measured headroom is safe.
+- [ ] Correlate one authenticated browser projection refresh and one enabled
+  route submission through the exact `POST /api/fpv/jobs` response, worker
+  completion and result retrieval. Capture snapshot identity and confirm no
+  live neural state was changed.
+
 ## Validation and acceptance
 
 Use the companion acceptance matrix. Existing confirmed entry points include:
@@ -309,6 +342,18 @@ Update these as the current checkout differs. Distinguish source observation, me
   and OOM counters over host-wide percentage estimates; retain `null` for
   unsupported counters instead of presenting host memory as container memory.
   This supports measurement only and does not weaken projection memory gates.
+- D14, 2026-10-10: Treat snapshot restore amplification as the first code-level
+  remediation for the FPV 503. The authenticated screenshot demonstrates a
+  projection GET failure before a render-submit request; retained production
+  evidence shows the web-ui OOM at 12 GiB while restoring the 271,824,490-byte
+  snapshot. Source review found a full `serde_json::Value` tree, a decoded
+  `Snapshot`, copied matrix ndarrays and an in-memory file `String` on the
+  restore path. Add a seekable streaming decode pass and move matrix buffers,
+  preserving existing JSON schema and profile backfill. This is a reversible
+  reader/allocator optimisation with no persisted format change. Authority:
+  NVR-027/028 and the user's explicit request to resolve the FPV failure. The
+  remaining peak must be measured on the exact live workspace before rollout
+  is considered successful.
 
 ## Outcomes & Retrospective
 

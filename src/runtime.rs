@@ -185,6 +185,14 @@ fn read_if_exists(path: &Path) -> anyhow::Result<Option<String>> {
     Ok(Some(data))
 }
 
+fn open_file_if_exists(path: &Path) -> anyhow::Result<Option<std::fs::File>> {
+    match std::fs::File::open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("failed to open '{}'", path.display())),
+    }
+}
+
 fn read_dir_paths(root: &Path, label: &str) -> anyhow::Result<Vec<PathBuf>> {
     let entries =
         std::fs::read_dir(root).with_context(|| format!("failed to scan '{}'", root.display()))?;
@@ -1576,11 +1584,11 @@ impl RuntimeManager {
         let snapshot_path = handle.latest_snapshot_path();
         let projection = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let _permit = permit;
-            let snapshot_json = read_if_exists(&snapshot_path)?
+            let snapshot_file = open_file_if_exists(&snapshot_path)?
                 .ok_or_else(|| anyhow!("workspace snapshot is not available for projection"))?;
-            let snapshot_bytes = snapshot_json.len() as u64;
+            let snapshot_bytes = snapshot_file.metadata()?.len();
             let mut engine = RunnerEngine::new(EngineSpec::default())?;
-            engine.import_snapshot_json(&snapshot_json)?;
+            engine.import_snapshot_reader(&mut std::io::BufReader::new(snapshot_file))?;
             let status = engine.status();
             let snapshot_json = serde_json::to_string(&serde_json::json!({
                 "net": &engine.spec().net,
@@ -1763,8 +1771,9 @@ impl RuntimeManager {
                         .engine
                         .lock()
                         .map_err(|_| anyhow!("workspace engine lock poisoned"))?;
-                    if let Some(baseline_json) = read_if_exists(&baseline_path)? {
-                        engine.import_snapshot_json(&baseline_json)?;
+                    if let Some(baseline_file) = open_file_if_exists(&baseline_path)? {
+                        engine
+                            .import_snapshot_reader(&mut std::io::BufReader::new(baseline_file))?;
                     } else {
                         engine.reset_from_spec()?;
                     }
@@ -1798,8 +1807,9 @@ impl RuntimeManager {
                         .engine
                         .lock()
                         .map_err(|_| anyhow!("workspace engine lock poisoned"))?;
-                    if let Some(baseline_json) = read_if_exists(&baseline_path)? {
-                        engine.import_snapshot_json(&baseline_json)?;
+                    if let Some(baseline_file) = open_file_if_exists(&baseline_path)? {
+                        engine
+                            .import_snapshot_reader(&mut std::io::BufReader::new(baseline_file))?;
                     } else {
                         engine.reset_from_spec()?;
                     }
@@ -2231,7 +2241,7 @@ impl RuntimeManager {
         let handle_for_refresh = handle.clone();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             let snapshot_path = handle_for_refresh.latest_snapshot_path();
-            let Some(snapshot_json) = read_if_exists(&snapshot_path)? else {
+            let Some(snapshot_file) = open_file_if_exists(&snapshot_path)? else {
                 return Ok(());
             };
 
@@ -2239,7 +2249,7 @@ impl RuntimeManager {
                 .engine
                 .lock()
                 .map_err(|_| anyhow!("workspace engine lock poisoned"))?;
-            engine.import_snapshot_json(&snapshot_json)?;
+            engine.import_snapshot_reader(&mut std::io::BufReader::new(snapshot_file))?;
             let status = engine.status();
             let activity = engine.activity();
             *handle_for_refresh.status_cache.blocking_write() = status;
@@ -2411,17 +2421,25 @@ impl RuntimeManager {
                     let mut engine = RunnerEngine::new(manifest.engine.clone())?;
                     let mut migrated_snapshot_json = None;
                     let mut import_error = None;
-                    if let Ok(Some(snapshot_json)) = read_if_exists(&snapshot_path_for_load) {
-                        if let Err(err) = engine.import_snapshot_json(&snapshot_json) {
+                    match open_file_if_exists(&snapshot_path_for_load) {
+                        Ok(Some(snapshot_file)) => {
+                            let mut snapshot_file = std::io::BufReader::new(snapshot_file);
+                            if let Err(err) = engine.import_snapshot_reader(&mut snapshot_file) {
+                                import_error = Some(err.to_string());
+                            } else if engine.spec().net.deployment != manifest.engine.net.deployment
+                            {
+                                // Loading a legacy workspace is itself an import. Save
+                                // the canonical distributed policy immediately so the
+                                // next load does not repeat the migration.
+                                manifest.engine = engine.spec().clone();
+                                manifest.updated_at_ms = now_ms();
+                                manifest.last_saved_at_ms = Some(manifest.updated_at_ms);
+                                migrated_snapshot_json = Some(engine.export_snapshot_json()?);
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
                             import_error = Some(err.to_string());
-                        } else if engine.spec().net.deployment != manifest.engine.net.deployment {
-                            // Loading a legacy workspace is itself an import. Save
-                            // the canonical distributed policy immediately so the
-                            // next load does not repeat the migration.
-                            manifest.engine = engine.spec().clone();
-                            manifest.updated_at_ms = now_ms();
-                            manifest.last_saved_at_ms = Some(manifest.updated_at_ms);
-                            migrated_snapshot_json = Some(engine.export_snapshot_json()?);
                         }
                     }
                     let status = engine.status();

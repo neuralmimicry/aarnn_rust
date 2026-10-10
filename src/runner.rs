@@ -79,6 +79,7 @@ use crate::topology::{EarlyCell3D, EarlyCellPhase, Node3D, Topology3D};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::io::{Cursor, Read, Seek, SeekFrom};
 #[cfg(feature = "opencl")]
 use std::ptr;
 #[cfg(feature = "opencl")]
@@ -125,6 +126,17 @@ pub fn nd_from_mat(m: &Matrix2) -> Array2<f64> {
     a
 }
 
+fn nd_from_mat_owned(mut matrix: Matrix2) -> anyhow::Result<Array2<f64>> {
+    let expected = matrix
+        .rows
+        .checked_mul(matrix.cols)
+        .ok_or_else(|| anyhow::anyhow!("snapshot matrix dimensions overflow"))?;
+    matrix.data.resize(expected, 0.0);
+    matrix.data.truncate(expected);
+    Array2::from_shape_vec((matrix.rows, matrix.cols), matrix.data)
+        .map_err(|error| anyhow::anyhow!("invalid snapshot matrix shape: {error}"))
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Matrix2U32 {
     pub rows: usize,
@@ -150,6 +162,17 @@ pub fn nd_from_mat_u32(m: &Matrix2U32) -> Array2<u32> {
         a[(r, c)] = m.data[idx];
     }
     a
+}
+
+fn nd_from_mat_u32_owned(mut matrix: Matrix2U32) -> anyhow::Result<Array2<u32>> {
+    let expected = matrix
+        .rows
+        .checked_mul(matrix.cols)
+        .ok_or_else(|| anyhow::anyhow!("snapshot presence matrix dimensions overflow"))?;
+    matrix.data.resize(expected, 0);
+    matrix.data.truncate(expected);
+    Array2::from_shape_vec((matrix.rows, matrix.cols), matrix.data)
+        .map_err(|error| anyhow::anyhow!("invalid snapshot presence matrix shape: {error}"))
 }
 
 fn vec_from_arr1_f64(a: &Array1<f64>) -> Vec<f64> {
@@ -485,13 +508,6 @@ impl Default for Snapshot {
     }
 }
 
-fn snapshot_net_field_names(raw: &serde_json::Value) -> HashSet<String> {
-    raw.get("net")
-        .and_then(serde_json::Value::as_object)
-        .map(|obj| obj.keys().cloned().collect())
-        .unwrap_or_default()
-}
-
 fn infer_snapshot_biomimicry_profile(raw: &serde_json::Value) -> Option<AarnnBiomimicryProfile> {
     let mut hints: Vec<String> = Vec::new();
 
@@ -560,21 +576,28 @@ fn infer_snapshot_biomimicry_profile(raw: &serde_json::Value) -> Option<AarnnBio
 }
 
 pub fn decode_snapshot_with_profile_backfill(s: &str) -> anyhow::Result<Snapshot> {
-    let raw: serde_json::Value = serde_json::from_str(s)?;
-    if !raw.get("net").is_some_and(serde_json::Value::is_object) {
-        anyhow::bail!("snapshot payload must contain a top-level object field named `net`");
-    }
-    let present_net_fields = snapshot_net_field_names(&raw);
-    let profile_hint = infer_snapshot_biomimicry_profile(&raw);
-    let mut snap: Snapshot = serde_json::from_value(raw)?;
-    if let Some(profile) = profile_hint {
-        backfill_aarnn_biomimicry_profile_missing_fields(
-            &mut snap.net,
-            profile,
-            &present_net_fields,
-        );
-    }
-    Ok(snap)
+    decode_snapshot_from_reader_with_profile_backfill(&mut Cursor::new(s.as_bytes()))
+}
+
+/// Decode a checkpoint without first materialising its complete JSON tree.
+/// The first pass reads small configuration/shape metadata and skips the
+/// large state arrays; the second pass deserialises the owned checkpoint
+/// directly. `reader` must be seekable so the metadata pass can be replayed.
+pub fn decode_snapshot_from_reader_with_profile_backfill<R>(
+    reader: &mut R,
+) -> anyhow::Result<Snapshot>
+where
+    R: Read + Seek,
+{
+    let start = reader.stream_position()?;
+    let metadata = decode_snapshot_metadata_from_reader(&mut *reader)?;
+    reader.seek(SeekFrom::Start(start))?;
+
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    let mut snapshot = Snapshot::deserialize(&mut deserializer)?;
+    deserializer.end()?;
+    snapshot.net = metadata.net;
+    Ok(snapshot)
 }
 
 /// The portions of a snapshot needed by placement and control-plane code.
@@ -612,7 +635,13 @@ struct SnapshotMatrixMetadata {
 pub fn decode_snapshot_metadata_with_profile_backfill(
     payload: &str,
 ) -> anyhow::Result<SnapshotMetadata> {
-    let raw: SnapshotMetadataRaw = serde_json::from_str(payload)?;
+    decode_snapshot_metadata_from_reader(&mut Cursor::new(payload.as_bytes()))
+}
+
+fn decode_snapshot_metadata_from_reader<R: Read>(reader: R) -> anyhow::Result<SnapshotMetadata> {
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    let raw = SnapshotMetadataRaw::deserialize(&mut deserializer)?;
+    deserializer.end()?;
     let Some(net_value) = raw.net else {
         anyhow::bail!("snapshot payload must contain a top-level object field named `net`");
     };
@@ -650,6 +679,49 @@ pub fn decode_snapshot_metadata_with_profile_backfill(
 #[cfg(test)]
 mod snapshot_payload_tests {
     use super::*;
+
+    #[test]
+    fn owned_matrix_import_reuses_snapshot_buffer() {
+        let matrix = Matrix2 {
+            rows: 2,
+            cols: 2,
+            data: vec![1.0, 2.0, 3.0, 4.0],
+        };
+        let input_buffer = matrix.data.as_ptr();
+        let imported = nd_from_mat_owned(matrix).expect("matrix import");
+
+        assert_eq!(
+            imported.as_slice().expect("contiguous matrix").as_ptr(),
+            input_buffer
+        );
+        assert_eq!(imported[[1, 0]], 3.0);
+    }
+
+    #[test]
+    fn reader_snapshot_decode_preserves_connectome_backfill_and_weights() {
+        let mut value = serde_json::to_value(Snapshot::default()).expect("snapshot");
+        value
+            .get_mut("net")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("snapshot net")
+            .remove("io_channels_are_biological");
+        value["connectome_labels"] = serde_json::json!({
+            "dataset": "openworm_celegans_connectome"
+        });
+        value["w_in"] = serde_json::json!({
+            "rows": 1,
+            "cols": 2,
+            "data": [0.25, 0.75]
+        });
+        let payload = serde_json::to_vec(&value).expect("snapshot JSON");
+        let mut reader = Cursor::new(payload);
+
+        let decoded = decode_snapshot_from_reader_with_profile_backfill(&mut reader)
+            .expect("decode reader snapshot");
+
+        assert!(!decoded.net.io_channels_are_biological);
+        assert_eq!(decoded.w_in.data, vec![0.25, 0.75]);
+    }
 
     #[test]
     fn plain_network_config_is_not_accepted_as_a_snapshot() {
@@ -6341,7 +6413,19 @@ impl Runner {
 
     #[allow(dead_code)]
     pub fn import_network_json(&mut self, s: &str) -> anyhow::Result<()> {
-        let mut snap = decode_snapshot_with_profile_backfill(s)?;
+        let snap = decode_snapshot_with_profile_backfill(s)?;
+        self.import_snapshot(snap)
+    }
+
+    pub fn import_network_reader<R>(&mut self, reader: &mut R) -> anyhow::Result<()>
+    where
+        R: Read + Seek,
+    {
+        let snap = decode_snapshot_from_reader_with_profile_backfill(reader)?;
+        self.import_snapshot(snap)
+    }
+
+    fn import_snapshot(&mut self, mut snap: Snapshot) -> anyhow::Result<()> {
         snap.net.deployment.migrate_legacy_import();
         let snapshot_step = snap.t;
         let snapshot_time_ms = snap.t_ms.max(0.0);
@@ -6366,11 +6450,20 @@ impl Runner {
         self.net = snap.net;
         self.layer_range = snap.layer_range.map(|(s, e)| s..e);
         // Replace weights
-        self.w_in = nd_from_mat(&snap.w_in);
-        self.w_hh_fwd = snap.w_hh_fwd.iter().map(nd_from_mat).collect();
-        self.w_hh_bwd = snap.w_hh_bwd.iter().map(nd_from_mat).collect();
-        self.w_hh_rec = snap.w_hh_rec.iter().map(nd_from_mat).collect();
-        self.w_out = nd_from_mat(&snap.w_out);
+        self.w_in = nd_from_mat_owned(std::mem::take(&mut snap.w_in))?;
+        self.w_hh_fwd = std::mem::take(&mut snap.w_hh_fwd)
+            .into_iter()
+            .map(nd_from_mat_owned)
+            .collect::<anyhow::Result<_>>()?;
+        self.w_hh_bwd = std::mem::take(&mut snap.w_hh_bwd)
+            .into_iter()
+            .map(nd_from_mat_owned)
+            .collect::<anyhow::Result<_>>()?;
+        self.w_hh_rec = std::mem::take(&mut snap.w_hh_rec)
+            .into_iter()
+            .map(nd_from_mat_owned)
+            .collect::<anyhow::Result<_>>()?;
+        self.w_out = nd_from_mat_owned(std::mem::take(&mut snap.w_out))?;
         // Sync top-level sizes from matrix shapes
         self.net.num_sensory_neurons = self.w_in.ncols();
         self.net.num_output_neurons = self.w_out.nrows();
@@ -6629,19 +6722,28 @@ impl Runner {
         // reset made an additional import lose counters and broke replay
         // idempotence.
         if let Some(presence) = snapshot_presence_in {
-            self.conn_presence_in = nd_from_mat_u32(&presence);
+            self.conn_presence_in = nd_from_mat_u32_owned(presence)?;
         }
         if let Some(presence) = snapshot_presence_fwd {
-            self.conn_presence_fwd = presence.iter().map(nd_from_mat_u32).collect();
+            self.conn_presence_fwd = presence
+                .into_iter()
+                .map(nd_from_mat_u32_owned)
+                .collect::<anyhow::Result<_>>()?;
         }
         if let Some(presence) = snapshot_presence_bwd {
-            self.conn_presence_bwd = presence.iter().map(nd_from_mat_u32).collect();
+            self.conn_presence_bwd = presence
+                .into_iter()
+                .map(nd_from_mat_u32_owned)
+                .collect::<anyhow::Result<_>>()?;
         }
         if let Some(presence) = snapshot_presence_rec {
-            self.conn_presence_rec = presence.iter().map(nd_from_mat_u32).collect();
+            self.conn_presence_rec = presence
+                .into_iter()
+                .map(nd_from_mat_u32_owned)
+                .collect::<anyhow::Result<_>>()?;
         }
         if let Some(presence) = snapshot_presence_out {
-            self.conn_presence_out = nd_from_mat_u32(&presence);
+            self.conn_presence_out = nd_from_mat_u32_owned(presence)?;
         }
         self.sync_presence_sizes();
         self.t = snapshot_step;

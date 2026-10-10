@@ -824,6 +824,25 @@ impl RunnerEngine {
         // silently turn a cluster deployment back into the default policy.
         let manifest_deployment = self.spec.net.deployment.clone();
         self.runner.import_network_json(snapshot_json)?;
+        self.finish_snapshot_import(manifest_deployment);
+        Ok(())
+    }
+
+    pub fn import_snapshot_reader<R>(&mut self, reader: &mut R) -> anyhow::Result<()>
+    where
+        R: std::io::Read + std::io::Seek,
+    {
+        // Older runtime snapshots did not persist deployment metadata. Keep a
+        // deployment policy already supplied by the workspace manifest when
+        // importing one of those snapshots; otherwise the next autosave would
+        // silently turn a cluster deployment back into the default policy.
+        let manifest_deployment = self.spec.net.deployment.clone();
+        self.runner.import_network_reader(reader)?;
+        self.finish_snapshot_import(manifest_deployment);
+        Ok(())
+    }
+
+    fn finish_snapshot_import(&mut self, manifest_deployment: crate::deployment::DeploymentConfig) {
         if manifest_deployment != crate::deployment::DeploymentConfig::default() {
             self.runner.net.deployment = manifest_deployment;
         }
@@ -832,7 +851,6 @@ impl RunnerEngine {
         self.superdense.reset();
         self.last_step_error = None;
         self.clear_activity();
-        Ok(())
     }
 
     pub fn set_neuron_model_name(&mut self, model_name: &str) -> anyhow::Result<()> {
