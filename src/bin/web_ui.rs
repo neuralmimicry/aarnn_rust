@@ -38,7 +38,7 @@ use aarnn_rust::peripheral::{
     ChannelKind, Direction, MAX_PERIPHERAL_SESSION_TTL_SECS, PeripheralSessionRegistry,
 };
 use aarnn_rust::runner::decode_snapshot_with_profile_backfill;
-use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager};
+use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager, WorkspaceDisplayProjectionBusy};
 use aarnn_rust::runtime_api::{
     WorkspaceControlAction, WorkspaceControlRequest, WorkspaceCreateRequest, WorkspaceImportRequest,
 };
@@ -561,6 +561,7 @@ fn api_access_requirement(method: &Method, path: &str) -> Option<AccessRequireme
         ("GET", ["api", "user", "config"]) => Some(AccessRequirement::aarnn_request()),
         ("POST", ["api", "user", "config"]) => Some(AccessRequirement::aarnn_request()),
         ("GET", ["api", "runtime", "status"]) => Some(AccessRequirement::aarnn_observe()),
+        ("GET", ["api", "runtime", "resources"]) => Some(AccessRequirement::aarnn_observe()),
         ("GET", ["api", "runtime", "workspaces"]) => Some(AccessRequirement::aarnn_observe()),
         ("POST", ["api", "runtime", "workspaces"]) => Some(AccessRequirement::aarnn_use()),
         ("GET", ["api", "runtime", "workspaces", _]) => Some(AccessRequirement::aarnn_observe()),
@@ -2197,6 +2198,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/tokens/ledger", get(tokens_ledger))
         .route("/user/config", get(get_user_config).post(set_user_config))
         .route("/runtime/status", get(runtime_status))
+        .route("/runtime/resources", get(runtime_resources))
         .route(
             "/runtime/workspaces",
             get(runtime_workspaces).post(create_runtime_workspace),
@@ -3328,6 +3330,18 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             "parameters": [],
             "responses": {
               "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StatusResponse" } } } },
+            }
+          }
+        },
+        "/api/runtime/resources": {
+          "get": {
+            "tags": ["health"],
+            "summary": "Get bounded process and cgroup resource counters",
+            "operationId": "getRuntimeResources",
+            "security": [{"cookieAuth": []}],
+            "responses": {
+              "200": {"description": "Read-only process RSS, cgroup memory current/high-water/limit, and available OOM counters. Unsupported counters are null.", "content": {"application/json": {"schema": {"type": "object"}}}},
+              "401": {"description": "Unauthorised.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
             }
           }
         },
@@ -4646,6 +4660,112 @@ async fn runtime_status(
     }
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct RuntimeResourceSample {
+    observed_at_unix_ms: u64,
+    cgroup_version: Option<u8>,
+    process_rss_bytes: Option<u64>,
+    cgroup_memory_current_bytes: Option<u64>,
+    cgroup_memory_peak_bytes: Option<u64>,
+    cgroup_memory_limit_bytes: Option<u64>,
+    cgroup_memory_fail_count: Option<u64>,
+    cgroup_oom_count: Option<u64>,
+    cgroup_oom_kill_count: Option<u64>,
+}
+
+fn read_counter(path: &std::path::Path) -> Option<u64> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+fn read_cgroup_event(path: &std::path::Path, key: &str) -> Option<u64> {
+    std::fs::read_to_string(path)
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.split_whitespace();
+            (fields.next()? == key).then(|| fields.next()?.parse().ok())?
+        })
+}
+
+fn read_process_rss_bytes(path: &std::path::Path) -> Option<u64> {
+    std::fs::read_to_string(path)
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let rest = line.strip_prefix("VmRSS:")?;
+            let mut fields = rest.split_whitespace();
+            let kilobytes = fields.next()?.parse::<u64>().ok()?;
+            (fields.next()? == "kB").then(|| kilobytes.saturating_mul(1024))
+        })
+}
+
+fn read_memory_limit(path: &std::path::Path) -> Option<u64> {
+    let limit = read_counter(path)?;
+    // cgroup v1 uses a very large numeric sentinel for an unlimited limit.
+    (limit < (1_u64 << 60)).then_some(limit)
+}
+
+fn runtime_resource_sample(
+    cgroup_root: &std::path::Path,
+    proc_status: &std::path::Path,
+    observed_at_unix_ms: u64,
+) -> RuntimeResourceSample {
+    let v2_current = cgroup_root.join("memory.current");
+    let v1_root = cgroup_root.join("memory");
+    let (cgroup_version, current, peak, limit, fail_count, oom_count, oom_kill_count) =
+        if v2_current.exists() {
+            let events = cgroup_root.join("memory.events");
+            (
+                Some(2),
+                read_counter(&v2_current),
+                read_counter(&cgroup_root.join("memory.peak")),
+                std::fs::read_to_string(cgroup_root.join("memory.max"))
+                    .ok()
+                    .and_then(|raw| raw.trim().parse::<u64>().ok()),
+                None,
+                read_cgroup_event(&events, "oom"),
+                read_cgroup_event(&events, "oom_kill"),
+            )
+        } else if v1_root.join("memory.usage_in_bytes").exists() {
+            (
+                Some(1),
+                read_counter(&v1_root.join("memory.usage_in_bytes")),
+                read_counter(&v1_root.join("memory.max_usage_in_bytes")),
+                read_memory_limit(&v1_root.join("memory.limit_in_bytes")),
+                read_counter(&v1_root.join("memory.failcnt")),
+                None,
+                None,
+            )
+        } else {
+            (None, None, None, None, None, None, None)
+        };
+
+    RuntimeResourceSample {
+        observed_at_unix_ms,
+        cgroup_version,
+        process_rss_bytes: read_process_rss_bytes(proc_status),
+        cgroup_memory_current_bytes: current,
+        cgroup_memory_peak_bytes: peak,
+        cgroup_memory_limit_bytes: limit,
+        cgroup_memory_fail_count: fail_count,
+        cgroup_oom_count: oom_count,
+        cgroup_oom_kill_count: oom_kill_count,
+    }
+}
+
+async fn runtime_resources(Extension(_user): Extension<AuthUser>) -> impl IntoResponse {
+    let observed_at_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64;
+    Json(runtime_resource_sample(
+        std::path::Path::new("/sys/fs/cgroup"),
+        std::path::Path::new("/proc/self/status"),
+        observed_at_unix_ms,
+    ))
+}
+
 async fn runtime_workspaces(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
@@ -4785,54 +4905,78 @@ async fn runtime_workspace_snapshot(
         Ok(owner) => owner,
         Err(response) => return response,
     };
+    if query.projection.as_deref() == Some("display") {
+        let region = match resolve_display_region(
+            query.region_min_x,
+            query.region_min_y,
+            query.region_min_z,
+            query.region_max_x,
+            query.region_max_y,
+            query.region_max_z,
+        ) {
+            Ok(region) => region,
+            Err(error) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response();
+            }
+        };
+        let requested_mode = match query.display_mode.as_deref() {
+            None | Some("") => None,
+            Some("anatomical") => Some(DisplayMode::Anatomical),
+            Some("synthetic_columns") => Some(DisplayMode::SyntheticColumns),
+            Some(_) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({ "error": "unsupported display mode" })),
+                )
+                    .into_response();
+            }
+        };
+        return match state
+            .runtime
+            .workspace_display_projection(
+                &owner,
+                &workspace_id,
+                query.if_saved_after_ms,
+                requested_mode,
+                query.max_nodes.unwrap_or(512),
+                query.max_edges.unwrap_or(4096),
+                region,
+            )
+            .await
+        {
+            Ok(Some(projection)) => Json(json!({
+                "workspace_id": projection.workspace_id,
+                "saved_at_ms": projection.saved_at_ms,
+                "snapshot_json": projection.snapshot_json,
+                "snapshot_projection": "dashboard-v1",
+                "snapshot_bytes": projection.snapshot_bytes,
+                "display_snapshots": projection.display_snapshots,
+            }))
+            .into_response(),
+            Ok(None) => StatusCode::NO_CONTENT.into_response(),
+            Err(err)
+                if err
+                    .downcast_ref::<WorkspaceDisplayProjectionBusy>()
+                    .is_some() =>
+            {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({ "error": err.to_string(), "retryable": true })),
+                )
+                    .into_response()
+            }
+            Err(err) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": err.to_string() })),
+            )
+                .into_response(),
+        };
+    }
     match state
         .runtime
         .workspace_saved_snapshot(&owner, &workspace_id, query.if_saved_after_ms)
         .await
     {
-        Ok(Some(mut snapshot)) if query.projection.as_deref() == Some("display") => {
-            let snapshot_bytes = snapshot.snapshot_json.len();
-            let region = match resolve_display_region(
-                query.region_min_x,
-                query.region_min_y,
-                query.region_min_z,
-                query.region_max_x,
-                query.region_max_y,
-                query.region_max_z,
-            ) {
-                Ok(region) => region,
-                Err(error) => {
-                    return (StatusCode::BAD_REQUEST, Json(json!({ "error": error })))
-                        .into_response();
-                }
-            };
-            match display_projection_for_snapshot_json(
-                &snapshot.snapshot_json,
-                query.max_nodes.unwrap_or(512),
-                query.max_edges.unwrap_or(4096),
-                query.display_mode.as_deref(),
-                region,
-            ) {
-                Ok((projection, display_snapshots)) => {
-                    snapshot.snapshot_json = projection;
-                    snapshot.display_snapshots = display_snapshots;
-                    Json(json!({
-                        "workspace_id": snapshot.workspace_id,
-                        "saved_at_ms": snapshot.saved_at_ms,
-                        "snapshot_json": snapshot.snapshot_json,
-                        "snapshot_projection": "dashboard-v1",
-                        "snapshot_bytes": snapshot_bytes,
-                        "display_snapshots": snapshot.display_snapshots,
-                    }))
-                    .into_response()
-                }
-                Err(error) => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(json!({ "error": format!("workspace snapshot projection failed: {error}") })),
-                )
-                    .into_response(),
-            }
-        }
         Ok(Some(snapshot)) => Json(snapshot).into_response(),
         Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(err) => (
@@ -10021,6 +10165,10 @@ mod tests {
             Some(AccessRequirement::aarnn_observe())
         );
         assert_eq!(
+            api_access_requirement(&Method::GET, "/api/runtime/resources"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
             api_access_requirement(&Method::GET, "/api/status"),
             Some(AccessRequirement::aarnn_observe())
         );
@@ -10126,6 +10274,83 @@ mod tests {
         assert!(is_public_api_path("/api/openapi.json"));
         assert_eq!(api_access_requirement(&Method::POST, "/api/logout"), None);
         assert_eq!(api_access_requirement(&Method::GET, "/api/me"), None);
+    }
+
+    #[test]
+    fn runtime_resource_sample_reads_cgroup_v2_and_process_rss() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "aarnn-resource-sample-{}-{unique}",
+            std::process::id()
+        ));
+        let cgroup = root.join("cgroup");
+        let proc_status = root.join("proc-status");
+        std::fs::create_dir_all(&cgroup).expect("create temporary cgroup fixture");
+        std::fs::write(cgroup.join("memory.current"), "4096\n").expect("write current");
+        std::fs::write(cgroup.join("memory.peak"), "8192\n").expect("write peak");
+        std::fs::write(cgroup.join("memory.max"), "16384\n").expect("write limit");
+        std::fs::write(
+            cgroup.join("memory.events"),
+            "low 0\nhigh 1\nmax 2\noom 3\noom_kill 1\n",
+        )
+        .expect("write events");
+        std::fs::write(&proc_status, "Name:\tweb_ui\nVmRSS:\t1234 kB\n")
+            .expect("write process status");
+
+        let sample = runtime_resource_sample(&cgroup, &proc_status, 42);
+
+        assert_eq!(sample.observed_at_unix_ms, 42);
+        assert_eq!(sample.cgroup_version, Some(2));
+        assert_eq!(sample.process_rss_bytes, Some(1_263_616));
+        assert_eq!(sample.cgroup_memory_current_bytes, Some(4096));
+        assert_eq!(sample.cgroup_memory_peak_bytes, Some(8192));
+        assert_eq!(sample.cgroup_memory_limit_bytes, Some(16384));
+        assert_eq!(sample.cgroup_oom_count, Some(3));
+        assert_eq!(sample.cgroup_oom_kill_count, Some(1));
+        assert_eq!(sample.cgroup_memory_fail_count, None);
+
+        std::fs::remove_dir_all(root).expect("remove temporary cgroup fixture");
+    }
+
+    #[test]
+    fn runtime_resource_sample_reads_cgroup_v1_and_unlimited_limit() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "aarnn-resource-sample-v1-{}-{unique}",
+            std::process::id()
+        ));
+        let cgroup = root.join("cgroup");
+        let memory = cgroup.join("memory");
+        let proc_status = root.join("proc-status");
+        std::fs::create_dir_all(&memory).expect("create temporary cgroup fixture");
+        std::fs::write(memory.join("memory.usage_in_bytes"), "4096\n").expect("write current");
+        std::fs::write(memory.join("memory.max_usage_in_bytes"), "8192\n").expect("write peak");
+        std::fs::write(
+            memory.join("memory.limit_in_bytes"),
+            "9223372036854771712\n",
+        )
+        .expect("write unlimited limit");
+        std::fs::write(memory.join("memory.failcnt"), "2\n").expect("write fail count");
+        std::fs::write(&proc_status, "VmRSS:\t2 kB\n").expect("write process status");
+
+        let sample = runtime_resource_sample(&cgroup, &proc_status, 43);
+
+        assert_eq!(sample.cgroup_version, Some(1));
+        assert_eq!(sample.process_rss_bytes, Some(2048));
+        assert_eq!(sample.cgroup_memory_current_bytes, Some(4096));
+        assert_eq!(sample.cgroup_memory_peak_bytes, Some(8192));
+        assert_eq!(sample.cgroup_memory_limit_bytes, None);
+        assert_eq!(sample.cgroup_memory_fail_count, Some(2));
+        assert_eq!(sample.cgroup_oom_count, None);
+        assert_eq!(sample.cgroup_oom_kill_count, None);
+
+        std::fs::remove_dir_all(root).expect("remove temporary cgroup fixture");
     }
 
     #[test]

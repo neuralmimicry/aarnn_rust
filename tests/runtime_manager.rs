@@ -1,4 +1,5 @@
 use aarnn_rust::config::NetworkConfig;
+use aarnn_rust::morphology_contract::DisplayMode;
 use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager};
 use aarnn_rust::runtime_api::{
     WorkspaceControlAction, WorkspaceCreateRequest, WorkspaceDetailResponse,
@@ -129,6 +130,103 @@ async fn runtime_manager_persists_and_resumes_workspace_state() {
     let detail = resumed.workspace_detail("alice", "alpha").await.unwrap();
     assert!(detail.status.step > 0);
     resumed.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn workspace_display_projection_is_bounded_and_keeps_saved_snapshot_unchanged() {
+    let root = temp_runtime_dir();
+    let runtime = RuntimeManager::new(RuntimeConfig {
+        root_dir: root.clone(),
+        tick_interval_ms: 10,
+        initial_reconcile_delay_ms: 0,
+        local_worker_limit: 1,
+        max_loaded_workspaces: 1,
+        resume_existing_workspaces: false,
+        autosave_steps: 10,
+        continuum: None,
+        reconcile_interval_ms: 10,
+        autoscaler_interval_ms: 50,
+        orchestrator_addr: None,
+    })
+    .await
+    .unwrap();
+    let mut network = NetworkConfig::default();
+    network.num_sensory_neurons = 3;
+    network.num_hidden_layers = 2;
+    network.num_hidden_per_layer_initial = 4;
+    network.num_output_neurons = 2;
+    network.growth_enabled = false;
+    network.use_morphology = false;
+    runtime
+        .create_workspace(
+            "alice",
+            WorkspaceCreateRequest {
+                workspace_id: Some("alpha".to_owned()),
+                config_json: Some(serde_json::to_string(&network).unwrap()),
+                ..WorkspaceCreateRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let snapshot_path = root.join("users/alice/workspaces/alpha/latest.snapshot.json");
+    let saved_before = std::fs::read(&snapshot_path).unwrap();
+    let projection = runtime
+        .workspace_display_projection(
+            "alice",
+            "alpha",
+            None,
+            Some(DisplayMode::Anatomical),
+            usize::MAX,
+            usize::MAX,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(projection.snapshot_bytes, saved_before.len() as u64);
+    assert_eq!(projection.display_snapshots.len(), 1);
+    let anatomical = projection.display_snapshots.get("anatomical").unwrap();
+    assert_eq!(anatomical.mode, DisplayMode::Anatomical);
+    assert!(anatomical.nodes.len() <= 4096);
+    assert!(anatomical.edges.len() <= 8192);
+    let metadata: serde_json::Value = serde_json::from_str(&projection.snapshot_json).unwrap();
+    assert!(metadata.get("net").is_some());
+    assert!(metadata.get("t").is_some());
+    assert!(metadata.get("t_ms").is_some());
+    assert!(metadata.get("w_in").is_none());
+    assert_eq!(std::fs::read(&snapshot_path).unwrap(), saved_before);
+
+    let unchanged = runtime
+        .workspace_display_projection(
+            "alice",
+            "alpha",
+            Some(u64::MAX),
+            Some(DisplayMode::Anatomical),
+            512,
+            4096,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(unchanged.is_none());
+    assert!(
+        runtime
+            .workspace_display_projection(
+                "bob",
+                "alpha",
+                None,
+                Some(DisplayMode::Anatomical),
+                512,
+                4096,
+                None,
+            )
+            .await
+            .is_err()
+    );
+
+    runtime.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
 

@@ -110,6 +110,101 @@ Requirements: all. Run matched neural/view/capture/export benchmarks, long-sessi
 - [ ] M5 — Durable exports, recovery and verified downloads.
 - [ ] M6 — Actual-runtime integrated demonstration and final traceability.
 
+### Progress update — 2026-10-10 14:14Z
+
+- [x] The supplied FPV screenshot's `Projection request failed (503)` is from
+  `loadFpvProjection()`'s authenticated workspace snapshot GET; the browser
+  reports render-job POST failures with different wording. Ingress evidence
+  for the incident had no ready web-ui upstream and no matching FPV jobs POST.
+- [x] Read-only Spirit/Kubernetes measurements at 14:13Z found the single
+  saved `system/neuralmimicry-shared-snn` snapshot is 271,858,802 bytes. The
+  web-ui process had 9,933,120 kB RSS; its cgroup used 12,211,912,704 bytes of
+  12,884,901,888 (12 GiB) and had ten restarts. It was not OOM-killed during
+  this measurement. These observations show little container headroom, not a
+  controlled peak-memory benchmark.
+- [x] Source trace at `src/bin/web_ui.rs::runtime_workspace_snapshot` and
+  `src/runtime.rs::workspace_saved_snapshot` found the display request loads
+  or retains the full workspace engine, reads the full persisted JSON, builds
+  a temporary imported engine for display snapshots, then imports the same
+  JSON again in `display_projection_for_snapshot_json`. The browser FPV caller
+  consumes only `display_snapshots`; this duplicate work is avoidable.
+- [x] Implement a read-only display-projection path that imports the persisted
+  snapshot once outside the live engine mutex, returns bounded display DTOs and
+  dashboard metadata, and admits one projection import per web-ui process.
+  Preserve the full snapshot path and route-level owner resolution. Formatting
+  and runner tests are still pending; this is not production-validated.
+- [ ] Resolve a request-scoped memory/load budget from measurements, keep the
+  saved workspace intact, and validate authenticated projection, an actual
+  FPV job POST, worker completion and result retrieval. Current pod readiness
+  is not application or end-to-end acceptance evidence.
+
+### Review update — 2026-10-10 14:22Z
+
+- [x] Rejected the first implementation approach after checking NVR-027: it
+  ran geometry generation under the live `WorkspaceHandle.engine` mutex. The
+  current implementation instead uses one isolated import of the persisted
+  snapshot and a one-slot projection semaphore. It still has a temporary
+  memory peak from that import; the existing runner and deployment measurement
+  must establish whether this bounded single-request path fits the cgroup.
+- [ ] Run the focused runtime-manager regression and exact-head CI on the
+  existing runner fleet; then measure projection lock impact and cgroup peak.
+- [ ] Deploy through the existing Ansible path and validate the authenticated
+  browser, a real FPV POST, worker completion and result download.
+
+### Continuum-first resource observation — 2026-10-10 15:18Z
+
+- [x] Through `ssh pbisaacs@192.168.1.2`, `nmc 0.0.0197` reported the
+  Continuum server healthy and its AARNN runtime-status, workspace-list and
+  endpoint-discovery operations returned HTTP 200. The shared workspace was
+  running at step 3,722,473 with 2,101 neurons across five reported nodes;
+  web-ui, control API and orchestrator each reported one ready replica. This
+  is point-in-time API evidence only, not an FPV browser or render test.
+- [x] The deployed Continuum runtime response currently reports
+  `local_memory_usage_pct: null`, and `nmc 0.0.0197` has no structured
+  workload-resource/cgroup query. This leaves the requested live cgroup
+  measurement unavailable through the current Continuum surface. Preserve the
+  Continuum-first operations rule: add a bounded resource-observation function
+  to Continuum rather than using direct Kubernetes/package CLI reads.
+- [x] Source review confirms the current FPV branch bounds returned node/edge
+  counts and admits one projection at a time, but still reads the complete
+  saved snapshot and imports it into a temporary `RunnerEngine`. The output
+  cap therefore does not bound the temporary engine's memory. The branch has
+  not passed exact-head CI, been measured or been deployed.
+- [ ] Wait for AARNN PR #36 run `38059605193` (ARM64 passed; X64 still building
+  release binaries) to finish before rebasing the FPV branch. Its contract run
+  `38059605195` passed. Then profile the projection with safe headroom and
+  provide the Continuum resource observation needed to measure the actual
+  container high-water mark.
+- [ ] Complete authenticated browser projection, actual `POST /api/fpv/jobs`,
+  worker completion and rendered-result retrieval. Do not call the incident a
+  failed render submission unless a browser click correlates to that POST.
+- [~] 2026-10-10 15:27Z — Add an authenticated, read-only process/cgroup resource
+  sample in AARNN, then a typed `nmc aarnn runtime resources` operation in
+  Continuum. Expose current/high-water/limit, process RSS and OOM counters;
+  use it to measure before and after projection without direct Kubernetes or
+  package-CLI access. The AARNN implementation is in progress; the Continuum
+  source change waits for the current exact-head NMC PR checks.
+
+### Runner regression — 2026-10-10 19:06Z
+
+- [x] Exact-head X64 check in AARNN PR #37 run `38076487416` reached the lint
+  step and failed while compiling `web_ui`; the job log reports two E0433
+  unresolved imports at `src/bin/web_ui.rs:4924` and `:4926`. Both refer to
+  `crate::morphology_contract::DisplayMode`, but `web_ui` is a binary crate
+  and already imports `DisplayMode` from `aarnn_rust::morphology_contract`.
+  This is a source compile failure, not evidence that FPV logic tests failed.
+- [x] The same log confirms the failure is not the repository's 1,347
+  pre-existing Clippy warnings; compilation terminates on two unresolved
+  imports before subsequent verification can proceed. ARM64 later failed at
+  `Check build` with the same two E0433 errors; neither architecture reached
+  FPV tests or release builds.
+- [x] Corrected both references to the existing imported `DisplayMode` in
+  `src/bin/web_ui.rs`. `cargo fmt --all --check` and `git diff --check` pass;
+  this correction changes no projection or neural-runtime behaviour.
+- [ ] Commit and push the correction, then wait for refreshed exact-head X64
+  and ARM64 runner checks. Do not merge or deploy this FPV fix until all
+  required checks pass.
+
 ## Validation and acceptance
 
 Use the companion acceptance matrix. Existing confirmed entry points include:
@@ -154,6 +249,25 @@ Deploy compatible readers first, then new optional display/capture publication, 
 - Browser route merging needs explicit revision agreement and corridor coverage.
 - Current export activity is normally a submitted active-ID sample; isolated replay is not a captured time-varying geometry stream.
 - Current 8 GiB RGB-intermediate estimate limits 1080p30 to roughly 46 seconds.
+- 2026-10-10: The workspace FPV display route layered a resident workspace
+  engine, a saved 271.8 MB JSON string and repeated temporary engine imports.
+  This is a source-confirmed extra-work path and a plausible contributor to
+  the observed OOM, but only the unavailable-upstream/OOM sequence is directly
+  confirmed by production logs; per-allocation peak attribution still needs a
+  controlled measurement. The browser display caller does not read the
+  returned `snapshot_json`. A direct projection from the resident engine was
+  rejected because it performs geometry work under the engine mutex (NVR-027).
+- 2026-10-10: The deployed Continuum AARNN runtime status returns HTTP 200 and
+  workspace counters, but its local memory percentage is `null`; the installed
+  client offers no workload cgroup resource observation. The bounded FPV
+  projection still constructs a temporary engine from the whole saved JSON,
+  so its node/edge output cap cannot be treated as a memory bound.
+- 2026-10-10: The refreshed PR #37 X64 lint job failed because two workspace
+  display-mode references in the `web_ui` binary use the library's `crate::`
+  namespace instead of its existing `aarnn_rust` import. The exact diagnostic
+  is E0433 at `src/bin/web_ui.rs:4924` and `:4926`; the unrelated Clippy
+  warnings are not the cause. Correcting the import path does not change
+  projection or neural-runtime semantics.
 
 Update these as the current checkout differs. Distinguish source observation, measured behaviour and inference.
 
@@ -169,7 +283,50 @@ Update these as the current checkout differs. Distinguish source observation, me
 - D03, 2026-09-30: Separate frozen scene, recorded-live capture and isolated replay. Consequence: metadata, UI and acceptance identify the time source explicitly.
 - D04, 2026-09-30: Require semantic parity, not cross-GPU byte-identical pixels. Consequence: canonical scene/camera/time oracles and pinned reference outputs.
 - Pending: backend/dependency ADR, final schema versions, actual hardware profiles and budget measurements. Resolve from the checkout and bounded prototypes; do not invent a measurement.
+- D10, 2026-10-10: Candidate approach—derive the bounded display result from
+  the resident `WorkspaceHandle` under its engine lock. Rejected at 14:22Z
+  after review because geometry generation under that lock violates NVR-027.
+- D11, 2026-10-10: Use one bounded, isolated import of the persisted snapshot
+  for owner-authorised workspace `projection=display` requests. Admit one
+  import at a time per process; do not hold the live engine lock while
+  decoding or generating geometry. Keep owner resolution and the full snapshot
+  API unchanged, cap output, and return a retryable 503 when the projection
+  slot is busy. Evidence: the prior route imported the same 271.8 MB snapshot
+  twice sequentially while the browser used only the bounded DTOs. This avoids
+  duplicate route work but keeps one temporary Engine peak; the measured
+  cgroup gate remains open. Roll back by restoring the previous handler; no
+  persisted format or workspace data changes.
+- D12, 2026-10-10: Use Continuum as the first source for production resource
+  observations. The deployed AARNN status query succeeds but returns no
+  cgroup/process sample, and the installed CLI has no workload-resource
+  operation. Add a bounded, authenticated Continuum resource observation
+  before measuring production cgroup headroom; do not use direct Kubernetes or
+  package CLI reads as a substitute. This decision does not authorise a
+  rollout or a guessed memory limit.
+- D13, 2026-10-10: Implement a read-only authenticated AARNN resource endpoint
+  for cgroup and process memory, then expose it through a typed Continuum
+  runtime-resources function. Prefer kernel cgroup current/high-water/limit
+  and OOM counters over host-wide percentage estimates; retain `null` for
+  unsupported counters instead of presenting host memory as container memory.
+  This supports measurement only and does not weaken projection memory gates.
 
 ## Outcomes & Retrospective
 
 The first native consistency repair is implemented and validated: schematic stage-5/6 graph links remain visible before physical synapses grow; stage 1 no longer draws a legacy anatomical membrane; requested/effective stage and the physical capability reason are explicit. The display contract can distinguish a verified empty contact set from missing data across Rust, browser and mobile readers. A versioned heuristic conversion now records modelled scale, source positions and provenance for derived point-only imports, and the shipped default topology passes the same estimator. The default/import all-stage requirement NVR-037..039 is not complete: the live Runner still lacks authoritative physical radii, unit mapping and a clearance witness, and the importer reconstruction is not its growable route authority. GPU/browser/device validation, physical-build migration, actual high-stage native captures and performance gates remain open. Do not mark M0–M6 complete from this reference work.
+
+The 2026-10-10 FPV incident diagnosis distinguishes projection loading from job
+submission: the observed 503 occurred on the projection GET while the pod had
+no ready upstream, and no FPV POST was retained in the outage sample. The
+current display endpoint repeated large workspace materialisation despite the
+browser using only its bounded display DTOs. A single-import projection path
+is implemented but is not yet runner-tested, measured or deployed;
+authenticated render submission, returned diagnostics and measured peak
+memory remain unverified. A Continuum-first status recheck on Spirit is healthy
+at the API level, but current Continuum response fields do not measure AARNN
+cgroup high-water; a structured resource operation remains required.
+
+The latest FPV exact-head run supplies a concrete repair: both X64 and ARM64
+fail to compile the `web_ui` binary on two `DisplayMode` import paths. The
+source correction is prepared and formatted; refreshed exact-head CI remains
+pending. No FPV job POST, result retrieval, deployed memory measurement or
+end-to-end acceptance has been completed in this session.
