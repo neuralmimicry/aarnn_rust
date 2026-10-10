@@ -136,7 +136,14 @@ LABEL io.k8s.description="Neuromorphic simulation and visualization engine" \
       io.openshift.tags="neuromorphic,ai,distributed,rust,web" \
       org.opencontainers.image.title="AARNN ${CONTAINER_WORKLOAD}" \
       org.opencontainers.image.description="Role-specific AARNN workload image (${CONTAINER_WORKLOAD})" \
+      org.opencontainers.image.source="https://github.com/neuralmimicry/aarnn_rust" \
+      org.opencontainers.image.url="https://github.com/neuralmimicry/aarnn_rust" \
+      org.opencontainers.image.vendor="NeuralMimicry" \
       org.neuralmimicry.aarnn.workload="${CONTAINER_WORKLOAD}" \
       org.neuralmimicry.aarnn.features="${CARGO_FEATURES}"
 
 ENTRYPOINT ["/usr/local/bin/aarnn-entrypoint"]
+
+# Revision label last so changing the commit does not invalidate cached layers.
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.revision="${VCS_REF}"

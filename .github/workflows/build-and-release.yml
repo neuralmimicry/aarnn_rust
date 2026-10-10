@@ -103,7 +103,7 @@ env:
   # whose metadata still declares an older runtime during the transition.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   CARGO_FEATURES: all-features
-  CARGO_BUILD_TARGETS: aarnn_rust web_ui
+  CARGO_BUILD_TARGETS: aarnn_rust web_ui aarnn-knowledge-serve
   REGISTRY: ghcr.io
   IMAGE_NAME: neuralmimicry/aarnn_rust
   UBUNTU_NATIVE_BUILD_DEPS: >-
@@ -141,9 +141,9 @@ jobs:
       matrix:
         include:
           - runner_arch: X64
-            runs_on: '["ubuntu-24.04"]'
+            runs_on: '["self-hosted", "Linux", "X64"]'
           - runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
     defaults:
       run:
         working-directory: repo-build-release
@@ -153,6 +153,17 @@ jobs:
         with:
           clean: false
           path: repo-build-release
+      - name: Check OCI source labels
+        shell: bash
+        run: |
+          # GHCR links a package to its repo via org.opencontainers.image.source;
+          # every Containerfile/Dockerfile (incl. templates) must carry it.
+          want="org.opencontainers.image.source=\"https://github.com/${GITHUB_REPOSITORY}\""
+          status=0
+          while IFS= read -r f; do
+            grep -qF "$want" "$f" || { echo "::error file=$f::missing $want"; status=1; }
+          done < <(git ls-files | grep -iE '(^|/)(containerfile|dockerfile)[^/]*$|\.(containerfile|dockerfile)(\.j2)?$' | grep -viE '\.(md|py|sh|txt|ya?ml|json)$')
+          exit "$status"
 
       - name: Prepare self-hosted verification runner disk
         if: runner.environment == 'self-hosted'
@@ -229,7 +240,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "repo-build-release -> target"
-          # Self-hosted ARM runners restore existing caches, but do not spend
+          # Self-hosted runners restore existing caches, but do not spend
           # the post-job phase archiving multi-gigabyte target trees on the
           # same hosts that run the product workloads.
           save-if: ${{ runner.environment == 'github-hosted' }}
@@ -316,7 +327,7 @@ jobs:
         # on the live ARM runner consumes several GiB and can evict the
         # runner before the package/container matrix starts.
         if: matrix.runner_arch != 'ARM64'
-        run: cargo build --locked --release --all-features --bin aarnn_rust --bin web_ui
+        run: cargo build --locked --release --all-features --bin aarnn_rust --bin web_ui --bin aarnn-knowledge-serve
 
       - name: Smoke test CLI help
         if: matrix.runner_arch != 'ARM64'
@@ -326,8 +337,17 @@ jobs:
         if: matrix.runner_arch != 'ARM64'
         run: cargo run --locked --release --all-features --bin web_ui -- --help
 
+      - name: Smoke test knowledge service help
+        if: matrix.runner_arch != 'ARM64'
+        run: cargo run --locked --release --all-features --bin aarnn-knowledge-serve -- --help
+
       - name: Validate release script
-        run: bash -n scripts/package-release.sh
+        run: |
+          set -euo pipefail
+          bash -n scripts/package-release.sh
+          bash -n .github/scripts/prepare-release-assets.sh
+          bash -n .github/scripts/test-prepare-release-assets.sh
+          bash .github/scripts/test-prepare-release-assets.sh
 
       - name: Clean self-hosted verification artifacts
         if: always() && runner.environment == 'self-hosted'
@@ -338,7 +358,7 @@ jobs:
     name: Release Metadata
     needs: verify
     if: needs.verify.result == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     defaults:
       run:
         working-directory: repo-build-release
@@ -437,7 +457,7 @@ jobs:
       matrix:
         include:
           - runner_arch: X64
-            runs_on: '["ubuntu-24.04"]'
+            runs_on: '["self-hosted", "Linux", "X64"]'
             ubuntu_series: "24.04"
             ubuntu_label: ubuntu24.04
             rust_target: x86_64-unknown-linux-gnu
@@ -445,7 +465,7 @@ jobs:
             deb_arch: amd64
             container_platform: amd64
           - runner_arch: X64
-            runs_on: '["ubuntu-24.04"]'
+            runs_on: '["self-hosted", "Linux", "X64"]'
             ubuntu_series: "25.04"
             ubuntu_label: ubuntu25.04
             rust_target: x86_64-unknown-linux-gnu
@@ -453,7 +473,7 @@ jobs:
             deb_arch: amd64
             container_platform: amd64
           - runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             ubuntu_series: "24.04"
             ubuntu_label: ubuntu24.04
             rust_target: aarch64-unknown-linux-gnu
@@ -461,7 +481,10 @@ jobs:
             deb_arch: arm64
             container_platform: arm64
           - runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            # The hosted arm runner loses contact ~70 min into this build
+            # (v0.1.37, twice); the estate's native arm64 runner (qc00:
+            # 46 cores, 64 GB) has the headroom and podman this job needs.
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             ubuntu_series: "25.04"
             ubuntu_label: ubuntu25.04
             rust_target: aarch64-unknown-linux-gnu
@@ -673,9 +696,11 @@ jobs:
 
           test -x /usr/bin/aarnn_rust
           test -x /usr/bin/web_ui
+          test -x /usr/bin/aarnn-knowledge-serve
           test -f /usr/share/aarnn-rust/config.json
           aarnn_rust --help >/dev/null
           web_ui --help >/dev/null
+          aarnn-knowledge-serve --help >/dev/null
           dpkg-query -W -f='${Version}\n' aarnn-rust
           SCRIPT
 
@@ -709,7 +734,7 @@ jobs:
     needs:
       - release-meta
       - package-linux
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     if: >-
       always() &&
       needs.release-meta.outputs.publish_release == 'true' &&
@@ -717,6 +742,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
       - name: Validate publish target
         shell: bash
         run: |
@@ -765,8 +793,10 @@ jobs:
           # artifacts contain generic names such as result.json and run.log;
           # upload only the release formats emitted by package-linux so
           # evidence files cannot collide with release assets.
+          release_assets_dir="$(mktemp -d "${RUNNER_TEMP}/aarnn-release-assets.XXXXXX")"
+          bash .github/scripts/prepare-release-assets.sh dist "${release_assets_dir}"
           mapfile -d '' files < <(
-            find dist -type f \
+            find "${release_assets_dir}" -maxdepth 1 -type f \
               \( -name '*.deb' -o -name '*.tar.gz' -o -name '*.sha256.txt' \) \
               -print0 | sort -z
           )
@@ -849,6 +879,11 @@ jobs:
 
           gh release create "${args[@]}"
 
+      - name: Remove downloaded release artifacts from the persistent runner
+        if: always()
+        shell: bash
+        run: rm -rf ./dist
+
   container-build:
     name: Container Build (${{ matrix.workload }}, ${{ matrix.variant }}, ${{ matrix.runner_arch }})
     if: >-
@@ -877,55 +912,55 @@ jobs:
           - workload: orchestrator
             arch: amd64
             runner_arch: X64
-            runs_on: '["ubuntu-24.04"]'
+            runs_on: '["self-hosted", "Linux", "X64"]'
             variant: amd64
             page_size: 4k
           - workload: orchestrator
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             variant: arm64-4k
             page_size: 4k
           - workload: orchestrator
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             variant: arm64-64k-hwe
             page_size: 64k-hwe
           - workload: node
             arch: amd64
             runner_arch: X64
-            runs_on: '["ubuntu-24.04"]'
+            runs_on: '["self-hosted", "Linux", "X64"]'
             variant: amd64
             page_size: 4k
           - workload: node
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             variant: arm64-4k
             page_size: 4k
           - workload: node
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             variant: arm64-64k-hwe
             page_size: 64k-hwe
           - workload: web-ui
             arch: amd64
             runner_arch: X64
-            runs_on: '["ubuntu-24.04"]'
+            runs_on: '["self-hosted", "Linux", "X64"]'
             variant: amd64
             page_size: 4k
           - workload: web-ui
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             variant: arm64-4k
             page_size: 4k
           - workload: web-ui
             arch: arm64
             runner_arch: ARM64
-            runs_on: '["ubuntu-24.04-arm"]'
+            runs_on: '["self-hosted", "Linux", "ARM64"]'
             variant: arm64-64k-hwe
             page_size: 64k-hwe
     runs-on: ${{ fromJSON(matrix.runs_on) }}
@@ -1085,6 +1120,8 @@ jobs:
               test -n "$deb"
               aarnn_apt_install_with_retry -y --no-install-recommends "$deb"
               test -x /usr/bin/aarnn_rust
+              test -x /usr/bin/aarnn-knowledge-serve
+              aarnn-knowledge-serve --help >/dev/null
             '
 
       - name: Build and push architecture image
@@ -1108,6 +1145,7 @@ jobs:
             --build-arg "PYTHON_MIN_VERSION=3.12"
             --build-arg "PYTHON_FULL_VERSION=3.12.2"
             --build-arg "TARGET_PAGE_SIZE=${{ matrix.page_size }}"
+            --build-arg "VCS_REF=${GITHUB_SHA}"
             .
           )
 
@@ -1125,7 +1163,10 @@ jobs:
           fi
 
           if [[ "${{ matrix.workload }}" == "web-ui" ]]; then
-            podman run --rm --entrypoint ffmpeg "${arch_tag}" -version >/dev/null
+            # Rootless pasta cannot open a user network namespace on our
+            # self-hosted Actions runners; this smoke check needs no isolated
+            # network, so use the host network just like the other checks.
+            podman run --rm --network host --entrypoint ffmpeg "${arch_tag}" -version >/dev/null
           fi
 
           # GHCR can return 403 for cross-tag blob-reuse checks even after a
@@ -1179,7 +1220,7 @@ jobs:
       max-parallel: 3
       matrix:
         workload: [orchestrator, node, web-ui]
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     env:
       # Recovery publication must point at the immutable build that already
       # exists in GHCR, rather than at the SHA of this recovery dispatch.
@@ -1363,7 +1404,7 @@ jobs:
          inputs.publish_only &&
          needs.container-manifest.result == 'success')
       )
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     # Mutable tags are updated by one serialized promotion boundary. This
     # prevents concurrent manifest matrix jobs or recovery dispatches from
     # racing on :latest and the role aliases.
@@ -1490,7 +1531,7 @@ jobs:
          needs.container-latest.result == 'success') ||
         (github.event_name == 'workflow_dispatch' && inputs.environment != '')
       )
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       packages: write
     steps:
@@ -1548,7 +1589,7 @@ jobs:
          !startsWith(github.event.head_commit.message, 'chore: bump version ')) ||
         (github.event_name == 'workflow_dispatch' && inputs.run_version_bump)
       )
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: write
     defaults:
@@ -1643,7 +1684,7 @@ jobs:
     if: >-
       (github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')) ||
       (github.event_name == 'workflow_dispatch' && inputs.sync_wiki)
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: write
     steps:
