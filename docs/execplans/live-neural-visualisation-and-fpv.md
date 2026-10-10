@@ -178,6 +178,12 @@ Requirements: all. Run matched neural/view/capture/export benchmarks, long-sessi
 - [ ] Complete authenticated browser projection, actual `POST /api/fpv/jobs`,
   worker completion and rendered-result retrieval. Do not call the incident a
   failed render submission unless a browser click correlates to that POST.
+- [~] 2026-10-10 15:27Z — Add an authenticated, read-only process/cgroup resource
+  sample in AARNN, then a typed `nmc aarnn runtime resources` operation in
+  Continuum. Expose current/high-water/limit, process RSS and OOM counters;
+  use it to measure before and after projection without direct Kubernetes or
+  package-CLI access. The AARNN implementation is in progress; the Continuum
+  source change waits for the current exact-head NMC PR checks.
 
 ## Validation and acceptance
 
@@ -271,6 +277,12 @@ Update these as the current checkout differs. Distinguish source observation, me
   before measuring production cgroup headroom; do not use direct Kubernetes or
   package CLI reads as a substitute. This decision does not authorise a
   rollout or a guessed memory limit.
+- D13, 2026-10-10: Implement a read-only authenticated AARNN resource endpoint
+  for cgroup and process memory, then expose it through a typed Continuum
+  runtime-resources function. Prefer kernel cgroup current/high-water/limit
+  and OOM counters over host-wide percentage estimates; retain `null` for
+  unsupported counters instead of presenting host memory as container memory.
+  This supports measurement only and does not weaken projection memory gates.
 
 ## Outcomes & Retrospective
 
