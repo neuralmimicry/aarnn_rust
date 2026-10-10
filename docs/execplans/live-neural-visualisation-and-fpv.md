@@ -151,6 +151,34 @@ Requirements: all. Run matched neural/view/capture/export benchmarks, long-sessi
 - [ ] Deploy through the existing Ansible path and validate the authenticated
   browser, a real FPV POST, worker completion and result download.
 
+### Continuum-first resource observation — 2026-10-10 15:18Z
+
+- [x] Through `ssh pbisaacs@192.168.1.2`, `nmc 0.0.0197` reported the
+  Continuum server healthy and its AARNN runtime-status, workspace-list and
+  endpoint-discovery operations returned HTTP 200. The shared workspace was
+  running at step 3,722,473 with 2,101 neurons across five reported nodes;
+  web-ui, control API and orchestrator each reported one ready replica. This
+  is point-in-time API evidence only, not an FPV browser or render test.
+- [x] The deployed Continuum runtime response currently reports
+  `local_memory_usage_pct: null`, and `nmc 0.0.0197` has no structured
+  workload-resource/cgroup query. This leaves the requested live cgroup
+  measurement unavailable through the current Continuum surface. Preserve the
+  Continuum-first operations rule: add a bounded resource-observation function
+  to Continuum rather than using direct Kubernetes/package CLI reads.
+- [x] Source review confirms the current FPV branch bounds returned node/edge
+  counts and admits one projection at a time, but still reads the complete
+  saved snapshot and imports it into a temporary `RunnerEngine`. The output
+  cap therefore does not bound the temporary engine's memory. The branch has
+  not passed exact-head CI, been measured or been deployed.
+- [ ] Wait for AARNN PR #36 run `38059605193` (ARM64 passed; X64 still building
+  release binaries) to finish before rebasing the FPV branch. Its contract run
+  `38059605195` passed. Then profile the projection with safe headroom and
+  provide the Continuum resource observation needed to measure the actual
+  container high-water mark.
+- [ ] Complete authenticated browser projection, actual `POST /api/fpv/jobs`,
+  worker completion and rendered-result retrieval. Do not call the incident a
+  failed render submission unless a browser click correlates to that POST.
+
 ## Validation and acceptance
 
 Use the companion acceptance matrix. Existing confirmed entry points include:
@@ -203,6 +231,11 @@ Deploy compatible readers first, then new optional display/capture publication, 
   controlled measurement. The browser display caller does not read the
   returned `snapshot_json`. A direct projection from the resident engine was
   rejected because it performs geometry work under the engine mutex (NVR-027).
+- 2026-10-10: The deployed Continuum AARNN runtime status returns HTTP 200 and
+  workspace counters, but its local memory percentage is `null`; the installed
+  client offers no workload cgroup resource observation. The bounded FPV
+  projection still constructs a temporary engine from the whole saved JSON,
+  so its node/edge output cap cannot be treated as a memory bound.
 
 Update these as the current checkout differs. Distinguish source observation, measured behaviour and inference.
 
@@ -231,6 +264,13 @@ Update these as the current checkout differs. Distinguish source observation, me
   duplicate route work but keeps one temporary Engine peak; the measured
   cgroup gate remains open. Roll back by restoring the previous handler; no
   persisted format or workspace data changes.
+- D12, 2026-10-10: Use Continuum as the first source for production resource
+  observations. The deployed AARNN status query succeeds but returns no
+  cgroup/process sample, and the installed CLI has no workload-resource
+  operation. Add a bounded, authenticated Continuum resource observation
+  before measuring production cgroup headroom; do not use direct Kubernetes or
+  package CLI reads as a substitute. This decision does not authorise a
+  rollout or a guessed memory limit.
 
 ## Outcomes & Retrospective
 
@@ -243,4 +283,6 @@ current display endpoint repeated large workspace materialisation despite the
 browser using only its bounded display DTOs. A single-import projection path
 is implemented but is not yet runner-tested, measured or deployed;
 authenticated render submission, returned diagnostics and measured peak
-memory remain unverified.
+memory remain unverified. A Continuum-first status recheck on Spirit is healthy
+at the API level, but current Continuum response fields do not measure AARNN
+cgroup high-water; a structured resource operation remains required.
