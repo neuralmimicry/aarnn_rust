@@ -272,6 +272,17 @@ fn activity_polling_coalesces_and_rejects_stale_sources() {
 }
 
 #[test]
+fn workspace_fpv_projections_share_a_serial_retry_queue() {
+    let app = read_asset("web_ui/app.js");
+    assert!(app.contains("workspaceDisplayProjectionRequestTail"));
+    assert!(app.contains("workspaceDisplayProjectionRequestTail.catch"));
+    assert!(app.contains("response.clone().json()"));
+    assert!(app.contains("payload.retryable !== true"));
+    assert!(app.contains("fetcher = fetchWorkspaceDisplayProjection"));
+    assert!(app.contains("fetcher: fetchWorkspaceDisplayProjection"));
+}
+
+#[test]
 fn anatomical_and_synthetic_views_use_shared_bounded_contract_geometry() {
     let native = read_asset("src/ui.rs");
     let app = read_asset("web_ui/app.js");

@@ -998,6 +998,22 @@ function runtimeFetch(path, options = {}) {
   }
   return fetch(path, request);
 }
+let workspaceDisplayProjectionRequestTail = Promise.resolve();
+function fetchWorkspaceDisplayProjection(path) {
+  const request = workspaceDisplayProjectionRequestTail.catch(() => null).then(async () => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await runtimeFetch(path);
+      if (response.status !== 503) return response;
+      const payload = await response.clone().json().catch(() => ({}));
+      if (payload.retryable !== true) return response;
+      const delayMs = 150 * (2 ** attempt) + Math.floor(Math.random() * 100);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+    return runtimeFetch(path);
+  });
+  workspaceDisplayProjectionRequestTail = request.then(() => null, () => null);
+  return request;
+}
 function managementRequestId(prefix) {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
     return `${prefix}-${window.crypto.randomUUID()}`;
@@ -2385,7 +2401,7 @@ async function loadFpvProjection() {
       url = buildWorkspaceApiUrl(source.workspace, "/snapshot", {
         projection: "display", display_mode: "anatomical", max_nodes: detail, max_edges: edgeBudget
       });
-      fetcher = runtimeFetch;
+      fetcher = fetchWorkspaceDisplayProjection;
     } else {
       url = `/api/snapshot?addr=${encodeURIComponent(source.addr)}&network_id=${encodeURIComponent(source.networkId)}&projection=display&display_mode=anatomical&max_nodes=${detail}&max_edges=${edgeBudget}`;
       if (source.nodeId) url += `&node_id=${encodeURIComponent(source.nodeId)}`;
@@ -2599,7 +2615,7 @@ function fpvTileQuery(source, region, nodeBudget = 4096, edgeBudget = 8192) {
   if (source.kind === "workspace") {
     return {
       url: buildWorkspaceApiUrl(source.workspace, "/snapshot", query),
-      fetcher: runtimeFetch
+      fetcher: fetchWorkspaceDisplayProjection
     };
   }
   const params = new URLSearchParams({
