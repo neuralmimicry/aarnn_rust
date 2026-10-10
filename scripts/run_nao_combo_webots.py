@@ -602,24 +602,21 @@ def create_nao_runtime_world(
         raise LaunchError(f"No Nao blocks were found in {base_world}")
     for start, end in reversed(nao_blocks[1:]):
         text = text[:start] + text[end:]
-
-    old = (
-        '  controllerArgs [\n'
-        '    "NM_INTERCONNECT=vision->motor:8"\n'
-        '    "NM_ACTUATORS_motor=.*Shoulder.*"\n'
-        '    "NM_ACTUATORS_vision=Eye.*"\n'
-        '    "NM_BRAINS=vision,motor"\n'
-        '  ]'
-    )
-    new = (
-        "  controllerArgs [\n"
+    start, end = find_node_block_ranges(text, "Nao")[0]
+    node = text[start:end]
+    args_start = node.find("controllerArgs [")
+    args_end = node.find("]", args_start)
+    if args_start < 0 or args_end < 0:
+        raise LaunchError(f"NAO controllerArgs block was not found in {base_world}")
+    new_args = (
+        "controllerArgs [\n"
         f'    "NM_BRAINS={network_id}"\n'
         f'    "NM_SENSORS_{network_id}={NAO_CAMERA_EXCLUSION_REGEX}"\n'
         "  ]"
     )
-    if old not in text:
-        raise LaunchError(f"Expected NAO controllerArgs block was not found in {base_world}")
-    text = text.replace(old, new, 1)
+    args_start += start
+    args_end += start + 1
+    text = text[:args_start] + new_args + text[args_end:]
     target_world.write_text(text, encoding="utf-8")
 
 
@@ -971,7 +968,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--world-file",
-        default=str(ROOT_DIR / "webots_world/worlds/neuroworld.wbt"),
+        default=str(ROOT_DIR / "webots_world/worlds/nao_neuroworld.wbt"),
         help="Base Webots world file used to create the runtime world copy.",
     )
     parser.add_argument(
