@@ -185,6 +185,26 @@ Requirements: all. Run matched neural/view/capture/export benchmarks, long-sessi
   package-CLI access. The AARNN implementation is in progress; the Continuum
   source change waits for the current exact-head NMC PR checks.
 
+### Runner regression — 2026-10-10 19:06Z
+
+- [x] Exact-head X64 check in AARNN PR #37 run `38076487416` reached the lint
+  step and failed while compiling `web_ui`; the job log reports two E0433
+  unresolved imports at `src/bin/web_ui.rs:4924` and `:4926`. Both refer to
+  `crate::morphology_contract::DisplayMode`, but `web_ui` is a binary crate
+  and already imports `DisplayMode` from `aarnn_rust::morphology_contract`.
+  This is a source compile failure, not evidence that FPV logic tests failed.
+- [x] The same log confirms the failure is not the repository's 1,347
+  pre-existing Clippy warnings; compilation terminates on two unresolved
+  imports before subsequent verification can proceed. ARM64 later failed at
+  `Check build` with the same two E0433 errors; neither architecture reached
+  FPV tests or release builds.
+- [x] Corrected both references to the existing imported `DisplayMode` in
+  `src/bin/web_ui.rs`. `cargo fmt --all --check` and `git diff --check` pass;
+  this correction changes no projection or neural-runtime behaviour.
+- [ ] Commit and push the correction, then wait for refreshed exact-head X64
+  and ARM64 runner checks. Do not merge or deploy this FPV fix until all
+  required checks pass.
+
 ## Validation and acceptance
 
 Use the companion acceptance matrix. Existing confirmed entry points include:
@@ -242,6 +262,12 @@ Deploy compatible readers first, then new optional display/capture publication, 
   client offers no workload cgroup resource observation. The bounded FPV
   projection still constructs a temporary engine from the whole saved JSON,
   so its node/edge output cap cannot be treated as a memory bound.
+- 2026-10-10: The refreshed PR #37 X64 lint job failed because two workspace
+  display-mode references in the `web_ui` binary use the library's `crate::`
+  namespace instead of its existing `aarnn_rust` import. The exact diagnostic
+  is E0433 at `src/bin/web_ui.rs:4924` and `:4926`; the unrelated Clippy
+  warnings are not the cause. Correcting the import path does not change
+  projection or neural-runtime semantics.
 
 Update these as the current checkout differs. Distinguish source observation, measured behaviour and inference.
 
@@ -298,3 +324,9 @@ authenticated render submission, returned diagnostics and measured peak
 memory remain unverified. A Continuum-first status recheck on Spirit is healthy
 at the API level, but current Continuum response fields do not measure AARNN
 cgroup high-water; a structured resource operation remains required.
+
+The latest FPV exact-head run supplies a concrete repair: both X64 and ARM64
+fail to compile the `web_ui` binary on two `DisplayMode` import paths. The
+source correction is prepared and formatted; refreshed exact-head CI remains
+pending. No FPV job POST, result retrieval, deployed memory measurement or
+end-to-end acceptance has been completed in this session.

@@ -4921,10 +4921,8 @@ async fn runtime_workspace_snapshot(
         };
         let requested_mode = match query.display_mode.as_deref() {
             None | Some("") => None,
-            Some("anatomical") => Some(crate::morphology_contract::DisplayMode::Anatomical),
-            Some("synthetic_columns") => {
-                Some(crate::morphology_contract::DisplayMode::SyntheticColumns)
-            }
+            Some("anatomical") => Some(DisplayMode::Anatomical),
+            Some("synthetic_columns") => Some(DisplayMode::SyntheticColumns),
             Some(_) => {
                 return (
                     StatusCode::UNPROCESSABLE_ENTITY,
