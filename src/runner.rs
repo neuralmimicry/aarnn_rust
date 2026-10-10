@@ -99,7 +99,7 @@ fn runner_plasticity_rule(learning: Learning) -> PlasticityRule {
 }
 
 // -------------------- Save / Load helper types --------------------
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Matrix2 {
     pub rows: usize,
     pub cols: usize,
