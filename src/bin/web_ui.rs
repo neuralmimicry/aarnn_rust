@@ -38,7 +38,7 @@ use aarnn_rust::peripheral::{
     ChannelKind, Direction, MAX_PERIPHERAL_SESSION_TTL_SECS, PeripheralSessionRegistry,
 };
 use aarnn_rust::runner::decode_snapshot_with_profile_backfill;
-use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager};
+use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager, WorkspaceDisplayProjectionBusy};
 use aarnn_rust::runtime_api::{
     WorkspaceControlAction, WorkspaceControlRequest, WorkspaceCreateRequest, WorkspaceImportRequest,
 };
@@ -4785,54 +4785,80 @@ async fn runtime_workspace_snapshot(
         Ok(owner) => owner,
         Err(response) => return response,
     };
+    if query.projection.as_deref() == Some("display") {
+        let region = match resolve_display_region(
+            query.region_min_x,
+            query.region_min_y,
+            query.region_min_z,
+            query.region_max_x,
+            query.region_max_y,
+            query.region_max_z,
+        ) {
+            Ok(region) => region,
+            Err(error) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response();
+            }
+        };
+        let requested_mode = match query.display_mode.as_deref() {
+            None | Some("") => None,
+            Some("anatomical") => Some(crate::morphology_contract::DisplayMode::Anatomical),
+            Some("synthetic_columns") => {
+                Some(crate::morphology_contract::DisplayMode::SyntheticColumns)
+            }
+            Some(_) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({ "error": "unsupported display mode" })),
+                )
+                    .into_response();
+            }
+        };
+        return match state
+            .runtime
+            .workspace_display_projection(
+                &owner,
+                &workspace_id,
+                query.if_saved_after_ms,
+                requested_mode,
+                query.max_nodes.unwrap_or(512),
+                query.max_edges.unwrap_or(4096),
+                region,
+            )
+            .await
+        {
+            Ok(Some(projection)) => Json(json!({
+                "workspace_id": projection.workspace_id,
+                "saved_at_ms": projection.saved_at_ms,
+                "snapshot_json": projection.snapshot_json,
+                "snapshot_projection": "dashboard-v1",
+                "snapshot_bytes": projection.snapshot_bytes,
+                "display_snapshots": projection.display_snapshots,
+            }))
+            .into_response(),
+            Ok(None) => StatusCode::NO_CONTENT.into_response(),
+            Err(err)
+                if err
+                    .downcast_ref::<WorkspaceDisplayProjectionBusy>()
+                    .is_some() =>
+            {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({ "error": err.to_string(), "retryable": true })),
+                )
+                    .into_response()
+            }
+            Err(err) => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": err.to_string() })),
+            )
+                .into_response(),
+        };
+    }
     match state
         .runtime
         .workspace_saved_snapshot(&owner, &workspace_id, query.if_saved_after_ms)
         .await
     {
-        Ok(Some(mut snapshot)) if query.projection.as_deref() == Some("display") => {
-            let snapshot_bytes = snapshot.snapshot_json.len();
-            let region = match resolve_display_region(
-                query.region_min_x,
-                query.region_min_y,
-                query.region_min_z,
-                query.region_max_x,
-                query.region_max_y,
-                query.region_max_z,
-            ) {
-                Ok(region) => region,
-                Err(error) => {
-                    return (StatusCode::BAD_REQUEST, Json(json!({ "error": error })))
-                        .into_response();
-                }
-            };
-            match display_projection_for_snapshot_json(
-                &snapshot.snapshot_json,
-                query.max_nodes.unwrap_or(512),
-                query.max_edges.unwrap_or(4096),
-                query.display_mode.as_deref(),
-                region,
-            ) {
-                Ok((projection, display_snapshots)) => {
-                    snapshot.snapshot_json = projection;
-                    snapshot.display_snapshots = display_snapshots;
-                    Json(json!({
-                        "workspace_id": snapshot.workspace_id,
-                        "saved_at_ms": snapshot.saved_at_ms,
-                        "snapshot_json": snapshot.snapshot_json,
-                        "snapshot_projection": "dashboard-v1",
-                        "snapshot_bytes": snapshot_bytes,
-                        "display_snapshots": snapshot.display_snapshots,
-                    }))
-                    .into_response()
-                }
-                Err(error) => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(json!({ "error": format!("workspace snapshot projection failed: {error}") })),
-                )
-                    .into_response(),
-            }
-        }
         Ok(Some(snapshot)) => Json(snapshot).into_response(),
         Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(err) => (

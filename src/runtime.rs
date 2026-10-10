@@ -2,7 +2,7 @@ use crate::distributed::proto::{
     StatusRequest, distributed_neuromorphic_client::DistributedNeuromorphicClient,
 };
 use crate::engine::{EnginePayloadKind, EngineSpec, RunnerEngine};
-use crate::morphology_contract::DisplayMode;
+use crate::morphology_contract::{AxisAlignedBox, DisplayMode, DisplaySnapshot};
 use crate::runtime_api::{
     AutoscalerReport, RuntimeStatusResponse, WorkspaceActivityResponse, WorkspaceControlAction,
     WorkspaceCreateRequest, WorkspaceDetailResponse, WorkspaceImportRequest,
@@ -29,6 +29,23 @@ const WORKSPACE_LEASE_FILE: &str = ".runtime-lease.lock";
 const COORDINATION_DIR: &str = "_coordination";
 const AUTOSCALER_LOCK_FILE: &str = "continuum-autoscaler.lock";
 const AUTOSCALER_STATE_FILE: &str = "continuum-autoscaler.json";
+const WORKSPACE_DISPLAY_MAX_NODES: usize = 4096;
+const WORKSPACE_DISPLAY_MAX_EDGES: usize = 8192;
+
+#[derive(Debug, thiserror::Error)]
+#[error("workspace display projection capacity is busy")]
+pub struct WorkspaceDisplayProjectionBusy;
+
+/// Bounded observer response built from an isolated persisted-state import.
+/// `snapshot_json` contains dashboard metadata only, not neural state.
+#[derive(Clone, Debug)]
+pub struct WorkspaceDisplayProjection {
+    pub workspace_id: String,
+    pub saved_at_ms: Option<u64>,
+    pub snapshot_bytes: u64,
+    pub snapshot_json: String,
+    pub display_snapshots: BTreeMap<String, DisplaySnapshot>,
+}
 
 fn default_root_dir() -> PathBuf {
     PathBuf::from("data/runtime")
@@ -1093,6 +1110,7 @@ pub struct RuntimeManager {
     autoscaler: Arc<dyn RuntimeAutoscaler>,
     autoscaler_report: RwLock<AutoscalerReport>,
     load_existing_lock: AsyncMutex<()>,
+    display_projection_slot: Arc<Semaphore>,
     scheduler_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     last_reconcile_ms: AtomicU64,
     last_autoscaler_ms: AtomicU64,
@@ -1158,6 +1176,7 @@ impl RuntimeManager {
             workspaces: RwLock::new(HashMap::new()),
             autoscaler,
             load_existing_lock: AsyncMutex::new(()),
+            display_projection_slot: Arc::new(Semaphore::new(1)),
             scheduler_task: Mutex::new(None),
             last_reconcile_ms: AtomicU64::new(0),
             last_autoscaler_ms: AtomicU64::new(0),
@@ -1511,6 +1530,97 @@ impl RuntimeManager {
         self.workspace_snapshot(user_id, workspace_id.as_str())
             .await
             .map(Some)
+    }
+
+    /// Build a bounded observer projection from the persisted workspace state.
+    /// Rendering is deliberately kept out of the live engine lock. Admission
+    /// allows only one temporary snapshot import at a time per web-ui process.
+    pub async fn workspace_display_projection(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+        if_saved_after_ms: Option<u64>,
+        requested_mode: Option<DisplayMode>,
+        requested_max_nodes: usize,
+        requested_max_edges: usize,
+        region: Option<AxisAlignedBox>,
+    ) -> anyhow::Result<Option<WorkspaceDisplayProjection>> {
+        let handle = self.workspace_handle(user_id, workspace_id).await?;
+        self.maybe_refresh_workspace_from_disk(&handle).await?;
+        let workspace_id = handle.key.workspace_id.clone();
+        let saved_at_ms = {
+            let manifest = handle.manifest.read().await;
+            manifest.last_saved_at_ms.or(Some(manifest.updated_at_ms))
+        };
+        if let (Some(if_saved_after_ms), Some(saved_at_ms)) = (if_saved_after_ms, saved_at_ms) {
+            if saved_at_ms <= if_saved_after_ms {
+                return Ok(None);
+            }
+        }
+
+        let max_nodes = if requested_max_nodes == 0 {
+            512
+        } else {
+            requested_max_nodes.min(WORKSPACE_DISPLAY_MAX_NODES)
+        };
+        let max_edges = if requested_max_edges == 0 {
+            4096
+        } else {
+            requested_max_edges.min(WORKSPACE_DISPLAY_MAX_EDGES)
+        };
+        let permit = self
+            .display_projection_slot
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| anyhow::Error::new(WorkspaceDisplayProjectionBusy))?;
+        let snapshot_path = handle.latest_snapshot_path();
+        let projection = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let _permit = permit;
+            let snapshot_json = read_if_exists(&snapshot_path)?
+                .ok_or_else(|| anyhow!("workspace snapshot is not available for projection"))?;
+            let snapshot_bytes = snapshot_json.len() as u64;
+            let mut engine = RunnerEngine::new(EngineSpec::default())?;
+            engine.import_snapshot_json(&snapshot_json)?;
+            let status = engine.status();
+            let snapshot_json = serde_json::to_string(&serde_json::json!({
+                "net": &engine.spec().net,
+                "t": status.step,
+                "t_ms": status.sim_time_ms,
+            }))?;
+            let modes: Vec<(&str, DisplayMode)> = match requested_mode {
+                Some(DisplayMode::Anatomical) => {
+                    vec![("anatomical", DisplayMode::Anatomical)]
+                }
+                Some(DisplayMode::SyntheticColumns) => {
+                    vec![("synthetic_columns", DisplayMode::SyntheticColumns)]
+                }
+                None => vec![
+                    ("synthetic_columns", DisplayMode::SyntheticColumns),
+                    ("anatomical", DisplayMode::Anatomical),
+                ],
+            };
+            let mut display_snapshots = BTreeMap::new();
+            for (key, mode) in modes {
+                let snapshot = engine.display_snapshot_in_region(
+                    mode,
+                    status.step.saturating_add(1),
+                    max_nodes,
+                    max_edges,
+                    region,
+                )?;
+                display_snapshots.insert(key.to_owned(), snapshot);
+            }
+            Ok(WorkspaceDisplayProjection {
+                workspace_id,
+                saved_at_ms,
+                snapshot_bytes,
+                snapshot_json,
+                display_snapshots,
+            })
+        })
+        .await
+        .context("workspace display projection task failed")??;
+        Ok(Some(projection))
     }
 
     pub async fn workspace_activity(

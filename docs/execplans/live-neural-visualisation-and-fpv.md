@@ -110,6 +110,47 @@ Requirements: all. Run matched neural/view/capture/export benchmarks, long-sessi
 - [ ] M5 — Durable exports, recovery and verified downloads.
 - [ ] M6 — Actual-runtime integrated demonstration and final traceability.
 
+### Progress update — 2026-10-10 14:14Z
+
+- [x] The supplied FPV screenshot's `Projection request failed (503)` is from
+  `loadFpvProjection()`'s authenticated workspace snapshot GET; the browser
+  reports render-job POST failures with different wording. Ingress evidence
+  for the incident had no ready web-ui upstream and no matching FPV jobs POST.
+- [x] Read-only Spirit/Kubernetes measurements at 14:13Z found the single
+  saved `system/neuralmimicry-shared-snn` snapshot is 271,858,802 bytes. The
+  web-ui process had 9,933,120 kB RSS; its cgroup used 12,211,912,704 bytes of
+  12,884,901,888 (12 GiB) and had ten restarts. It was not OOM-killed during
+  this measurement. These observations show little container headroom, not a
+  controlled peak-memory benchmark.
+- [x] Source trace at `src/bin/web_ui.rs::runtime_workspace_snapshot` and
+  `src/runtime.rs::workspace_saved_snapshot` found the display request loads
+  or retains the full workspace engine, reads the full persisted JSON, builds
+  a temporary imported engine for display snapshots, then imports the same
+  JSON again in `display_projection_for_snapshot_json`. The browser FPV caller
+  consumes only `display_snapshots`; this duplicate work is avoidable.
+- [x] Implement a read-only display-projection path that imports the persisted
+  snapshot once outside the live engine mutex, returns bounded display DTOs and
+  dashboard metadata, and admits one projection import per web-ui process.
+  Preserve the full snapshot path and route-level owner resolution. Formatting
+  and runner tests are still pending; this is not production-validated.
+- [ ] Resolve a request-scoped memory/load budget from measurements, keep the
+  saved workspace intact, and validate authenticated projection, an actual
+  FPV job POST, worker completion and result retrieval. Current pod readiness
+  is not application or end-to-end acceptance evidence.
+
+### Review update — 2026-10-10 14:22Z
+
+- [x] Rejected the first implementation approach after checking NVR-027: it
+  ran geometry generation under the live `WorkspaceHandle.engine` mutex. The
+  current implementation instead uses one isolated import of the persisted
+  snapshot and a one-slot projection semaphore. It still has a temporary
+  memory peak from that import; the existing runner and deployment measurement
+  must establish whether this bounded single-request path fits the cgroup.
+- [ ] Run the focused runtime-manager regression and exact-head CI on the
+  existing runner fleet; then measure projection lock impact and cgroup peak.
+- [ ] Deploy through the existing Ansible path and validate the authenticated
+  browser, a real FPV POST, worker completion and result download.
+
 ## Validation and acceptance
 
 Use the companion acceptance matrix. Existing confirmed entry points include:
@@ -154,6 +195,14 @@ Deploy compatible readers first, then new optional display/capture publication, 
 - Browser route merging needs explicit revision agreement and corridor coverage.
 - Current export activity is normally a submitted active-ID sample; isolated replay is not a captured time-varying geometry stream.
 - Current 8 GiB RGB-intermediate estimate limits 1080p30 to roughly 46 seconds.
+- 2026-10-10: The workspace FPV display route layered a resident workspace
+  engine, a saved 271.8 MB JSON string and repeated temporary engine imports.
+  This is a source-confirmed extra-work path and a plausible contributor to
+  the observed OOM, but only the unavailable-upstream/OOM sequence is directly
+  confirmed by production logs; per-allocation peak attribution still needs a
+  controlled measurement. The browser display caller does not read the
+  returned `snapshot_json`. A direct projection from the resident engine was
+  rejected because it performs geometry work under the engine mutex (NVR-027).
 
 Update these as the current checkout differs. Distinguish source observation, measured behaviour and inference.
 
@@ -169,7 +218,29 @@ Update these as the current checkout differs. Distinguish source observation, me
 - D03, 2026-09-30: Separate frozen scene, recorded-live capture and isolated replay. Consequence: metadata, UI and acceptance identify the time source explicitly.
 - D04, 2026-09-30: Require semantic parity, not cross-GPU byte-identical pixels. Consequence: canonical scene/camera/time oracles and pinned reference outputs.
 - Pending: backend/dependency ADR, final schema versions, actual hardware profiles and budget measurements. Resolve from the checkout and bounded prototypes; do not invent a measurement.
+- D10, 2026-10-10: Candidate approach—derive the bounded display result from
+  the resident `WorkspaceHandle` under its engine lock. Rejected at 14:22Z
+  after review because geometry generation under that lock violates NVR-027.
+- D11, 2026-10-10: Use one bounded, isolated import of the persisted snapshot
+  for owner-authorised workspace `projection=display` requests. Admit one
+  import at a time per process; do not hold the live engine lock while
+  decoding or generating geometry. Keep owner resolution and the full snapshot
+  API unchanged, cap output, and return a retryable 503 when the projection
+  slot is busy. Evidence: the prior route imported the same 271.8 MB snapshot
+  twice sequentially while the browser used only the bounded DTOs. This avoids
+  duplicate route work but keeps one temporary Engine peak; the measured
+  cgroup gate remains open. Roll back by restoring the previous handler; no
+  persisted format or workspace data changes.
 
 ## Outcomes & Retrospective
 
 The first native consistency repair is implemented and validated: schematic stage-5/6 graph links remain visible before physical synapses grow; stage 1 no longer draws a legacy anatomical membrane; requested/effective stage and the physical capability reason are explicit. The display contract can distinguish a verified empty contact set from missing data across Rust, browser and mobile readers. A versioned heuristic conversion now records modelled scale, source positions and provenance for derived point-only imports, and the shipped default topology passes the same estimator. The default/import all-stage requirement NVR-037..039 is not complete: the live Runner still lacks authoritative physical radii, unit mapping and a clearance witness, and the importer reconstruction is not its growable route authority. GPU/browser/device validation, physical-build migration, actual high-stage native captures and performance gates remain open. Do not mark M0–M6 complete from this reference work.
+
+The 2026-10-10 FPV incident diagnosis distinguishes projection loading from job
+submission: the observed 503 occurred on the projection GET while the pod had
+no ready upstream, and no FPV POST was retained in the outage sample. The
+current display endpoint repeated large workspace materialisation despite the
+browser using only its bounded display DTOs. A single-import projection path
+is implemented but is not yet runner-tested, measured or deployed;
+authenticated render submission, returned diagnostics and measured peak
+memory remain unverified.
