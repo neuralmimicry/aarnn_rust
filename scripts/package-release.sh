@@ -176,6 +176,11 @@ CONTROL
   rm -rf "$work_dir"
 
   depends=$(printf '%s\n' "$output" | sed -n 's/^shlibs:Depends=//p' | tail -n 1)
+  # Ubuntu 26.04 ships Open MPI 5 as libopenmpi40 while retaining the
+  # libmpi.so.40 ABI used by Open MPI 4 packages. Permit either runtime so
+  # 25.04-built artifacts do not try to overwrite the 26.04 Open MPI package.
+  depends=$(printf '%s\n' "$depends" | sed -E \
+    's/(^|, )libopenmpi3t64( \([^)]*\))?/\1libopenmpi3t64\2 | libopenmpi40 (>= 5.0.0)/')
   printf '%s\n' "$depends" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/, ,/, /g; s/^, //; s/, $//'
 }
 
