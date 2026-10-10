@@ -116,8 +116,12 @@ The visual-only regeneration command leaves network JSON, brain configs and
 `.wbproj` editor state untouched. Do not run the full network import generators
 merely to refresh scenery. Date-stamped `*.combo-*.wbt` files are historical capture
 snapshots; the maintained references are the species worlds, `neuroworld.wbt`,
-`multi_neuroworld.wbt` and `multi_neuroworld_test.wbt`. `hexapod_neuroworld.wbt` adds
-a standalone terrain reference. The NAO reference starts from a clean default pose.
+`nao_neuroworld.wbt`, `multi_neuroworld.wbt` and `multi_neuroworld_test.wbt`.
+`multi_neuroworld.wbt` remains generated from the shared catalogue; the curated
+NAO scenario lives in `nao_neuroworld.wbt` and uses
+`webots_world/configs/config_nao_webots.json`. `hexapod_neuroworld.wbt` adds a
+standalone terrain reference. The generated NAO reference starts from a clean
+default pose.
 The old `--fridge on` option is rejected explicitly because shared room furniture is
 now authored in the catalogue/compiler rather than a Webots-only switch.
 
