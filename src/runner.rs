@@ -607,6 +607,8 @@ where
 #[derive(Clone, Debug, Default)]
 pub struct SnapshotMetadata {
     pub net: crate::config::NetworkConfig,
+    pub t: usize,
+    pub t_ms: f64,
     pub input_rows: usize,
     pub hidden_weight_shapes: Vec<(usize, usize)>,
     pub output_rows: usize,
@@ -617,6 +619,8 @@ pub struct SnapshotMetadata {
 struct SnapshotMetadataRaw {
     net: Option<serde_json::Value>,
     connectome_labels: Option<serde_json::Value>,
+    t: usize,
+    t_ms: f64,
     w_in: SnapshotMatrixMetadata,
     w_hh_fwd: Vec<SnapshotMatrixMetadata>,
     w_out: SnapshotMatrixMetadata,
@@ -666,6 +670,8 @@ fn decode_snapshot_metadata_from_reader<R: Read>(reader: R) -> anyhow::Result<Sn
 
     Ok(SnapshotMetadata {
         net,
+        t: raw.t,
+        t_ms: raw.t_ms,
         input_rows: raw.w_in.rows,
         hidden_weight_shapes: raw
             .w_hh_fwd
@@ -745,6 +751,8 @@ mod snapshot_payload_tests {
                 "num_sensory_neurons": 3,
                 "num_output_neurons": 4
             },
+            "t": 17,
+            "t_ms": 425.5,
             "connectome_labels": {"dataset": "openworm_celegans_connectome"},
             "w_in": {"rows": 2, "cols": 3, "data": [1.0, 2.0]},
             "w_hh_fwd": [{"rows": 5, "cols": 2, "data": [1.0, 2.0, 3.0]}],
@@ -754,6 +762,8 @@ mod snapshot_payload_tests {
         let metadata = decode_snapshot_metadata_with_profile_backfill(payload)
             .expect("decode snapshot metadata");
         assert!(!metadata.net.io_channels_are_biological);
+        assert_eq!(metadata.t, 17);
+        assert_eq!(metadata.t_ms, 425.5);
         assert_eq!(metadata.input_rows, 2);
         assert_eq!(metadata.hidden_weight_shapes, vec![(5, 2)]);
         assert_eq!(metadata.output_rows, 4);

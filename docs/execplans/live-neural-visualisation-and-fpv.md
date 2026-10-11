@@ -238,6 +238,38 @@ Requirements: all. Run matched neural/view/capture/export benchmarks, long-sessi
   completion and result retrieval. Capture snapshot identity and confirm no
   live neural state was changed.
 
+### Projection metadata allocation and live resource route — 2026-10-11 18:41Z
+
+- [x] Confirmed the authoritative checkout is `neuralmimicry/aarnn_rust`,
+  clean on `main` at `b20ebc43f1bd97e2887187740fbaf577b3765dc7`. The supplied
+  FPV image reports the workspace projection GET, not a proven render-job POST.
+- [x] Used Continuum's installed `nmc` AARNN endpoint discovery, runtime
+  status, and workspace-list functions. The runtime, control API and
+  orchestrator each report one ready replica; the shared SNN is running at
+  step 3,859,250 across six reported nodes. This is health/status evidence,
+  not a projection or render acceptance result.
+- [x] Forwarded authenticated read-only `GET /api/runtime/resources` through
+  Continuum's AARNN runtime proxy. It returns HTTP 404 even though current
+  `main` registers that route. The installed `nmc` CLI has no typed
+  `aarnn runtime resources` command; the deployed image digest and exact proxy
+  policy remain to be identified. Do not retry the memory-heavy display
+  projection without a live resource sample.
+- [x] Source review found `display_projection_for_snapshot_json` fully
+  materialised `Snapshot` only to retain `net`, `t`, and `t_ms`, then imported
+  the same saved JSON into its isolated renderer. Changed the helper to use
+  the existing metadata-only streaming decoder and added `t`/`t_ms` to its
+  small metadata result. The projection payload and runtime state are
+  unchanged; exact-head runner verification is pending.
+- [ ] Pass exact-head X64 and ARM64 runner validation, merge the focused
+  change into `main`, and publish the verified web-ui image by immutable
+  digest. Confirm the deployed resource endpoint through a typed Continuum
+  client before sampling current/high-water/limit and deciding whether a
+  bounded projection request has safe headroom.
+- [ ] Correlate authenticated browser projection, a deliberate
+  `POST /api/fpv/jobs`, exact-workspace worker completion and UI result
+  retrieval. Keep this open until request, snapshot, response, worker and
+  artifact evidence agree.
+
 ## Validation and acceptance
 
 Use the companion acceptance matrix. Existing confirmed entry points include:
@@ -295,6 +327,12 @@ Deploy compatible readers first, then new optional display/capture publication, 
   client offers no workload cgroup resource observation. The bounded FPV
   projection still constructs a temporary engine from the whole saved JSON,
   so its node/edge output cap cannot be treated as a memory bound.
+- 2026-10-11: The installed Continuum/NMC runtime-status and workspace-list
+  operations still work, but forwarding `GET /api/runtime/resources` returns
+  HTTP 404 against the live runtime while current AARNN `main` registers the
+  authenticated route. The installed CLI has no typed resource command, so a
+  live cgroup sample and safe projection retry remain unavailable until the
+  route is deployed and exposed as a typed Continuum function.
 - 2026-10-10: The refreshed PR #37 X64 lint job failed because two workspace
   display-mode references in the `web_ui` binary use the library's `crate::`
   namespace instead of its existing `aarnn_rust` import. The exact diagnostic
@@ -354,6 +392,13 @@ Update these as the current checkout differs. Distinguish source observation, me
   NVR-027/028 and the user's explicit request to resolve the FPV failure. The
   remaining peak must be measured on the exact live workspace before rollout
   is considered successful.
+- D15, 2026-10-11: Build the FPV display envelope from the existing
+  metadata-only streaming decoder (`net`, `t`, and `t_ms`) instead of
+  materialising a second complete `Snapshot` beside the temporary renderer.
+  This preserves the returned projection and biological/runtime state while
+  removing one full set of checkpoint matrices from the request peak. The
+  change remains subject to exact-head X64/ARM64 runner checks and production
+  high-water measurement; rollback restores the prior metadata extraction.
 
 ## Outcomes & Retrospective
 
@@ -375,3 +420,13 @@ fail to compile the `web_ui` binary on two `DisplayMode` import paths. The
 source correction is prepared and formatted; refreshed exact-head CI remains
 pending. No FPV job POST, result retrieval, deployed memory measurement or
 end-to-end acceptance has been completed in this session.
+
+This historical compiler issue was fixed and merged in AARNN PR #38; the
+current `main` is at `b20ebc4`. At 2026-10-11 18:41Z, Continuum runtime and
+workspace queries are healthy, but its authenticated resource route returns
+HTTP 404 and the installed NMC client lacks a typed resource-observation
+command. The FPV projection helper now obtains only `net`, `t`, and `t_ms`
+through the metadata-only decoder instead of retaining a full second
+checkpoint beside the renderer. Formatting and whitespace checks pass;
+runner validation, deployment, cgroup measurement, browser projection, render
+POST and result retrieval remain open.
