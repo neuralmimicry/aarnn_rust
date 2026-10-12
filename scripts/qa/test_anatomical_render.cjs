@@ -60,6 +60,10 @@ vm.runInContext('rebuildGraph()', context);
 assert.equal(context.state.graph.edges.length, synthetic.edges.length);
 assert.equal(context.state.graph.membrane, null);
 assert.ok(context.state.graph.edges.some(e => e.from.id === '4:1' && e.to.id === '2:1'), 'feedback edge retained');
+const projectionRetryTest = spawnSync(process.execPath,
+  [path.join(root, 'scripts/qa/test_fpv_projection_retry.cjs')], { encoding: 'utf8' });
+assert.equal(projectionRetryTest.status, 0, projectionRetryTest.stdout + projectionRetryTest.stderr);
+process.stdout.write(projectionRetryTest.stdout);
 console.log('PASS: bounded snapshots, path/soma projection, mode switching and synthetic connectivity');
 if (process.argv.includes('--browser')) {
   const output = process.env.ANATOMY_QA_DIR || path.join(root, 'target/qa/anatomy-browser');

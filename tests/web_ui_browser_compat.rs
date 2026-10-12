@@ -278,7 +278,7 @@ fn workspace_fpv_projections_share_a_serial_retry_queue() {
     assert!(app.contains("workspaceDisplayProjectionRequestTail.catch"));
     assert!(app.contains("response.clone().json()"));
     assert!(app.contains("payload.retryable !== true"));
-    assert!(app.contains("fetcher = fetchWorkspaceDisplayProjection"));
+    assert!(app.contains("await fetchWorkspaceDisplayProjection(url, {"));
     assert!(app.contains("fetcher: fetchWorkspaceDisplayProjection"));
 }
 

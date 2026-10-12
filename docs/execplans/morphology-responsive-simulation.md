@@ -197,6 +197,20 @@ must show when source geometry cannot safely support a requested stage.
 
 ## Progress
 
+- [~] `2026-10-12 14:23Z` FPV workspace projection 503 follow-up: the captured
+  request is a display-projection `GET`, which the server marks retryable when
+  its one-per-process snapshot-import permit is occupied; the screenshot does
+  not show a render-job `POST`. The browser previously retried only briefly,
+  then surfaced 503. `web_ui/app.js` now retries with bounded backoff (eight
+  retries, roughly 27.5 seconds before jitter) and reports retry progress. Four
+  deterministic Node tests pass, as do the 12 focused native anatomy tests
+  (two growth-capture tests intentionally ignored) and the real Chrome canvas
+  assertions. Remaining: deploy the client, correlate a successful live GET,
+  submit and retrieve a real FPV job, and measure the projection memory peak.
+  Continuum reports 10,642,391,040 cgroup bytes in use of 12,884,901,888,
+  peak 11,273,240,576, process RSS 2,283,077,632, and zero OOM kills. No live
+  projection or render POST was issued at this headroom.
+
 - [x] `2026-09-29 10:00Z` Fixed the C. elegans native cluster dashboard
   projection. Cluster snapshot merging now retains the richest immutable
   procedural reconstruction found on any shard. A bounded background worker
@@ -672,6 +686,16 @@ unchanged. The generated anatomy is not yet a distributed structural commit.
 
 ## Surprises & Discoveries
 
+- The owner's capture shows `GET .../snapshot?projection=display` returning
+  503 before the `Submit render` control becomes enabled. The web handler maps
+  `WorkspaceDisplayProjectionBusy` to `{retryable:true}` after a failed
+  `Semaphore::try_acquire_owned`; a different full-snapshot import is already
+  using the single projection slot. This is capacity admission, not evidence
+  that `/api/fpv/jobs` itself failed. The web client serialized requests only
+  within one browser page, so another tab/client can still occupy the server
+  slot. The selected live workspace has 2,101 neurons and is not the fresh
+  3×70-hidden-neuron default shown in `config.json`.
+
 - `run_examples.sh` builds `src/main.rs` with every feature, while the
   visualisation and FPV unit suites primarily compiled `src/lib.rs`. These
   roots each compile the shared `src/ui.rs`, but maintain separate module
@@ -783,6 +807,15 @@ The WebGL surface is a separately scoped robot-body simulator with its own
 records and is therefore excluded from neural anatomical/synthetic parity.
 
 ## Decision Log
+
+- `2026-10-12 FPV-503-001`: Preserve the server's single-import admission gate
+  while adding bounded client retries and visible status. Persisted workspaces
+  are fully imported before display sampling, and measured cgroup use is close
+  to its recent peak; adding parallel imports or an unbounded waiter queue
+  would increase memory pressure without evidence. Keep live projection and
+  render acceptance open until resource use and the real request/response are
+  measured. Authority: the authenticated handler's retryable response, current
+  Continuum resource counters, and the user's FPV failure report.
 
 - `2026-09-28 VIS-12-001`: Use one ordered nine-stage presentation policy in
   each client, checked against `qa/fixtures/visualization/complexity-policy-v1.json`.
@@ -959,6 +992,14 @@ records and is therefore excluded from neural anatomical/synthetic parity.
   inventing topology.
 
 ## Outcomes & Retrospective
+
+The FPV busy response now has a focused, deterministic browser-client retry
+regression and a bounded progress message. The server still imports the
+complete saved snapshot, so this change does not claim a memory reduction or
+resolve slot occupancy. Production image rollout, live projection, FPV `POST`,
+and completed render retrieval remain open. Biological display still uses
+modelled layer coordinates and preset region/type metadata; it does not claim
+measured soma spacing, radii, or tissue-level clustering.
 
 The reproduced 500-ms destructive anatomy replacement is repaired. I/O
 formation preserves grown hidden arbors, and stale asynchronous results cannot
