@@ -999,17 +999,22 @@ function runtimeFetch(path, options = {}) {
   return fetch(path, request);
 }
 let workspaceDisplayProjectionRequestTail = Promise.resolve();
-function fetchWorkspaceDisplayProjection(path) {
+const workspaceDisplayProjectionRetryDelaysMs = [500, 1000, 2000, 4000, 5000, 5000, 5000, 5000];
+function fetchWorkspaceDisplayProjection(path, options = {}) {
   const request = workspaceDisplayProjectionRequestTail.catch(() => null).then(async () => {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; ; attempt += 1) {
       const response = await runtimeFetch(path);
       if (response.status !== 503) return response;
       const payload = await response.clone().json().catch(() => ({}));
-      if (payload.retryable !== true) return response;
-      const delayMs = 150 * (2 ** attempt) + Math.floor(Math.random() * 100);
+      if (payload.retryable !== true || attempt >= workspaceDisplayProjectionRetryDelaysMs.length) return response;
+      const baseDelayMs = workspaceDisplayProjectionRetryDelaysMs[attempt];
+      const jitterMs = Math.floor(Math.random() * Math.min(1000, Math.max(100, baseDelayMs / 4)));
+      const delayMs = baseDelayMs + jitterMs;
+      if (typeof options.onBusyRetry === "function") {
+        options.onBusyRetry({ attempt: attempt + 1, maxRetries: workspaceDisplayProjectionRetryDelaysMs.length, delayMs });
+      }
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
-    return runtimeFetch(path);
   });
   workspaceDisplayProjectionRequestTail = request.then(() => null, () => null);
   return request;
@@ -2396,17 +2401,23 @@ async function loadFpvProjection() {
   fpvSourceStatus.textContent = `Loading bounded network overview (${detail.toLocaleString()} neuron detail)…`;
   try {
     let url;
-    let fetcher = fetch;
     if (source.kind === "workspace") {
       url = buildWorkspaceApiUrl(source.workspace, "/snapshot", {
         projection: "display", display_mode: "anatomical", max_nodes: detail, max_edges: edgeBudget
       });
-      fetcher = fetchWorkspaceDisplayProjection;
     } else {
       url = `/api/snapshot?addr=${encodeURIComponent(source.addr)}&network_id=${encodeURIComponent(source.networkId)}&projection=display&display_mode=anatomical&max_nodes=${detail}&max_edges=${edgeBudget}`;
       if (source.nodeId) url += `&node_id=${encodeURIComponent(source.nodeId)}`;
     }
-    const response = await fetcher(url);
+    const response = source.kind === "workspace"
+      ? await fetchWorkspaceDisplayProjection(url, {
+          onBusyRetry: ({ attempt, maxRetries, delayMs }) => {
+            if (sourceKey === sourceRequestKey(activeSource())) {
+              fpvSourceStatus.textContent = `Workspace projection is busy; retry ${attempt}/${maxRetries} in ${Math.ceil(delayMs / 1000)}s…`;
+            }
+          }
+        })
+      : await fetch(url);
     if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `Projection request failed (${response.status})`);
     const data = await response.json();
     const views = data.display_snapshots;
