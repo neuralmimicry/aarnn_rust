@@ -37,7 +37,9 @@ use aarnn_rust::nmchain::{
 use aarnn_rust::peripheral::{
     ChannelKind, Direction, MAX_PERIPHERAL_SESSION_TTL_SECS, PeripheralSessionRegistry,
 };
-use aarnn_rust::runner::decode_snapshot_with_profile_backfill;
+use aarnn_rust::runner::{
+    decode_snapshot_metadata_with_profile_backfill, decode_snapshot_with_profile_backfill,
+};
 use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager, WorkspaceDisplayProjectionBusy};
 use aarnn_rust::runtime_api::{
     WorkspaceControlAction, WorkspaceControlRequest, WorkspaceCreateRequest, WorkspaceImportRequest,
@@ -6368,7 +6370,7 @@ fn display_projection_for_snapshot_json(
     requested_mode: Option<&str>,
     region: Option<AxisAlignedBox>,
 ) -> Result<(String, BTreeMap<String, DisplaySnapshot>), String> {
-    let snapshot = decode_snapshot_with_profile_backfill(snapshot_json)
+    let metadata = decode_snapshot_metadata_with_profile_backfill(snapshot_json)
         .map_err(|error| format!("invalid network snapshot: {error}"))?;
     let mut engine = RunnerEngine::new(EngineSpec::default())
         .map_err(|error| format!("could not initialize display projection: {error}"))?;
@@ -6399,9 +6401,9 @@ fn display_projection_for_snapshot_json(
         return Err("snapshot produced no visible neurons".to_owned());
     }
     let projection = serde_json::to_string(&json!({
-        "net": snapshot.net,
-        "t": snapshot.t,
-        "t_ms": snapshot.t_ms,
+        "net": metadata.net,
+        "t": metadata.t,
+        "t_ms": metadata.t_ms,
     }))
     .map_err(|error| format!("dashboard projection encoding failed: {error}"))?;
     Ok((projection, display_snapshots))
