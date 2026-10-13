@@ -249,6 +249,22 @@ fn scenario_manifest_is_complete(root: &Path, id: &str) -> bool {
 
 fn qa_suite(root: &Path, suite: &str) -> bool {
     match suite {
+        "evelyn-import-adjacency" => {
+            scenario_manifest_is_complete(root, "EVELYN-IMPORT-001")
+                && run(
+                    root,
+                    "cargo",
+                    &[
+                        "test",
+                        "--locked",
+                        "--no-default-features",
+                        "--features",
+                        "parallel",
+                        "--lib",
+                        "morphology_contract::knowledge_import::tests",
+                    ],
+                )
+        }
         "morphology-physical-calibration" => {
             scenario_manifest_is_complete(root, "MORPH-CAL-001")
                 && run(

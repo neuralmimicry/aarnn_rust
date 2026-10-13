@@ -303,6 +303,12 @@ jobs:
         if: matrix.runner_arch == 'ARM64'
         run: 'cargo test --locked --all-features --lib runner::tests::'
 
+      - name: Verify Evelyn placement and mesh compatibility on ARM64
+        if: matrix.runner_arch == 'ARM64'
+        env:
+          NM_DISABLE_OPENCL: "1"
+        run: cargo test --locked --all-features --lib morphology_contract::knowledge_import::tests
+
       - name: Run integration tests
         env:
           NM_DISABLE_OPENCL: "1"

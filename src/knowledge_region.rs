@@ -25,6 +25,11 @@
 //! run is reproducible on any node and in any shard layout.
 
 use crate::knowledge::{KnowledgeNeuron, steady_rate};
+use crate::morphology_contract::knowledge_import::{
+    AttachmentError, AttachmentPolicy, ExistingSnn, KnowledgeAttachmentPlan,
+    KnowledgeInputPlacementPolicy, plan_attachment,
+};
+use crate::morphology_contract::{ConnectomeRole, PointOnlyConnectome};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, BufReader, Read};
@@ -79,6 +84,48 @@ pub struct FfnMesh {
     /// shared identity code serves channels of very different magnitude.
     #[serde(default)]
     pub up_scale_file: Option<PathBuf>,
+    /// Applied only to an explicit attachment proposal; standalone evaluation
+    /// neither needs target geometry nor mutates an existing brain.
+    #[serde(default)]
+    pub input_placement_policy: KnowledgeInputPlacementPolicy,
+}
+
+impl FfnMesh {
+    /// Validate the converted interface and plan geometry for an authorised
+    /// attachment adapter. This does not instantiate or commit a live network.
+    pub fn plan_attachment(
+        &self,
+        target: ExistingSnn<'_>,
+        incoming: &PointOnlyConnectome,
+        policy: AttachmentPolicy,
+    ) -> Result<KnowledgeAttachmentPlan, AttachmentError> {
+        if self.gate.inputs == 0
+            || self.gate.outputs == 0
+            || self.down.outputs == 0
+            || self.gate.inputs != self.up.inputs
+            || self.gate.outputs != self.up.outputs
+            || self.gate.outputs != self.down.inputs
+            || incoming
+                .neurons
+                .iter()
+                .filter(|n| n.role == ConnectomeRole::Sensory)
+                .count()
+                != self.gate.inputs
+            || incoming
+                .neurons
+                .iter()
+                .filter(|n| n.role == ConnectomeRole::Output)
+                .count()
+                != self.down.outputs
+        {
+            return Err(AttachmentError::InterfaceMismatch);
+        }
+        match self.input_placement_policy {
+            KnowledgeInputPlacementPolicy::SensoryNearExistingOutputs => {
+                plan_attachment(target, incoming, policy)
+            }
+        }
+    }
 }
 
 /// Read a little-endian f32 file of exactly `n` values.
@@ -205,6 +252,18 @@ impl FfnRegion {
 
     pub fn outputs(&self) -> usize {
         self.down.outputs
+    }
+
+    /// Prepare the same geometry proposal for a loaded converted region.
+    /// The caller supplies validated conversion geometry and admission limits;
+    /// a separate authorised adapter must commit ownership and neural state.
+    pub fn plan_attachment(
+        &self,
+        target: ExistingSnn<'_>,
+        incoming: &PointOnlyConnectome,
+        policy: AttachmentPolicy,
+    ) -> Result<KnowledgeAttachmentPlan, AttachmentError> {
+        self.mesh.plan_attachment(target, incoming, policy)
     }
 
     /// Decode one population for one channel: simulate every unit neuron and
