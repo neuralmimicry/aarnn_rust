@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use thiserror::Error;
 
 pub mod growth_cone;
+pub mod knowledge_import;
 
 pub const MORPHOLOGY_SCHEMA_VERSION: u16 = 2;
 pub const DEFAULT_ROUTE_QUANTUM_MS: f64 = 1.0;
