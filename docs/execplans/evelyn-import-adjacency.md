@@ -96,6 +96,11 @@ network I/O or state writer belongs in the planner. Reject stale/tampered plans.
   the changed placement/knowledge-region files; 370 existing library warnings
   remain. Formatting and source diff checks pass.
 - [ ] Final-head canonical dual-architecture CI and main-source consolidation.
+- [x] `2026-10-13 13:45Z` Closed the automatic ARM test-selection gap: the
+  canonical workflow previously ran only `runner::tests` on ARM, so add the
+  15 placement/compatibility tests against its already-built all-feature library.
+  X64's complete library suite already selects these tests. Retain the earlier
+  run as superseded evidence and require the resulting final-head rerun.
 - [~] `2026-10-13 13:12Z` Native ARM compile found existing unconditional Rayon
   references in GA/runner when all default features are disabled. Record the
   failed log `/var/tmp/aarnn-evelyn-native-arm64-20261013.log`; select the existing
