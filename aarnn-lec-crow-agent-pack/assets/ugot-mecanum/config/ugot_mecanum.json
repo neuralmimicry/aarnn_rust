@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "units": "SI",
+  "robot": {
+    "name": "ugot_mecanum",
+    "manufacturer": "UBTECH",
+    "configuration": "mecanum-wheel car"
+  },
+  "dimensions": {
+    "chassis_length_m": {"value": 0.230, "status": "estimated"},
+    "chassis_width_m": {"value": 0.150, "status": "estimated"},
+    "chassis_height_m": {"value": 0.042, "status": "estimated"},
+    "wheelbase_m": {"value": 0.170, "status": "estimated"},
+    "track_width_m": {"value": 0.190, "status": "estimated"},
+    "wheel_radius_m": {"value": 0.050, "status": "estimated"},
+    "wheel_width_m": {"value": 0.036, "status": "estimated"},
+    "roller_radius_m": {"value": 0.008, "status": "estimated"},
+    "roller_length_m": {"value": 0.032, "status": "estimated"},
+    "roller_count": {"value": 9, "status": "estimated"},
+    "roller_angle_deg": {"value": 45.0, "status": "design-assumption"},
+    "gear_motor_diameter_m": {"value": 0.040, "status": "published"},
+    "gear_motor_length_m": {"value": 0.050, "status": "published"},
+    "controller_size_m": {"value": [0.115, 0.085, 0.052], "status": "estimated"},
+    "battery_size_m": {"value": [0.082, 0.062, 0.054], "status": "published"}
+  },
+  "mass": {
+    "chassis_kg": {"value": 0.72, "status": "estimated"},
+    "controller_kg": {"value": 0.43, "status": "estimated"},
+    "battery_kg": {"value": 0.22, "status": "estimated"},
+    "motor_each_kg": {"value": 0.16, "status": "estimated"},
+    "wheel_hub_each_kg": {"value": 0.045, "status": "estimated"},
+    "rollers_per_wheel_kg": {"value": 0.090, "status": "estimated"}
+  },
+  "drive": {
+    "motor_count": {"value": 4, "status": "published"},
+    "max_motor_speed_rpm": {"value": 360.0, "status": "published-lower-bound"},
+    "max_motor_torque_nm": {"value": 0.196133, "status": "published-approximation"},
+    "advertised_vehicle_speed_mps": {"value": 1.6, "status": "published"},
+    "joint_damping_nms_per_rad": {"value": 0.002, "status": "estimated"},
+    "rolling_friction": {"value": 0.003, "status": "estimated"},
+    "sliding_friction": {"value": 0.9, "status": "estimated"}
+  },
+  "environment": {
+    "platform_half_extent_m": {"value": 1.25, "status": "design-assumption"},
+    "platform_thickness_m": {"value": 0.10, "status": "design-assumption"},
+    "fall_reset_height_m": {"value": -0.30, "status": "design-assumption"}
+  }
+}

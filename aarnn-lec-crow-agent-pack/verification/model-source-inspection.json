@@ -1,0 +1,65 @@
+{
+  "scope": "Static source/model inspection only. No native simulator, neural runtime or physics has been executed.",
+  "models": [
+    {
+      "file": "assets/galbot-g1-golf/urdf/galbot_one_golf.urdf",
+      "format": "URDF",
+      "links": 104,
+      "joints": 103,
+      "joint_types": {
+        "fixed": 26,
+        "revolute": 33,
+        "continuous": 44
+      },
+      "mimic_constraints": 10,
+      "link_mass_sum_kg": 95.1838631882696,
+      "missing_meshes": []
+    },
+    {
+      "file": "assets/galbot-g1-golf/urdf/galbot_one_golf_fixed_base.urdf",
+      "format": "URDF",
+      "links": 64,
+      "joints": 63,
+      "joint_types": {
+        "fixed": 30,
+        "revolute": 33
+      },
+      "mimic_constraints": 10,
+      "link_mass_sum_kg": 95.1838631882696,
+      "missing_meshes": []
+    },
+    {
+      "file": "assets/galbot-g1-golf/mjcf/galbot_one_golf.xml",
+      "format": "MJCF",
+      "bodies": 104,
+      "joints": 87,
+      "actuators": 27,
+      "status": "XML_parsed_not_engine_compiled"
+    },
+    {
+      "file": "assets/ugot-mecanum/model/ugot_mecanum.xml",
+      "format": "MJCF",
+      "bodies": 41,
+      "joints": 41,
+      "actuators": 4,
+      "status": "XML_parsed_not_engine_compiled"
+    }
+  ],
+  "usd_dependency_check": {
+    "asset_references": 453,
+    "missing_local_assets": [],
+    "runtime_material_dependencies": [
+      {
+        "file": "assets/galbot-g1-golf/usd/payloads/materials.usda",
+        "reference": "OmniPBR.mdl"
+      }
+    ],
+    "note": "OmniPBR.mdl is referenced as an Isaac/Omniverse runtime material module; runtime resolution and actual USD loading remain untested."
+  },
+  "aer1_golden_comparison": {
+    "status": "pass",
+    "source_revision": "a02c9c43089b5cb488094b50124d034ae51b4ca3",
+    "source_file": "scripts/aer_legacy_codec.py",
+    "scope": "Byte framing fixture comparison only; no socket exchange or neural execution."
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "status": "pass",
+  "new_profiles": 22,
+  "existing_profiles": 6,
+  "total_profiles": 28,
+  "targets": 8,
+  "acceptance_rows": 224,
+  "verified_asset_files": 467,
+  "scope": "Pack integrity and instruction coverage only; no simulator or AARNN execution.",
+  "focused_helper_tests": {
+    "status": "pass",
+    "test_cases": 4,
+    "coverage": [
+      "literal AER1 golden/empty framing",
+      "invalid AER fields/address bounds",
+      "additive installation/idempotence/conflict refusal",
+      "asset integrity and path escape refusal"
+    ]
+  },
+  "authored_python_syntax": "pass",
+  "model_source_inspection": "verification/model-source-inspection.json",
+  "not_executed": [
+    "AARNN native build or neural network",
+    "MuJoCo engine",
+    "NVIDIA Isaac Sim",
+    "Webots",
+    "Unity",
+    "Unreal",
+    "WebGL browser runtime",
+    "Minecraft Java",
+    "Minecraft Bedrock"
+  ]
+}

@@ -1,0 +1,5 @@
+# Add native NVIDIA Isaac Sim for all profiles
+
+Implement local USD articulations/scenes and supported-version Python/Kit integration for all 28 profiles. Register --sim isaacsim with actual readiness, headless/interactive launch, reset/stop and AER routing. Use the installed release’s importers and articulation API; do not paste incompatible omni.isaac legacy imports. Bootstrap the runtime correctly, resolve DOFs by name, check control modes/mimic joints/root mobility and sensor extrinsics, and reacquire handles after reset. Start with bundled Galbot USD but verify its source model/variant and actual target load. Keep AER networking outside physics/render callbacks. Validate mass, gravity, drive, contact, RTX/physics sensors and crow forces. Run compatibility/VRAM/driver checks; unsupported hosts are blocked, not successful stubs. ROS 2 and Isaac Lab are optional, separate features.
+
+Completion evidence must be recorded in the living ExecPlan before proceeding or reporting this work package complete.

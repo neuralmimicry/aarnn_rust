@@ -1,0 +1,1068 @@
+{
+  "schema_version": 1,
+  "researched_on": "2026-10-23",
+  "aarnn_revision": {
+    "branch": "main",
+    "sha": "a02c9c43089b5cb488094b50124d034ae51b4ca3",
+    "committed_at": "2026-10-13T23:55:25Z",
+    "tree_truncated": false
+  },
+  "commercial_family_count": 15,
+  "lec_configuration_count": 21,
+  "biological_addition_count": 1,
+  "profile_count": 22,
+  "robots": [
+    {
+      "id": "keenon_t8",
+      "commercial_product_id": "keenon_t8",
+      "brand": "KEENON",
+      "name": "DINERBOT T8",
+      "category": "tray_delivery",
+      "lec_listing": true,
+      "evidence": [
+        "keenon-t8",
+        "lec-dinerbot-t8"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {
+        "body_dimensions_wdh": {
+          "value": [
+            0.384,
+            0.468,
+            1.111
+          ],
+          "unit": "m",
+          "evidence": "keenon-t8",
+          "status": "published",
+          "notes": ""
+        },
+        "mass": {
+          "value": 34,
+          "unit": "kg",
+          "evidence": "keenon-t8",
+          "status": "published",
+          "notes": ""
+        },
+        "total_payload": {
+          "value": 20,
+          "unit": "kg",
+          "evidence": "keenon-t8",
+          "status": "published",
+          "notes": ""
+        }
+      },
+      "variants": [],
+      "functional_requirements": [
+        "Three physical trays with payload contacts and loaded centre-of-mass changes.",
+        "Narrow-aisle delivery, pickup detection, loaded turns and docking."
+      ],
+      "acceptance_scenarios": [
+        "blocked_path",
+        "obstacle_and_person_avoidance",
+        "low_energy_return_to_dock",
+        "connection_loss_neutral_output",
+        "two_instance_brain_isolation",
+        "loaded_delivery_and_pickup",
+        "payload_does_not_teleport_or_fall_through_tray"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "keenon_t9",
+      "commercial_product_id": "keenon_t9",
+      "brand": "KEENON",
+      "name": "DINERBOT T9",
+      "category": "tray_delivery",
+      "lec_listing": true,
+      "evidence": [
+        "keenon-t9",
+        "lec-dinerbot-t9"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {
+        "body_dimensions_wdh": {
+          "value": [
+            0.5,
+            0.527,
+            1.266
+          ],
+          "unit": "m",
+          "evidence": "keenon-t9",
+          "status": "published",
+          "notes": ""
+        },
+        "mass": {
+          "value": 63,
+          "unit": "kg",
+          "evidence": "keenon-t9",
+          "status": "published",
+          "notes": ""
+        },
+        "total_payload": {
+          "value": 40,
+          "unit": "kg",
+          "evidence": "keenon-t9",
+          "status": "published",
+          "notes": ""
+        }
+      },
+      "variants": [],
+      "functional_requirements": [
+        "Four configurable tray levels with separate payload bodies.",
+        "Loaded delivery, suspension approximation with disclosed parameters and docking."
+      ],
+      "acceptance_scenarios": [
+        "blocked_path",
+        "obstacle_and_person_avoidance",
+        "low_energy_return_to_dock",
+        "connection_loss_neutral_output",
+        "two_instance_brain_isolation",
+        "loaded_delivery_and_pickup",
+        "payload_does_not_teleport_or_fall_through_tray"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "keenon_t10",
+      "commercial_product_id": "keenon_t10",
+      "brand": "KEENON",
+      "name": "DINERBOT T10",
+      "category": "tray_delivery_advertising",
+      "lec_listing": true,
+      "evidence": [
+        "keenon-t10",
+        "lec-dinerbot-t10"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {
+        "body_dimensions_wdh": {
+          "value": [
+            0.486,
+            0.555,
+            1.399
+          ],
+          "unit": "m",
+          "evidence": "keenon-t10",
+          "status": "published",
+          "notes": ""
+        },
+        "mass": {
+          "value": 58,
+          "unit": "kg",
+          "evidence": "keenon-t10",
+          "status": "published",
+          "notes": ""
+        },
+        "total_payload": {
+          "value": 40,
+          "unit": "kg",
+          "evidence": "keenon-t10",
+          "status": "published",
+          "notes": ""
+        }
+      },
+      "variants": [],
+      "functional_requirements": [
+        "Four tray levels, advertising screen and separately modelled head articulation if evidence permits.",
+        "Delivery and screen interaction are separate from locomotion control."
+      ],
+      "acceptance_scenarios": [
+        "blocked_path",
+        "obstacle_and_person_avoidance",
+        "low_energy_return_to_dock",
+        "connection_loss_neutral_output",
+        "two_instance_brain_isolation",
+        "loaded_delivery_and_pickup",
+        "payload_does_not_teleport_or_fall_through_tray"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "keenon_t11",
+      "commercial_product_id": "keenon_t11",
+      "brand": "KEENON",
+      "name": "DINERBOT T11",
+      "category": "narrow_aisle_delivery_advertising",
+      "lec_listing": true,
+      "evidence": [
+        "keenon-t11",
+        "lec-rentals"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {
+        "body_dimensions_wdh": {
+          "value": [
+            0.463,
+            0.384,
+            1.123
+          ],
+          "unit": "m",
+          "evidence": "keenon-t11",
+          "status": "published",
+          "notes": ""
+        },
+        "mass": {
+          "value": 38,
+          "unit": "kg",
+          "evidence": "keenon-t11",
+          "status": "published",
+          "notes": ""
+        },
+        "total_payload": {
+          "value": 20,
+          "unit": "kg",
+          "evidence": "keenon-t11",
+          "status": "published",
+          "notes": "Manufacturer says 20 kg total while parenthetical tray figures mention 5 kg middle + 10 kg bottom. Resolve remaining payload allocation before claiming tray-specific ratings."
+        }
+      },
+      "variants": [],
+      "functional_requirements": [
+        "Narrow-aisle tray robot with advertising/display behaviour.",
+        "Preserve the T11 body and tray layout; do not alias it to T8 or T10."
+      ],
+      "acceptance_scenarios": [
+        "blocked_path",
+        "obstacle_and_person_avoidance",
+        "low_energy_return_to_dock",
+        "connection_loss_neutral_output",
+        "two_instance_brain_isolation",
+        "loaded_delivery_and_pickup",
+        "payload_does_not_teleport_or_fall_through_tray"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "keenon_w3",
+      "commercial_product_id": "keenon_w3",
+      "brand": "KEENON",
+      "name": "BUTLERBOT W3",
+      "category": "enclosed_delivery",
+      "lec_listing": true,
+      "evidence": [
+        "keenon-w3",
+        "lec-butlerbot-w3"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {
+        "body_dimensions_wdh": {
+          "value": [
+            0.459,
+            0.549,
+            1.081
+          ],
+          "unit": "m",
+          "evidence": "keenon-w3",
+          "status": "published",
+          "notes": ""
+        },
+        "mass": {
+          "value": 48,
+          "unit": "kg",
+          "evidence": "keenon-w3",
+          "status": "published",
+          "notes": ""
+        },
+        "total_payload": {
+          "value": 20,
+          "unit": "kg",
+          "evidence": "keenon-w3",
+          "status": "published",
+          "notes": ""
+        }
+      },
+      "variants": [],
+      "functional_requirements": [
+        "Select and label two/four-compartment configuration; doors, locks and open/closed sensors.",
+        "Simulated lift call, enter, travel, exit and room delivery; no real building integration."
+      ],
+      "acceptance_scenarios": [
+        "blocked_path",
+        "obstacle_and_person_avoidance",
+        "low_energy_return_to_dock",
+        "connection_loss_neutral_output",
+        "two_instance_brain_isolation",
+        "locked_door_blocks_pickup",
+        "multi_floor_lift_round_trip"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "keenon_s100",
+      "commercial_product_id": "keenon_s100",
+      "brand": "KEENON",
+      "name": "COURIER S100",
+      "category": "heavy_load_delivery",
+      "lec_listing": true,
+      "evidence": [
+        "keenon-s100",
+        "lec-courier-s100"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {
+        "body_dimensions_wdh": {
+          "value": [
+            0.925,
+            0.64,
+            1.282
+          ],
+          "unit": "m",
+          "evidence": "keenon-s100",
+          "status": "published",
+          "notes": ""
+        },
+        "mass": {
+          "value": 87.5,
+          "unit": "kg",
+          "evidence": "keenon-s100",
+          "status": "published",
+          "notes": ""
+        },
+        "total_payload": {
+          "value": 100,
+          "unit": "kg",
+          "evidence": "keenon-s100",
+          "status": "published",
+          "notes": ""
+        }
+      },
+      "variants": [
+        {
+          "id": "manufacturer_640mm_depth",
+          "dimensions_wdh_m": [
+            0.925,
+            0.64,
+            1.282
+          ],
+          "evidence": "keenon-s100"
+        },
+        {
+          "id": "lec_620mm_depth",
+          "dimensions_wdh_m": [
+            0.925,
+            0.62,
+            1.282
+          ],
+          "evidence": "brochure-courier-s100"
+        }
+      ],
+      "functional_requirements": [
+        "Heavy-load platform/rack with explicitly placed loads; stability, emergency stop and dock.",
+        "Keep chassis mass separate from payload and loading-platform dimensions."
+      ],
+      "acceptance_scenarios": [
+        "blocked_path",
+        "obstacle_and_person_avoidance",
+        "low_energy_return_to_dock",
+        "connection_loss_neutral_output",
+        "two_instance_brain_isolation",
+        "loaded_turn_stability",
+        "payload_mass_changes_acceleration"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack",
+      "variant_note": "Manufacturer depth 640 mm conflicts with LEC 620 mm. Default engineering surrogate may use explicitly labelled manufacturer geometry; exact LEC replication remains unresolved."
+    },
+    {
+      "id": "keenon_c30",
+      "commercial_product_id": "keenon_c30",
+      "brand": "KEENON",
+      "name": "KLEENBOT C30",
+      "category": "dry_floor_cleaner",
+      "lec_listing": true,
+      "evidence": [
+        "keenon-c30",
+        "lec-kleenbot-c30"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {
+        "body_dimensions_wdh": {
+          "value": [
+            0.49,
+            0.52,
+            0.75
+          ],
+          "unit": "m",
+          "evidence": "keenon-c30",
+          "status": "published",
+          "notes": ""
+        },
+        "mass": {
+          "value": 35,
+          "unit": "kg",
+          "evidence": "keenon-c30",
+          "status": "published",
+          "notes": ""
+        }
+      },
+      "variants": [],
+      "functional_requirements": [
+        "Dry sweeping, vacuuming and dust-mopping contact swaths, dust capacity and battery use.",
+        "Floor dirt changes only under a working cleaning head in contact with reachable floor."
+      ],
+      "acceptance_scenarios": [
+        "blocked_path",
+        "obstacle_and_person_avoidance",
+        "low_energy_return_to_dock",
+        "connection_loss_neutral_output",
+        "two_instance_brain_isolation",
+        "measured_cleaning_coverage",
+        "capacity_conservation",
+        "head_off_leaves_dirt_unchanged"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "keenon_c40",
+      "commercial_product_id": "keenon_c40",
+      "brand": "KEENON",
+      "name": "KLEENBOT C40",
+      "category": "wet_dry_floor_cleaner",
+      "lec_listing": true,
+      "evidence": [
+        "keenon-c40",
+        "lec-kleenbot-c40"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {
+        "body_dimensions_wdh": {
+          "value": [
+            0.578,
+            0.5,
+            0.69
+          ],
+          "unit": "m",
+          "evidence": "keenon-c40",
+          "status": "published",
+          "notes": ""
+        },
+        "mass": {
+          "value": 70,
+          "unit": "kg",
+          "evidence": "keenon-c40",
+          "status": "published",
+          "notes": ""
+        }
+      },
+      "variants": [
+        {
+          "id": "without_squeegee",
+          "dimensions_wdh_m": [
+            0.578,
+            0.5,
+            0.69
+          ],
+          "evidence": "keenon-c40"
+        },
+        {
+          "id": "with_squeegee",
+          "dimensions_wdh_m": [
+            0.616,
+            0.55,
+            0.69
+          ],
+          "evidence": "keenon-c40"
+        }
+      ],
+      "functional_requirements": [
+        "Wet/dry separation, brush contact, clean/dirty-water and dust states.",
+        "Docking, refill/drain service simulation and no-water/no-capacity interlocks."
+      ],
+      "acceptance_scenarios": [
+        "blocked_path",
+        "obstacle_and_person_avoidance",
+        "low_energy_return_to_dock",
+        "connection_loss_neutral_output",
+        "two_instance_brain_isolation",
+        "measured_cleaning_coverage",
+        "capacity_conservation",
+        "head_off_leaves_dirt_unchanged"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "botinkit_omni",
+      "commercial_product_id": "botinkit_omni",
+      "brand": "BOTINKIT",
+      "name": "OMNI",
+      "category": "automated_induction_wok",
+      "lec_listing": true,
+      "evidence": [
+        "lec-botinkit-omni-cooking-robot"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {
+        "body_dimensions_wdh": {
+          "value": [
+            0.827,
+            0.92,
+            1.769
+          ],
+          "unit": "m",
+          "evidence": "lec-botinkit-omni-cooking-robot",
+          "status": "published",
+          "notes": ""
+        },
+        "mass": {
+          "value": 180,
+          "unit": "kg",
+          "evidence": "lec-botinkit-omni-cooking-robot",
+          "status": "published",
+          "notes": ""
+        }
+      },
+      "variants": [
+        {
+          "id": "omni_01",
+          "supply": "single_phase",
+          "evidence": "lec-botinkit-omni-cooking-robot"
+        },
+        {
+          "id": "omni_02",
+          "supply": "three_phase",
+          "evidence": "lec-botinkit-omni-cooking-robot"
+        }
+      ],
+      "functional_requirements": [
+        "Fixed kitchen appliance with articulated wok tilt/rotation, lid or stirring mechanism only where documented.",
+        "Recipe-driven heating, ingredient and 13-seasoning dispensing, batch transfer, cleaning and fault states.",
+        "Use a labelled thermal/mixing state model; food chemistry and certified hygiene are outside this surrogate."
+      ],
+      "acceptance_scenarios": [
+        "recipe_batch_cycle",
+        "mass_and_energy_accounting",
+        "heater_off_cools",
+        "empty_reservoir_fault",
+        "clean_between_batches"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "cofe_robot_cafe",
+      "commercial_product_id": "cofe_robot_cafe",
+      "brand": "COFE+ / Shanghai Hi-Dolphin",
+      "name": "COFE+ Robot Café",
+      "category": "robotic_coffee_kiosk",
+      "lec_listing": true,
+      "evidence": [
+        "lec-cofe-plus-robot-cafe"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {
+        "body_dimensions_wdh": {
+          "value": [
+            1.8,
+            1.3,
+            2.18
+          ],
+          "unit": "m",
+          "evidence": "lec-cofe-plus-robot-cafe",
+          "status": "published",
+          "notes": ""
+        },
+        "mass": {
+          "value": 800,
+          "unit": "kg",
+          "evidence": "lec-cofe-plus-robot-cafe",
+          "status": "published",
+          "notes": ""
+        }
+      },
+      "variants": [],
+      "functional_requirements": [
+        "Enclosure, actual selected arm, cup/gripper contacts, coffee stations, lids and pickup window.",
+        "Order -> acquire cup -> brew/dispense -> lid -> handoff -> clean, with stocks, spills and interlocks.",
+        "Arm OEM, generation, joint count/limits and station transforms remain unknown; never substitute an xArm/UR arm and label it OEM."
+      ],
+      "acceptance_scenarios": [
+        "prepare_drink_and_handoff",
+        "cup_missing_interlock",
+        "ingredient_inventory_conservation",
+        "workspace_collision",
+        "cleaning_cycle"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "cofe_smart_bar",
+      "commercial_product_id": "cofe_smart_bar",
+      "brand": "COFE+ / Shanghai Hi-Dolphin",
+      "name": "COFE+ Smart Bar",
+      "category": "robotic_coffee_bar",
+      "lec_listing": true,
+      "evidence": [
+        "lec-rentals"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {},
+      "variants": [],
+      "functional_requirements": [
+        "Keep the rental Smart Bar distinct from the enclosed Robot Café.",
+        "Select bar footprint, arm arrangement and generation only after matching source material.",
+        "Provide an original parameterised coffee-bar surrogate while exact mechanics are unavailable."
+      ],
+      "acceptance_scenarios": [
+        "prepare_drink_and_handoff",
+        "stock_faults",
+        "workspace_collision",
+        "visible_variant_identity"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "xbot_s_pro",
+      "commercial_product_id": "xbot_s_pro",
+      "brand": "XBOT / Yingzhi (InSpace)",
+      "name": "XBOT S Pro",
+      "category": "dual_arm_robotic_barista",
+      "lec_listing": true,
+      "evidence": [
+        "lec-xbot-s-pro"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {
+        "body_dimensions_wdh": {
+          "value": null,
+          "unit": "m",
+          "evidence": "lec-xbot-s-pro",
+          "status": "conflicting",
+          "notes": "Webpage 2.200 W x 1.700 D x 2.170 H m; linked S PRO PDF 1.130 W x 1.280 D x 1.600 H m. Do not merge the two."
+        },
+        "mass": {
+          "value": null,
+          "unit": "kg",
+          "evidence": "lec-xbot-s-pro",
+          "status": "conflicting",
+          "notes": "Webpage approx. 900 kg; linked PDF 400 kg."
+        }
+      },
+      "variants": [
+        {
+          "id": "lec_webpage",
+          "dimensions_wdh_m": [
+            2.2,
+            1.7,
+            2.17
+          ],
+          "mass_kg": 900,
+          "evidence": "lec-xbot-s-pro"
+        },
+        {
+          "id": "lec_brochure",
+          "dimensions_wdh_m": [
+            1.13,
+            1.28,
+            1.6
+          ],
+          "mass_kg": 400,
+          "evidence": "brochure-xbot-s-pro"
+        }
+      ],
+      "functional_requirements": [
+        "Two articulated arms, coordinated handoff/pouring and actual physical cup/jug contact.",
+        "Espresso, milk, pour and optional foam-printing stations with conservation and cleaning states.",
+        "The exact arm OEM and kinematics are not established; use disclosed generic arms only for the surrogate tier."
+      ],
+      "acceptance_scenarios": [
+        "two_arm_collision_avoidance",
+        "cup_and_jug_handoff",
+        "pour_into_cup",
+        "drink_recipe_cycle",
+        "stock_faults"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "xbot_ic60",
+      "commercial_product_id": "xbot_ic60",
+      "brand": "XBOT / Yingzhi (InSpace)",
+      "name": "XBOT IC / XBOT-IC60",
+      "category": "robotic_ice_cream_kiosk",
+      "lec_listing": true,
+      "evidence": [
+        "lec-xbot-ic"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {
+        "body_dimensions_wdh": {
+          "value": [
+            0.9,
+            1.5,
+            2.0
+          ],
+          "unit": "m",
+          "evidence": "lec-xbot-ic",
+          "status": "published",
+          "notes": ""
+        }
+      },
+      "variants": [],
+      "functional_requirements": [
+        "Enclosure, cup supply, arm or actual cup positioning mechanism, nozzle and pickup window.",
+        "Cup -> dispense swirl -> optional topping -> handoff -> clean; fill, capacity, refrigeration and fault state model.",
+        "Vendor 0.01 mm claim is not a measured simulator or arm accuracy; do not use it as an acceptance tolerance."
+      ],
+      "acceptance_scenarios": [
+        "serve_ice_cream",
+        "cup_missing_interlock",
+        "dispensed_volume_conservation",
+        "empty_tank_fault",
+        "cleaning_cycle"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "ugot_mecanum",
+      "commercial_product_id": "ubtech_ugot",
+      "brand": "UBTECH",
+      "name": "UGOT Mecanum car",
+      "category": "four-wheel holonomic drive with passive angled rollers",
+      "lec_listing": true,
+      "evidence": [
+        "ugot-docs",
+        "lec-ugot",
+        "ugot-community"
+      ],
+      "design_status": "community_parameterised_model_available",
+      "parameters": {},
+      "variants": [],
+      "functional_requirements": [
+        "Lateral translation, longitudinal drive and yaw must arise from wheel/ground contact.",
+        "Use modular part identities, port maps, joint sensors, camera, TOF/IMU and mode-specific motor limits.",
+        "Do not infer CAD openness from an open Python SDK or assembly blueprints."
+      ],
+      "acceptance_scenarios": [
+        "four_wheel_signs",
+        "lateral_strafe",
+        "yaw_in_place",
+        "slip_and_contact",
+        "missing_sensor_fault",
+        "two_instance_brain_isolation"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack",
+      "asset_root": "assets/ugot-mecanum",
+      "asset_revision": "ef935a3f22a179ae815e1d0c5108a082de1d0432",
+      "variant_note": "Community estimated body, not measured OEM geometry. Keep 36 passive roller joints separate from four driven joints."
+    },
+    {
+      "id": "ugot_quadruped",
+      "commercial_product_id": "ubtech_ugot",
+      "brand": "UBTECH",
+      "name": "UGOT Quadruped",
+      "category": "four-legged articulated robot",
+      "lec_listing": true,
+      "evidence": [
+        "ugot-docs",
+        "lec-ugot"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {},
+      "variants": [],
+      "functional_requirements": [
+        "Use the actual UGOT limb/servo layout; it is not a scaled Unitree or Freenove.",
+        "Use modular part identities, port maps, joint sensors, camera, TOF/IMU and mode-specific motor limits.",
+        "Do not infer CAD openness from an open Python SDK or assembly blueprints."
+      ],
+      "acceptance_scenarios": [
+        "stand",
+        "walk",
+        "turn",
+        "foot_contact",
+        "disturbance_recovery",
+        "missing_sensor_fault",
+        "two_instance_brain_isolation"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "ugot_spider",
+      "commercial_product_id": "ubtech_ugot",
+      "brand": "UBTECH",
+      "name": "UGOT Spider",
+      "category": "four-legged spider configuration",
+      "lec_listing": true,
+      "evidence": [
+        "ugot-docs",
+        "lec-ugot"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {},
+      "variants": [],
+      "functional_requirements": [
+        "UBTECH calls this a four-legged spider; do not create an eight-legged animal or assume the same hip arrangement as the dog.",
+        "Use modular part identities, port maps, joint sensors, camera, TOF/IMU and mode-specific motor limits.",
+        "Do not infer CAD openness from an open Python SDK or assembly blueprints."
+      ],
+      "acceptance_scenarios": [
+        "stand",
+        "walk",
+        "turn",
+        "pose_change",
+        "missing_sensor_fault",
+        "two_instance_brain_isolation"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "ugot_balance",
+      "commercial_product_id": "ubtech_ugot",
+      "brand": "UBTECH",
+      "name": "UGOT Self-balancing car",
+      "category": "two-wheel inverted pendulum",
+      "lec_listing": true,
+      "evidence": [
+        "ugot-docs",
+        "lec-ugot"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {},
+      "variants": [],
+      "functional_requirements": [
+        "Balance must come from torque, gravity and sensed tilt; no frozen pitch or invisible support.",
+        "Use modular part identities, port maps, joint sensors, camera, TOF/IMU and mode-specific motor limits.",
+        "Do not infer CAD openness from an open Python SDK or assembly blueprints."
+      ],
+      "acceptance_scenarios": [
+        "balance",
+        "disturbance_recovery",
+        "forward_motion",
+        "controlled_stop",
+        "missing_sensor_fault",
+        "two_instance_brain_isolation"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "ugot_wheelleg",
+      "commercial_product_id": "ubtech_ugot",
+      "brand": "UBTECH",
+      "name": "UGOT Wheeled and legged robot",
+      "category": "two-legged wheel-supported balancing robot",
+      "lec_listing": true,
+      "evidence": [
+        "ugot-docs",
+        "lec-ugot"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {},
+      "variants": [],
+      "functional_requirements": [
+        "Jointed legs and wheels are coupled by contact dynamics; do not replace it with a four-wheel base.",
+        "Use modular part identities, port maps, joint sensors, camera, TOF/IMU and mode-specific motor limits.",
+        "Do not infer CAD openness from an open Python SDK or assembly blueprints."
+      ],
+      "acceptance_scenarios": [
+        "balance_at_two_heights",
+        "asymmetric_leg_height",
+        "drive_and_turn",
+        "missing_sensor_fault",
+        "two_instance_brain_isolation"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "ugot_engineer",
+      "commercial_product_id": "ubtech_ugot",
+      "brand": "UBTECH",
+      "name": "UGOT Engineer vehicle",
+      "category": "mobile engineering vehicle with arm/gripper",
+      "lec_listing": true,
+      "evidence": [
+        "ugot-docs",
+        "lec-ugot"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {},
+      "variants": [],
+      "functional_requirements": [
+        "Model mobile base, three controlled arm joints and gripper where verified; derive exact motor/servo IDs from the selected assembly.",
+        "Use modular part identities, port maps, joint sensors, camera, TOF/IMU and mode-specific motor limits.",
+        "Do not infer CAD openness from an open Python SDK or assembly blueprints."
+      ],
+      "acceptance_scenarios": [
+        "drive",
+        "reach",
+        "grasp",
+        "carry",
+        "release",
+        "missing_sensor_fault",
+        "two_instance_brain_isolation"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "ugot_transform",
+      "commercial_product_id": "ubtech_ugot",
+      "brand": "UBTECH",
+      "name": "UGOT Transforming car",
+      "category": "reconfigurable wheeled robot",
+      "lec_listing": true,
+      "evidence": [
+        "ugot-docs",
+        "lec-ugot"
+      ],
+      "design_status": "no_public_design_verified",
+      "parameters": {},
+      "variants": [],
+      "functional_requirements": [
+        "Model transform joints and verify clearances; changing mode does not teleport links.",
+        "Use modular part identities, port maps, joint sensors, camera, TOF/IMU and mode-specific motor limits.",
+        "Do not infer CAD openness from an open Python SDK or assembly blueprints."
+      ],
+      "acceptance_scenarios": [
+        "drive",
+        "transform",
+        "collision_free_mode_change",
+        "drive_after_transform",
+        "missing_sensor_fault",
+        "two_instance_brain_isolation"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack"
+    },
+    {
+      "id": "galbot_g1_golf",
+      "commercial_product_id": "galbot_g1",
+      "brand": "Galbot / Galaxy General Robotics",
+      "name": "Galbot G1 (official Golf description)",
+      "category": "wheeled_dual_arm_mobile_manipulator",
+      "lec_listing": true,
+      "evidence": [
+        "galbot-description",
+        "lec-rentals",
+        "galbot-platform",
+        "galbot-manual"
+      ],
+      "design_status": "official_description_available_variant_match_pending",
+      "parameters": {
+        "mass": {
+          "value": 92.5,
+          "unit": "kg",
+          "evidence": "galbot-manual",
+          "status": "published",
+          "notes": "Published body weight; exact mass of the selected description must be summed and compared, not blindly forced to this number."
+        }
+      },
+      "variants": [
+        {
+          "id": "wheeled",
+          "entry": "urdf/galbot_one_golf.urdf"
+        },
+        {
+          "id": "fixed_base",
+          "entry": "urdf/galbot_one_golf_fixed_base.urdf"
+        },
+        {
+          "id": "mjcf_planar_base",
+          "entry": "mjcf/galbot_one_golf_planar_base.xml"
+        }
+      ],
+      "functional_requirements": [
+        "Import the official wheeled-base model, torso/lift, head, arms and selected grippers with their original joint names.",
+        "Preserve mimic/passive joints, transforms, sensor extrinsics, limits, masses, inertia and mesh scale.",
+        "Match LEC G1 variant explicitly. Neither a Unitree G1 biped nor another Galbot end effector is an interchangeable model."
+      ],
+      "acceptance_scenarios": [
+        "native_import",
+        "base_forward_strafe_yaw",
+        "arm_joint_sweep",
+        "reachable_grasp_and_place",
+        "self_collision",
+        "two_instance_brain_isolation"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack",
+      "asset_root": "assets/galbot-g1-golf",
+      "asset_revision": "2d496b053f0d4e9e2688f59fac66022f447226be"
+    },
+    {
+      "id": "crow_corvus_corone",
+      "commercial_product_id": null,
+      "brand": "Biological analogue",
+      "name": "Carrion crow (Corvus corone)",
+      "category": "biological_bird",
+      "lec_listing": false,
+      "evidence": [
+        "crow-rspb",
+        "crow-bto",
+        "crow-visual-cc0",
+        "ptera"
+      ],
+      "design_status": "visual_assets_identified_biomechanics_requires_original_surrogate",
+      "parameters": {
+        "length": {
+          "value": 0.47,
+          "unit": "m",
+          "evidence": "crow-rspb",
+          "status": "selected_reference",
+          "notes": "Published species range 0.45–0.47 m; 0.47 m is the selected nominal."
+        },
+        "wingspan": {
+          "value": 0.98,
+          "unit": "m",
+          "evidence": "crow-rspb",
+          "status": "selected_reference",
+          "notes": "Published range 0.93–1.04 m; 0.98 m is a modelling choice."
+        },
+        "mass": {
+          "value": 0.51,
+          "unit": "kg",
+          "evidence": "crow-bto",
+          "status": "selected_reference",
+          "notes": "BTO summary 0.5087 kg; 0.510 kg is a rounded model baseline, not a specimen measurement."
+        },
+        "species_mass_range": {
+          "value": [
+            0.37,
+            0.65
+          ],
+          "unit": "kg",
+          "evidence": "crow-rspb",
+          "status": "published",
+          "notes": ""
+        }
+      },
+      "variants": [],
+      "functional_requirements": [
+        "Articulated wings, body, neck, beak, tail, legs, anisodactyl feet and contact-based grasping/perching.",
+        "Walk, hop, take off, powered flight, glide, bank, land, perch, feed and release objects.",
+        "Sensory projections and a trained AARNN sensorimotor controller; no claim of a measured crow connectome or complete crow cognition."
+      ],
+      "acceptance_scenarios": [
+        "joint_sweeps",
+        "unpowered_fall",
+        "glide_sink_rate",
+        "powered_takeoff",
+        "bank_and_turn",
+        "land_and_perch",
+        "walking",
+        "beak_pickup",
+        "gust_recovery",
+        "energy_fatigue",
+        "neural_silence_controls",
+        "multi_brain_isolation"
+      ],
+      "io_status": "derive_ordered_names_and_dimensions_from_selected_model_before_registration",
+      "runtime_implementation": "not_implemented_by_this_instruction_pack",
+      "proposed_io": "spec/crow-io.proposed.json"
+    }
+  ]
+}

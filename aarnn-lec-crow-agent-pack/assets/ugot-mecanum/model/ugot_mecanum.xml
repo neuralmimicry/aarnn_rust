@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mujoco model="UGOT mecanum car">
+  <compiler angle="radian" coordinate="local" inertiafromgeom="true" balanceinertia="true" />
+  <option timestep="0.002" integrator="implicitfast" solver="Newton" iterations="80" gravity="0 0 -9.81" />
+  <size njmax="4000" nconmax="1000" />
+  <default>
+    <joint armature="0.00002" damping="0.0002" />
+    <geom condim="4" solref="0.004 1" solimp="0.9 0.95 0.001" friction="0.9 0.01 0.003" />
+  </default>
+  <visual>
+    <headlight ambient="0.35 0.35 0.35" diffuse="0.8 0.8 0.8" specular="0.2 0.2 0.2" />
+    <rgba haze="0.15 0.2 0.25 1" />
+  </visual>
+  <asset>
+    <texture name="ground_tex" type="2d" builtin="checker" rgb1="0.18 0.20 0.22" rgb2="0.12 0.14 0.16" width="512" height="512" />
+    <material name="ground" texture="ground_tex" texrepeat="8 8" reflectance="0.05" />
+    <material name="ugot_blue" rgba="0.055 0.42 0.72 1" specular="0.35" shininess="0.4" />
+    <material name="dark_plastic" rgba="0.025 0.035 0.045 1" />
+    <material name="roller" rgba="0.12 0.13 0.14 1" />
+    <material name="screen" rgba="0.03 0.13 0.20 1" emission="0.15" />
+  </asset>
+  <worldbody>
+    <light pos="0 0 2" dir="0 0 -1" directional="true" />
+    <geom name="platform" type="box" pos="0 0 -0.05" size="1.25 1.25 0.05" material="ground" contype="1" conaffinity="1" />
+    <body name="base_link" pos="0 0 0.056">
+      <freejoint name="base_free" />
+      <geom name="chassis_collision" type="box" size="0.115 0.075 0.021" mass="0.72" material="ugot_blue" />
+      <geom name="controller" type="box" pos="0 0 0.047" size="0.0575 0.0425 0.026" mass="0.43" material="dark_plastic" contype="0" conaffinity="0" />
+      <geom name="screen" type="box" pos="0.0585 0 0.047" size="0.002 0.031 0.021" mass="0.001" material="screen" contype="0" conaffinity="0" />
+      <geom name="battery" type="box" pos="-0.02 0 0.006" size="0.041 0.031 0.027" mass="0.22" material="dark_plastic" contype="0" conaffinity="0" />
+      <body name="front_left_wheel" pos="0.085 0.095 0">
+        <joint name="front_left_joint" type="hinge" axis="0 1 0" damping="0.002" limited="false" />
+        <geom name="front_left_hub" type="cylinder" size="0.035 0.01368" quat="0.707106781 0.707106781 0 0" mass="0.20500000000000002" material="dark_plastic" contype="0" conaffinity="0" />
+        <body name="front_left_roller_00" pos="0.04424 0 0">
+          <joint name="front_left_roller_00_joint" type="hinge" axis="-0 0.707106781 0.707106781" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_left_roller_00_geom" type="capsule" fromto="0 -0.0113137085 -0.0113137085 -0 0.0113137085 0.0113137085" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_left_roller_01" pos="0.0338898062 0 0.0284369239">
+          <joint name="front_left_roller_01_joint" type="hinge" axis="-0.454519478 0.707106781 0.54167522" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_left_roller_01_geom" type="capsule" fromto="0.00727231164 -0.0113137085 -0.00866680353 -0.00727231164 0.0113137085 0.00866680353" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_left_roller_02" pos="0.00768219538 0 0.043567895">
+          <joint name="front_left_roller_02_joint" type="hinge" axis="-0.69636424 0.707106781 0.122787804" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_left_roller_02_geom" type="capsule" fromto="0.0111418278 -0.0113137085 -0.00196460486 -0.0111418278 0.0113137085 0.00196460486" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_left_roller_03" pos="-0.02212 0 0.0383129639">
+          <joint name="front_left_roller_03_joint" type="hinge" axis="-0.612372436 0.707106781 -0.353553391" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_left_roller_03_geom" type="capsule" fromto="0.00979795897 -0.0113137085 0.00565685425 -0.00979795897 0.0113137085 -0.00565685425" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_left_roller_04" pos="-0.0415720015 0 0.0151309711">
+          <joint name="front_left_roller_04_joint" type="hinge" axis="-0.241844763 0.707106781 -0.664463024" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_left_roller_04_geom" type="capsule" fromto="0.0038695162 -0.0113137085 0.0106314084 -0.0038695162 0.0113137085 -0.0106314084" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_left_roller_05" pos="-0.0415720015 0 -0.0151309711">
+          <joint name="front_left_roller_05_joint" type="hinge" axis="0.241844763 0.707106781 -0.664463024" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_left_roller_05_geom" type="capsule" fromto="-0.0038695162 -0.0113137085 0.0106314084 0.0038695162 0.0113137085 -0.0106314084" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_left_roller_06" pos="-0.02212 0 -0.0383129639">
+          <joint name="front_left_roller_06_joint" type="hinge" axis="0.612372436 0.707106781 -0.353553391" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_left_roller_06_geom" type="capsule" fromto="-0.00979795897 -0.0113137085 0.00565685425 0.00979795897 0.0113137085 -0.00565685425" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_left_roller_07" pos="0.00768219538 0 -0.043567895">
+          <joint name="front_left_roller_07_joint" type="hinge" axis="0.69636424 0.707106781 0.122787804" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_left_roller_07_geom" type="capsule" fromto="-0.0111418278 -0.0113137085 -0.00196460486 0.0111418278 0.0113137085 0.00196460486" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_left_roller_08" pos="0.0338898062 0 -0.0284369239">
+          <joint name="front_left_roller_08_joint" type="hinge" axis="0.454519478 0.707106781 0.54167522" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_left_roller_08_geom" type="capsule" fromto="-0.00727231164 -0.0113137085 -0.00866680353 0.00727231164 0.0113137085 0.00866680353" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+      </body>
+      <body name="front_right_wheel" pos="0.085 -0.095 0">
+        <joint name="front_right_joint" type="hinge" axis="0 1 0" damping="0.002" limited="false" />
+        <geom name="front_right_hub" type="cylinder" size="0.035 0.01368" quat="0.707106781 0.707106781 0 0" mass="0.20500000000000002" material="dark_plastic" contype="0" conaffinity="0" />
+        <body name="front_right_roller_00" pos="0.04424 0 0">
+          <joint name="front_right_roller_00_joint" type="hinge" axis="-0 -0.707106781 0.707106781" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_right_roller_00_geom" type="capsule" fromto="0 0.0113137085 -0.0113137085 -0 -0.0113137085 0.0113137085" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_right_roller_01" pos="0.0338898062 0 0.0284369239">
+          <joint name="front_right_roller_01_joint" type="hinge" axis="-0.454519478 -0.707106781 0.54167522" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_right_roller_01_geom" type="capsule" fromto="0.00727231164 0.0113137085 -0.00866680353 -0.00727231164 -0.0113137085 0.00866680353" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_right_roller_02" pos="0.00768219538 0 0.043567895">
+          <joint name="front_right_roller_02_joint" type="hinge" axis="-0.69636424 -0.707106781 0.122787804" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_right_roller_02_geom" type="capsule" fromto="0.0111418278 0.0113137085 -0.00196460486 -0.0111418278 -0.0113137085 0.00196460486" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_right_roller_03" pos="-0.02212 0 0.0383129639">
+          <joint name="front_right_roller_03_joint" type="hinge" axis="-0.612372436 -0.707106781 -0.353553391" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_right_roller_03_geom" type="capsule" fromto="0.00979795897 0.0113137085 0.00565685425 -0.00979795897 -0.0113137085 -0.00565685425" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_right_roller_04" pos="-0.0415720015 0 0.0151309711">
+          <joint name="front_right_roller_04_joint" type="hinge" axis="-0.241844763 -0.707106781 -0.664463024" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_right_roller_04_geom" type="capsule" fromto="0.0038695162 0.0113137085 0.0106314084 -0.0038695162 -0.0113137085 -0.0106314084" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_right_roller_05" pos="-0.0415720015 0 -0.0151309711">
+          <joint name="front_right_roller_05_joint" type="hinge" axis="0.241844763 -0.707106781 -0.664463024" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_right_roller_05_geom" type="capsule" fromto="-0.0038695162 0.0113137085 0.0106314084 0.0038695162 -0.0113137085 -0.0106314084" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_right_roller_06" pos="-0.02212 0 -0.0383129639">
+          <joint name="front_right_roller_06_joint" type="hinge" axis="0.612372436 -0.707106781 -0.353553391" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_right_roller_06_geom" type="capsule" fromto="-0.00979795897 0.0113137085 0.00565685425 0.00979795897 -0.0113137085 -0.00565685425" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_right_roller_07" pos="0.00768219538 0 -0.043567895">
+          <joint name="front_right_roller_07_joint" type="hinge" axis="0.69636424 -0.707106781 0.122787804" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_right_roller_07_geom" type="capsule" fromto="-0.0111418278 0.0113137085 -0.00196460486 0.0111418278 -0.0113137085 0.00196460486" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="front_right_roller_08" pos="0.0338898062 0 -0.0284369239">
+          <joint name="front_right_roller_08_joint" type="hinge" axis="0.454519478 -0.707106781 0.54167522" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="front_right_roller_08_geom" type="capsule" fromto="-0.00727231164 0.0113137085 -0.00866680353 0.00727231164 -0.0113137085 0.00866680353" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+      </body>
+      <body name="rear_left_wheel" pos="-0.085 0.095 0">
+        <joint name="rear_left_joint" type="hinge" axis="0 1 0" damping="0.002" limited="false" />
+        <geom name="rear_left_hub" type="cylinder" size="0.035 0.01368" quat="0.707106781 0.707106781 0 0" mass="0.20500000000000002" material="dark_plastic" contype="0" conaffinity="0" />
+        <body name="rear_left_roller_00" pos="0.04424 0 0">
+          <joint name="rear_left_roller_00_joint" type="hinge" axis="-0 -0.707106781 0.707106781" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_left_roller_00_geom" type="capsule" fromto="0 0.0113137085 -0.0113137085 -0 -0.0113137085 0.0113137085" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_left_roller_01" pos="0.0338898062 0 0.0284369239">
+          <joint name="rear_left_roller_01_joint" type="hinge" axis="-0.454519478 -0.707106781 0.54167522" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_left_roller_01_geom" type="capsule" fromto="0.00727231164 0.0113137085 -0.00866680353 -0.00727231164 -0.0113137085 0.00866680353" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_left_roller_02" pos="0.00768219538 0 0.043567895">
+          <joint name="rear_left_roller_02_joint" type="hinge" axis="-0.69636424 -0.707106781 0.122787804" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_left_roller_02_geom" type="capsule" fromto="0.0111418278 0.0113137085 -0.00196460486 -0.0111418278 -0.0113137085 0.00196460486" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_left_roller_03" pos="-0.02212 0 0.0383129639">
+          <joint name="rear_left_roller_03_joint" type="hinge" axis="-0.612372436 -0.707106781 -0.353553391" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_left_roller_03_geom" type="capsule" fromto="0.00979795897 0.0113137085 0.00565685425 -0.00979795897 -0.0113137085 -0.00565685425" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_left_roller_04" pos="-0.0415720015 0 0.0151309711">
+          <joint name="rear_left_roller_04_joint" type="hinge" axis="-0.241844763 -0.707106781 -0.664463024" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_left_roller_04_geom" type="capsule" fromto="0.0038695162 0.0113137085 0.0106314084 -0.0038695162 -0.0113137085 -0.0106314084" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_left_roller_05" pos="-0.0415720015 0 -0.0151309711">
+          <joint name="rear_left_roller_05_joint" type="hinge" axis="0.241844763 -0.707106781 -0.664463024" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_left_roller_05_geom" type="capsule" fromto="-0.0038695162 0.0113137085 0.0106314084 0.0038695162 -0.0113137085 -0.0106314084" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_left_roller_06" pos="-0.02212 0 -0.0383129639">
+          <joint name="rear_left_roller_06_joint" type="hinge" axis="0.612372436 -0.707106781 -0.353553391" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_left_roller_06_geom" type="capsule" fromto="-0.00979795897 0.0113137085 0.00565685425 0.00979795897 -0.0113137085 -0.00565685425" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_left_roller_07" pos="0.00768219538 0 -0.043567895">
+          <joint name="rear_left_roller_07_joint" type="hinge" axis="0.69636424 -0.707106781 0.122787804" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_left_roller_07_geom" type="capsule" fromto="-0.0111418278 0.0113137085 -0.00196460486 0.0111418278 -0.0113137085 0.00196460486" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_left_roller_08" pos="0.0338898062 0 -0.0284369239">
+          <joint name="rear_left_roller_08_joint" type="hinge" axis="0.454519478 -0.707106781 0.54167522" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_left_roller_08_geom" type="capsule" fromto="-0.00727231164 0.0113137085 -0.00866680353 0.00727231164 -0.0113137085 0.00866680353" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+      </body>
+      <body name="rear_right_wheel" pos="-0.085 -0.095 0">
+        <joint name="rear_right_joint" type="hinge" axis="0 1 0" damping="0.002" limited="false" />
+        <geom name="rear_right_hub" type="cylinder" size="0.035 0.01368" quat="0.707106781 0.707106781 0 0" mass="0.20500000000000002" material="dark_plastic" contype="0" conaffinity="0" />
+        <body name="rear_right_roller_00" pos="0.04424 0 0">
+          <joint name="rear_right_roller_00_joint" type="hinge" axis="-0 0.707106781 0.707106781" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_right_roller_00_geom" type="capsule" fromto="0 -0.0113137085 -0.0113137085 -0 0.0113137085 0.0113137085" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_right_roller_01" pos="0.0338898062 0 0.0284369239">
+          <joint name="rear_right_roller_01_joint" type="hinge" axis="-0.454519478 0.707106781 0.54167522" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_right_roller_01_geom" type="capsule" fromto="0.00727231164 -0.0113137085 -0.00866680353 -0.00727231164 0.0113137085 0.00866680353" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_right_roller_02" pos="0.00768219538 0 0.043567895">
+          <joint name="rear_right_roller_02_joint" type="hinge" axis="-0.69636424 0.707106781 0.122787804" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_right_roller_02_geom" type="capsule" fromto="0.0111418278 -0.0113137085 -0.00196460486 -0.0111418278 0.0113137085 0.00196460486" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_right_roller_03" pos="-0.02212 0 0.0383129639">
+          <joint name="rear_right_roller_03_joint" type="hinge" axis="-0.612372436 0.707106781 -0.353553391" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_right_roller_03_geom" type="capsule" fromto="0.00979795897 -0.0113137085 0.00565685425 -0.00979795897 0.0113137085 -0.00565685425" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_right_roller_04" pos="-0.0415720015 0 0.0151309711">
+          <joint name="rear_right_roller_04_joint" type="hinge" axis="-0.241844763 0.707106781 -0.664463024" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_right_roller_04_geom" type="capsule" fromto="0.0038695162 -0.0113137085 0.0106314084 -0.0038695162 0.0113137085 -0.0106314084" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_right_roller_05" pos="-0.0415720015 0 -0.0151309711">
+          <joint name="rear_right_roller_05_joint" type="hinge" axis="0.241844763 0.707106781 -0.664463024" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_right_roller_05_geom" type="capsule" fromto="-0.0038695162 -0.0113137085 0.0106314084 0.0038695162 0.0113137085 -0.0106314084" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_right_roller_06" pos="-0.02212 0 -0.0383129639">
+          <joint name="rear_right_roller_06_joint" type="hinge" axis="0.612372436 0.707106781 -0.353553391" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_right_roller_06_geom" type="capsule" fromto="-0.00979795897 -0.0113137085 0.00565685425 0.00979795897 0.0113137085 -0.00565685425" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_right_roller_07" pos="0.00768219538 0 -0.043567895">
+          <joint name="rear_right_roller_07_joint" type="hinge" axis="0.69636424 0.707106781 0.122787804" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_right_roller_07_geom" type="capsule" fromto="-0.0111418278 -0.0113137085 -0.00196460486 0.0111418278 0.0113137085 0.00196460486" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+        <body name="rear_right_roller_08" pos="0.0338898062 0 -0.0284369239">
+          <joint name="rear_right_roller_08_joint" type="hinge" axis="0.454519478 0.707106781 0.54167522" limited="false" damping="0.00004" armature="0.000001" />
+          <geom name="rear_right_roller_08_geom" type="capsule" fromto="-0.00727231164 -0.0113137085 -0.00866680353 0.00727231164 0.0113137085 0.00866680353" size="0.008" mass="0.01" material="roller" friction="0.9 0.01 0.003" />
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="front_left_motor" joint="front_left_joint" gear="0.196133" ctrllimited="true" ctrlrange="-1 1" />
+    <motor name="front_right_motor" joint="front_right_joint" gear="0.196133" ctrllimited="true" ctrlrange="-1 1" />
+    <motor name="rear_left_motor" joint="rear_left_joint" gear="0.196133" ctrllimited="true" ctrlrange="-1 1" />
+    <motor name="rear_right_motor" joint="rear_right_joint" gear="0.196133" ctrllimited="true" ctrlrange="-1 1" />
+  </actuator>
+  <sensor>
+    <framepos name="base_position" objtype="body" objname="base_link" />
+    <framequat name="base_orientation" objtype="body" objname="base_link" />
+    <jointpos name="front_left_position" joint="front_left_joint" />
+    <jointvel name="front_left_velocity" joint="front_left_joint" />
+    <jointpos name="front_right_position" joint="front_right_joint" />
+    <jointvel name="front_right_velocity" joint="front_right_joint" />
+    <jointpos name="rear_left_position" joint="rear_left_joint" />
+    <jointvel name="rear_left_velocity" joint="rear_left_joint" />
+    <jointpos name="rear_right_position" joint="rear_right_joint" />
+    <jointvel name="rear_right_velocity" joint="rear_right_joint" />
+  </sensor>
+  <keyframe>
+    <key name="home" qpos="0 0 0.056 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0" />
+  </keyframe>
+</mujoco>

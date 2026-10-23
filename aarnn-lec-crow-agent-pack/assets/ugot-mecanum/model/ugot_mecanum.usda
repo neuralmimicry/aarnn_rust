@@ -1,0 +1,128 @@
+#usda 1.0
+(
+    defaultPrim = "UGOTMecanum"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "UGOTMecanum" (
+    prepend apiSchemas = ["PhysicsArticulationRootAPI"]
+)
+{
+    def Xform "base_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double physics:mass = 1.3699999999999999
+        double3 xformOp:translate = (0, 0, 0.056)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "chassis" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double3 xformOp:scale = (0.23, 0.15, 0.042)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            color3f[] primvars:displayColor = [(0.055, 0.42, 0.72)]
+        }
+    }
+    def Xform "front_left_wheel" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double physics:mass = 0.29500000000000004
+        double3 xformOp:translate = (0.085, 0.095, 0.056)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            token axis = "Y"
+            double radius = 0.05
+            double height = 0.036
+            color3f[] primvars:displayColor = [(0.04, 0.05, 0.06)]
+        }
+    }
+    def PhysicsRevoluteJoint "front_left_joint"
+    {
+        uniform token physics:axis = "Y"
+        rel physics:body0 = </UGOTMecanum/base_link>
+        rel physics:body1 = </UGOTMecanum/front_left_wheel>
+        float drive:angular:physics:maxForce = 0.196133
+        float drive:angular:physics:maxVelocity = 2160.0
+    }
+    def Xform "front_right_wheel" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double physics:mass = 0.29500000000000004
+        double3 xformOp:translate = (0.085, -0.095, 0.056)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            token axis = "Y"
+            double radius = 0.05
+            double height = 0.036
+            color3f[] primvars:displayColor = [(0.04, 0.05, 0.06)]
+        }
+    }
+    def PhysicsRevoluteJoint "front_right_joint"
+    {
+        uniform token physics:axis = "Y"
+        rel physics:body0 = </UGOTMecanum/base_link>
+        rel physics:body1 = </UGOTMecanum/front_right_wheel>
+        float drive:angular:physics:maxForce = 0.196133
+        float drive:angular:physics:maxVelocity = 2160.0
+    }
+    def Xform "rear_left_wheel" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double physics:mass = 0.29500000000000004
+        double3 xformOp:translate = (-0.085, 0.095, 0.056)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            token axis = "Y"
+            double radius = 0.05
+            double height = 0.036
+            color3f[] primvars:displayColor = [(0.04, 0.05, 0.06)]
+        }
+    }
+    def PhysicsRevoluteJoint "rear_left_joint"
+    {
+        uniform token physics:axis = "Y"
+        rel physics:body0 = </UGOTMecanum/base_link>
+        rel physics:body1 = </UGOTMecanum/rear_left_wheel>
+        float drive:angular:physics:maxForce = 0.196133
+        float drive:angular:physics:maxVelocity = 2160.0
+    }
+    def Xform "rear_right_wheel" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        double physics:mass = 0.29500000000000004
+        double3 xformOp:translate = (-0.085, -0.095, 0.056)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cylinder "collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            token axis = "Y"
+            double radius = 0.05
+            double height = 0.036
+            color3f[] primvars:displayColor = [(0.04, 0.05, 0.06)]
+        }
+    }
+    def PhysicsRevoluteJoint "rear_right_joint"
+    {
+        uniform token physics:axis = "Y"
+        rel physics:body0 = </UGOTMecanum/base_link>
+        rel physics:body1 = </UGOTMecanum/rear_right_wheel>
+        float drive:angular:physics:maxForce = 0.196133
+        float drive:angular:physics:maxVelocity = 2160.0
+    }
+}

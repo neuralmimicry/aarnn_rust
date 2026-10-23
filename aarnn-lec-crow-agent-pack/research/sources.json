@@ -1,0 +1,513 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "lec-home",
+      "url": "https://www.lecrobotics.ai/#products-section",
+      "title": "LEC Robotics product catalogue",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "lec-rentals",
+      "url": "https://www.lecrobotics.ai/rentals",
+      "title": "LEC Robotics rental line-up",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Adds Galbot G1, Dinerbot T11 and COFE+ Smart Bar to the 12 catalogue families."
+    },
+    {
+      "id": "lec-downloads",
+      "url": "https://www.lecrobotics.ai/download-center",
+      "title": "LEC download centre",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "lec-botinkit-omni-cooking-robot",
+      "url": "https://www.lecrobotics.ai/products/botinkit-omni-cooking-robot",
+      "title": "botinkit omni cooking robot",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "brochure-botinkit-omni-cooking-robot",
+      "url": "https://cdn.prod.website-files.com/6a20051eaff93cc35362905a/6ad14e740e21d4cf26022464_BotInKit_Omni_Brochure.pdf",
+      "title": "LEC brochure: botinkit-omni-cooking-robot",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Specification/reference document, not a mechanical design package. Not redistributed in this pack.",
+      "sha256": "e9caacfaaa099e2daa442b9358a73e9a9a1a45615f9c127a9d96d0494278b649"
+    },
+    {
+      "id": "lec-butlerbot-w3",
+      "url": "https://www.lecrobotics.ai/products/butlerbot-w3",
+      "title": "butlerbot w3",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "brochure-butlerbot-w3",
+      "url": "https://cdn.prod.website-files.com/6a20051eaff93cc35362905a/6a22925e43b5db28305d1b23_LEC%20Butlerbot%20W3%20Spec%20Sheet.pdf",
+      "title": "LEC brochure: butlerbot-w3",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Specification/reference document, not a mechanical design package. Not redistributed in this pack.",
+      "sha256": "beeeb8a372550cc1bb0455ef714e9bc75c34df0793fe5bb57d6360a15b0730dc"
+    },
+    {
+      "id": "lec-cofe-plus-robot-cafe",
+      "url": "https://www.lecrobotics.ai/products/cofe-plus-robot-cafe",
+      "title": "cofe plus robot cafe",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "brochure-cofe-plus-robot-cafe",
+      "url": "https://cdn.prod.website-files.com/6a20051eaff93cc35362905a/6acea8ccf852228b793e8a8d_COFE_Plus_Robot_Cafe_Brochure.pdf",
+      "title": "LEC brochure: cofe-plus-robot-cafe",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Specification/reference document, not a mechanical design package. Not redistributed in this pack.",
+      "sha256": "09722a94fe8ea3cf46da741e953e5742a66f81c582c5b399ac90a660d73fd29b"
+    },
+    {
+      "id": "lec-courier-s100",
+      "url": "https://www.lecrobotics.ai/products/courier-s100",
+      "title": "courier s100",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "brochure-courier-s100",
+      "url": "https://cdn.prod.website-files.com/6a20051eaff93cc35362905a/6a2292b11fde4369e8b88c61_LEC%20Courier%20S100%20Spec%20Sheet.pdf",
+      "title": "LEC brochure: courier-s100",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Specification/reference document, not a mechanical design package. Not redistributed in this pack.",
+      "sha256": "978c89512de323a7e6ca3eb608b088eb521bd03b4f0b3fc0a5d091264d316fb8"
+    },
+    {
+      "id": "lec-dinerbot-t10",
+      "url": "https://www.lecrobotics.ai/products/dinerbot-t10",
+      "title": "dinerbot t10",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "brochure-dinerbot-t10",
+      "url": "https://cdn.prod.website-files.com/6a20051eaff93cc35362905a/6a229307ac93e535a0880f9e_LEC%20Dinerbot%20T10%20Spec%20Sheet.pdf",
+      "title": "LEC brochure: dinerbot-t10",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Specification/reference document, not a mechanical design package. Not redistributed in this pack.",
+      "sha256": "0b6c5414fdb646d6ddf0614f7e72645096640a6e6b86bfe4bf1272aa5d6eaa44"
+    },
+    {
+      "id": "lec-dinerbot-t8",
+      "url": "https://www.lecrobotics.ai/products/dinerbot-t8",
+      "title": "dinerbot t8",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "brochure-dinerbot-t8",
+      "url": "https://cdn.prod.website-files.com/6a20051eaff93cc35362905a/6a229279caaac0f33b14be83_LEC%20Dinerbot%20T8%20Spec%20Sheet.pdf",
+      "title": "LEC brochure: dinerbot-t8",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Specification/reference document, not a mechanical design package. Not redistributed in this pack.",
+      "sha256": "ab23b08b41d1b4cb0c19f8b06e640152ed974ea4874b7bcc02455e1adfcabd40"
+    },
+    {
+      "id": "lec-dinerbot-t9",
+      "url": "https://www.lecrobotics.ai/products/dinerbot-t9",
+      "title": "dinerbot t9",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "brochure-dinerbot-t9",
+      "url": "https://cdn.prod.website-files.com/6a20051eaff93cc35362905a/6a2292a02507d96ac808149e_LEC%20Dinerbot%20T9%20Spec%20Sheet%201.pdf",
+      "title": "LEC brochure: dinerbot-t9",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Specification/reference document, not a mechanical design package. Not redistributed in this pack.",
+      "sha256": "2b3df26740cbb731ea30f808a2039a71907ea8981cde38c2b9304be99c5941e8"
+    },
+    {
+      "id": "lec-kleenbot-c30",
+      "url": "https://www.lecrobotics.ai/products/kleenbot-c30",
+      "title": "kleenbot c30",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "brochure-kleenbot-c30",
+      "url": "https://cdn.prod.website-files.com/6a20051eaff93cc35362905a/6a22935e6235ed4af0fbada4_LEC%20Kleenbot%20C30%20Spec%20Sheet%201.pdf",
+      "title": "LEC brochure: kleenbot-c30",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Specification/reference document, not a mechanical design package. Not redistributed in this pack.",
+      "sha256": "e2b934c1b478a1ed9c0ac384c6a6b0490995e5d30e05912f34887ff02d78112b"
+    },
+    {
+      "id": "lec-kleenbot-c40",
+      "url": "https://www.lecrobotics.ai/products/kleenbot-c40",
+      "title": "kleenbot c40",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "brochure-kleenbot-c40",
+      "url": "https://cdn.prod.website-files.com/6a20051eaff93cc35362905a/6a22937f55430c4ee9419f18_LEC%20Kleenbot%20C40%20Spec%20Sheet%20(1).pdf",
+      "title": "LEC brochure: kleenbot-c40",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Specification/reference document, not a mechanical design package. Not redistributed in this pack.",
+      "sha256": "9aa4aca7735da68bf9583ae84e185fa4cab85c05d74a2f87216dcad46cc4568f"
+    },
+    {
+      "id": "lec-ugot",
+      "url": "https://www.lecrobotics.ai/products/ugot",
+      "title": "ugot",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "brochure-ugot",
+      "url": "https://cdn.prod.website-files.com/6a20051eaff93cc35362905a/6a2293ba2e63bc69223a9897_LEC%20UGOT%20Spec%20Sheet.pdf",
+      "title": "LEC brochure: ugot",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Specification/reference document, not a mechanical design package. Not redistributed in this pack.",
+      "sha256": "284802835ba4ce278bcb510e0d861950bc0b7a294ad071f3e39496b001157800"
+    },
+    {
+      "id": "lec-xbot-ic",
+      "url": "https://www.lecrobotics.ai/products/xbot-ic",
+      "title": "xbot ic",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "brochure-xbot-ic",
+      "url": "https://cdn.prod.website-files.com/6a20051eaff93cc35362905a/6a2293dcb495fe353050ff8b_LEC%20XBOT%20IC60%20Spec%20Sheet.pdf",
+      "title": "LEC brochure: xbot-ic",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Specification/reference document, not a mechanical design package. Not redistributed in this pack.",
+      "sha256": "0d6fff20afc14386ae767b60b100c64cc4c782e2fa9af6f9d20aaa4b3fd8f3f2"
+    },
+    {
+      "id": "lec-xbot-s-pro",
+      "url": "https://www.lecrobotics.ai/products/xbot-s-pro",
+      "title": "xbot s pro",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "brochure-xbot-s-pro",
+      "url": "https://cdn.prod.website-files.com/6a20051eaff93cc35362905a/6a2294051fde4369e8b9742f_LEC%20XBOT%20S%20PRO%20Spec%20Sheet%20(1).pdf",
+      "title": "LEC brochure: xbot-s-pro",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Specification/reference document, not a mechanical design package. Not redistributed in this pack.",
+      "sha256": "5a8afc8622c47c5f35e8a5e1041da955506aae3ccdd5814f0775277115c506c4"
+    },
+    {
+      "id": "keenon-t8",
+      "url": "https://www.keenon.com/en/product/T8",
+      "title": "KEENON T8",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "keenon-t9",
+      "url": "https://www.keenon.com/en/product/T9",
+      "title": "KEENON T9",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "keenon-t10",
+      "url": "https://www.keenon.com/en/product/T10",
+      "title": "KEENON T10",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "keenon-t11",
+      "url": "https://www.keenon.com/en/product/T11",
+      "title": "KEENON T11",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "keenon-w3",
+      "url": "https://www.keenon.com/en/product/W3",
+      "title": "KEENON W3",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "keenon-s100",
+      "url": "https://www.keenon.com/en/product/S100",
+      "title": "KEENON S100",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "keenon-c30",
+      "url": "https://www.keenon.com/en/product/C30",
+      "title": "KEENON C30",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "keenon-c40",
+      "url": "https://www.keenon.com/en/product/C40",
+      "title": "KEENON C40",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "keenon-docs",
+      "url": "https://doc.keenonrobot.com/dashboard/en/search",
+      "title": "KEENON official document centre",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Public operation/support documentation is not evidence of open CAD or low-level motor access."
+    },
+    {
+      "id": "ugot-docs",
+      "url": "https://docs.ubtrobot.com/ugot/",
+      "title": "UBTECH UGOT manual and SDK",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "ugot-motion",
+      "url": "https://docs.ubtrobot.com/ugot/#/zn-cn/extension/python_sdk/model",
+      "title": "UBTECH UGOT motion API",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "ugot-sensors",
+      "url": "https://docs.ubtrobot.com/ugot/#/zn-cn/extension/python_sdk/sensor",
+      "title": "UBTECH UGOT sensor API",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "ugot-ros",
+      "url": "https://docs.ubtrobot.com/ugot/zn-cn/ros/UGOT-ROS%E5%BC%80%E5%8F%91%E8%80%85%E6%96%87%E6%A1%A3.html",
+      "title": "UBTECH UGOT ROS developer guide",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "ROS Kinetic/container integration documentation; no URDF/mesh package identified in the inspected guide."
+    },
+    {
+      "id": "ugot-pypi",
+      "url": "https://pypi.org/project/ugot/0.2.13/",
+      "title": "UGOT Python SDK 0.2.13",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "MIT; official author address at ubtrobot.com. Software API, not CAD."
+    },
+    {
+      "id": "ugot-community",
+      "url": "https://github.com/dnorton94/ugot-robot-robomasters/tree/ef935a3f22a179ae815e1d0c5108a082de1d0432",
+      "title": "Community UGOT mecanum model",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "MIT; parameterised first-pass approximation with explicit estimates. Not official UBTECH CAD."
+    },
+    {
+      "id": "xbot-owner",
+      "url": "https://www.x-bot.uk/",
+      "title": "XBOT UK distribution site",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Identifies XBOT as a trademark of Beijing Yingzhi (inSpace) Technology and LEC as distributor."
+    },
+    {
+      "id": "xbot-maker",
+      "url": "https://www.aixbot.com/about",
+      "title": "XBOT / InSpace manufacturer site",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "xbot-tech",
+      "url": "https://www.aixbot.com/technology",
+      "title": "XBOT motion/vision overview",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Describes two six-axis arms; does not establish exact LEC model joint parameters or an OEM arm model."
+    },
+    {
+      "id": "cofe-maker",
+      "url": "https://hi-dolphin.com/about-us/",
+      "title": "Shanghai Hi-Dolphin / COFE+ manufacturer",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "cofe-bar",
+      "url": "https://hi-dolphin.com/robot-coffee-bar/",
+      "title": "COFE+ robot coffee bar",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "A manufacturer product family. Exact match between its current generation and LEC Smart Bar is not established."
+    },
+    {
+      "id": "galbot-platform",
+      "url": "https://developer.galbot.com/platform/",
+      "title": "Galbot official developer platform",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Directly links the G1 description to GalaxyGeneralRobotics/galbot_one_golf_description."
+    },
+    {
+      "id": "galbot-description",
+      "url": "https://github.com/GalaxyGeneralRobotics/galbot_one_golf_description/tree/2d496b053f0d4e9e2688f59fac66022f447226be",
+      "title": "Official Galbot One Golf description",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Apache-2.0; URDF, MJCF, USD, meshes and source Xacro. LEC G1 physical variant still requires matching."
+    },
+    {
+      "id": "galbot-manual",
+      "url": "https://developer.galbot.com/docs/g1/2.2.4/en/g1/",
+      "title": "Galbot G1 quick start and specifications",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "G1 is a wheeled mobile manipulator; do not substitute a Unitree biped because both use G1 in their names."
+    },
+    {
+      "id": "galbot-sdk",
+      "url": "https://github.com/GalaxyGeneralRobotics/GalbotSDK",
+      "title": "Galbot SDK",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Optional future hardware reference. No hardware connection is made by this pack."
+    },
+    {
+      "id": "crow-bto",
+      "url": "https://www.bto.org/learn/about-birds/birdfacts/carrion-crow",
+      "title": "BTO carrion crow",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Species Corvus corone; BTO summary weight 508.7 g."
+    },
+    {
+      "id": "crow-rspb",
+      "url": "https://www.rspb.org.uk/birds-and-wildlife/identifying-birds/corvids-how-to-identify-the-crow-family",
+      "title": "RSPB corvid identification",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Carrion crow length 45–47 cm, wingspan 93–104 cm, mass 370–650 g."
+    },
+    {
+      "id": "crow-visual-cc0",
+      "url": "https://blendswap.com/blend/7340",
+      "title": "Low Poly Crow - Rigged, Nodelete",
+      "source_kind": "asset_author",
+      "accessed": "2026-10-23",
+      "notes": "CC0 Blender visual/rig asset. Download page requires sign-in; bytes are not bundled. Animation rig is not a physical skeleton."
+    },
+    {
+      "id": "crow-visual-ccby",
+      "url": "https://sketchfab.com/3d-models/crow-d5a9b0df4da3493688b63ce42c8a83e2",
+      "title": "Crow, Alexei Ostapenko",
+      "source_kind": "asset_author",
+      "accessed": "2026-10-23",
+      "notes": "CC Attribution visual model; optional alternative, not a biomechanical model; not downloaded."
+    },
+    {
+      "id": "ptera",
+      "url": "https://github.com/camUrban/PteraSoftware/tree/0fec89188372e688901473cadd7ae68a49f60d95",
+      "title": "PteraSoftware",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "MIT flapping-wing aerodynamic analysis software. Optional offline reference; not crow CAD, a crow connectome or an installed AARNN backend."
+    },
+    {
+      "id": "bird-sim",
+      "url": "https://github.com/Milkomedia/BIRD_SIM",
+      "title": "Bird-like MuJoCo simulation",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Reference lead only. No licence file or GitHub-recognised licence found at c5d5c3c123c0d648bed07205a5985725f8e07217. Do not vendor/port its code or meshes without permission; not a crow model."
+    },
+    {
+      "id": "aarnn",
+      "url": "https://github.com/neuralmimicry/aarnn_rust/tree/a02c9c43089b5cb488094b50124d034ae51b4ca3",
+      "title": "AARNN source snapshot",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Read-only source inspection; user local checkout was not accessible in this environment."
+    },
+    {
+      "id": "mujoco-python",
+      "url": "https://mujoco.readthedocs.io/en/stable/python.html",
+      "title": "MuJoCo official Python bindings and viewer documentation",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "mujoco-stepping",
+      "url": "https://mujoco.readthedocs.io/en/stable/programming/simulation.html",
+      "title": "MuJoCo simulation pipeline",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    },
+    {
+      "id": "isaac-importers",
+      "url": "https://docs.isaacsim.omniverse.nvidia.com/latest/py/index.html",
+      "title": "NVIDIA Isaac Sim extension APIs",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": "Version must be resolved and pinned during local discovery; URDF/MJCF import is not proof of an AARNN bridge."
+    },
+    {
+      "id": "isaac-requirements",
+      "url": "https://docs.isaacsim.omniverse.nvidia.com/latest/installation/requirements.html",
+      "title": "NVIDIA Isaac Sim system requirements",
+      "source_kind": "primary",
+      "accessed": "2026-10-23",
+      "notes": ""
+    }
+  ]
+}
