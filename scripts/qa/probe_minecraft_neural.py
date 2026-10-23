@@ -81,7 +81,7 @@ def main():
             del net, prefix; gc.collect()
             backend_port, bridge_port = port(), port()
             token = secrets.token_urlsafe(32)
-            env = dict(os.environ, AARNN_MINECRAFT_TOKEN=token, RAYON_NUM_THREADS='4', NM_REALTIME_IPC='1')
+            env = dict(os.environ, AARNN_MINECRAFT_TOKEN=token, RAYON_NUM_THREADS='4', NM_REALTIME_IPC='1', NM_DISABLE_OPENCL='1')
             started = time.monotonic()
             with (output / f'{name}-rust.log').open('w') as rust_log, (output / f'{name}-bridge.log').open('w') as bridge_log:
                 rust = subprocess.Popen([str(executable), '--tcp', f'127.0.0.1:{backend_port}',

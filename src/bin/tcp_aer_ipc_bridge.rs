@@ -11,6 +11,9 @@ use tcp_aer_ipc_bridge::BridgeConfig;
 #[derive(Debug, Parser)]
 #[command(about = "Bridge length-prefixed simulator TCP/AER1 traffic to AARNN IPC")]
 struct Args {
+    /// Exact per-body local simulation contract; restricts this listener to one producer.
+    #[arg(long)]
+    embodiment_contract: Option<std::path::PathBuf>,
     /// TCP listener in HOST:PORT form.
     #[arg(long, value_parser = parse_listen)]
     listen: ListenAddress,
@@ -107,6 +110,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         timeout: Duration::from_secs_f64(args.timeout),
         ready_file: args.ready_file,
         arm_file: args.arm_file,
+        embodiment: args
+            .embodiment_contract
+            .map(|p| -> Result<_, Box<dyn std::error::Error>> {
+                Ok(serde_json::from_slice(&std::fs::read(p)?)?)
+            })
+            .transpose()?,
     };
     tcp_aer_ipc_bridge::run(config, shutdown_rx).await?;
     Ok(())

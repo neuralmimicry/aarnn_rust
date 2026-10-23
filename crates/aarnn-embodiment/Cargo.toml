@@ -1,0 +1,11 @@
+[package]
+name = "aarnn-embodiment"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+aarnn-aer-legacy = { path = "../aarnn-aer-legacy" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+sha2 = "0.10"

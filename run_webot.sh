@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Profile-based native expansion uses the shared dispatcher before legacy GPU,
+# network generation or remote lifecycle code can run.
+_aarnn_dispatch_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$_aarnn_dispatch_root/scripts/embodiment_dispatch.sh"
+aarnn_dispatch_embodiment webots all "$_aarnn_dispatch_root" "$@"
+unset _aarnn_dispatch_root
+
+
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/scripts" && pwd)/ensure_64k_hwe_nvidia.sh"
 aarnn_ensure_64k_hwe_nvidia "${AARNN_ENABLE_GPU:-false}"
 
@@ -150,6 +158,11 @@ trap cleanup EXIT
 usage() {
     cat <<'USAGE'
 Usage: ./run_webot.sh [options]
+       ./run_webot.sh --robots <profile=count,...> [native simulation options]
+       ./run_sim.sh --sim <webots|mujoco|unreal|unity|webgl|minecraft|isaacsim> ...
+
+Profile/count mode uses scripts/run_sim.sh before legacy GPU/cluster setup.
+Example: ./run_webot.sh --robots ugot_mecanum=1 --headless --steps 100 --output target/qa/webots-new
 
 Options:
   --runtime <cluster|uds>  Runtime backend (default: cluster).

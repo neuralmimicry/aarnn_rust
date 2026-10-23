@@ -24,8 +24,16 @@ sourceSets {
         runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
     }
 }
+def physicsAccessWidener = minecraftSourceProfile == '26.2' ? 'aarnn-official.accesswidener' : 'aarnn.accesswidener'
+def physicsAccessPath = file('src/main/resources/aarnn.accesswidener')
+if (minecraftSourceProfile == '26.2') {
+    physicsAccessPath = file('build/generated/physics-access/' + physicsAccessWidener)
+    physicsAccessPath.parentFile.mkdirs()
+    physicsAccessPath.text = file('src/main/resources/aarnn.accesswidener').text.replace('v2 named','v2 official')
+}
 sourceSets.main.java.srcDir("src/${minecraftSourceProfile}/java")
 loom {
+    accessWidenerPath = physicsAccessPath
     splitEnvironmentSourceSets()
     mods {
         aarnn { sourceSet sourceSets.main; sourceSet sourceSets.client }
@@ -112,13 +120,14 @@ tasks.withType(JavaCompile).configureEach {
     options.release = Integer.parseInt(project.findProperty('java_release') ?: '21')
 }
 processResources {
+    if (minecraftSourceProfile == '26.2') from(physicsAccessPath)
     inputs.property 'version', project.version
     inputs.property 'minecraft_version', minecraft_version
     inputs.property 'loader_version', loader_version
     inputs.property 'java_release', java_release
     filesMatching('fabric.mod.json') {
         expand version: project.version, minecraft_version: minecraft_version,
-            loader_version: loader_version, java_release: java_release
+            loader_version: loader_version, java_release: java_release, physics_access_widener: physicsAccessWidener
     }
 }
 test {

@@ -217,5 +217,34 @@
     draw(this.body,this.bodyCount,mul(vp,transform(robot.x,robot.z,this.profile.body_height,robot.heading,this.profile.body_length)));
     if(this.waterCount){gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);gl.uniform1f(this.opacity,.18);draw(this.water,this.waterCount,vp);gl.depthMask(true);gl.disable(gl.BLEND);}
   };
+  // Service mode consumes published body poses only. No local motion/sensing.
+  World.prototype.setAuthoritativeState=function(model,state){
+    if(this.authorityDigest!==model.digest){this.distance=Math.max(.4,(model.scene?.half_extent_m||1)*2.5);this.authorityDigest=model.digest;}
+    function rotate(q,p){var w=q[0],x=q[1],y=q[2],z=q[3],tx=2*(y*p[2]-z*p[1]),ty=2*(z*p[0]-x*p[2]),tz=2*(x*p[1]-y*p[0]);return [p[0]+w*tx+y*tz-z*ty,p[1]+w*ty+z*tx-x*tz,p[2]+w*tz+x*ty-y*tx];}
+    var poses={},vertices=[],waterVertices=[],self=this;
+    state.poses.forEach(function(p){poses[p.name]=p;});
+    model.geoms.forEach(function(g){
+      var pose=g.body?poses[model.bodies[g.body-1].name]:null;
+      if(g.body&&!pose)return;
+      var shape=g.type===0||g.type===6||g.type===7?'box':g.type===5||g.type===3?'cylinder':'sphere';
+      var size=g.half_size_m.map(function(v){return v*2;});
+      if(g.type===2)size=[size[0],size[0],size[0]];
+      if(g.type===3||g.type===5)size=[size[0],size[0],size[1]];
+      if(g.type===0){var extent=model.scene?.half_extent_m||10;size=[extent*2.4,extent*2.4,.02];}
+      var primitive={shape:shape,position:[0,0,g.type===0?-.01:0],size:size,colour:g.rgba.slice(0,3),internal:false,anchor:'root',yaw:0};
+      var parts=[primitive];
+      if(g.type===3)for(var sign of [-1,1])parts.push({...primitive,shape:'sphere',position:[0,0,sign*g.half_size_m[1]],size:[size[0],size[0],size[0]]});
+      var raw=geometry(parts,false);
+      for(var i=0;i<raw.length;i+=6){
+        var v=rotate(g.quaternion_wxyz,[raw[i],raw[i+1],raw[i+2]]).map(function(x,j){return x+g.position[j];});
+        if(pose)v=rotate(pose.quaternion_wxyz,v).map(function(x,j){return x+pose.position[j];});
+        (g.rgba[3]<.5?waterVertices:vertices).push(v[0],v[1],v[2],raw[i+3],raw[i+4],raw[i+5]);
+      }
+    });
+    Object.values(state.obstacles||{}).forEach(function(p){var raw=geometry([{shape:'box',position:p,size:[1,1,1],colour:[.45,.35,.25],internal:false,yaw:0}],false);for(var i=0;i<raw.length;i++)vertices.push(raw[i]);});
+    this.profile={body_length:1,body_height:0,kind:'authoritative',parts:[]};
+    this.sceneCount=0;this.waterCount=waterVertices.length/6;this.gl.bindBuffer(this.gl.ARRAY_BUFFER,this.water);this.gl.bufferData(this.gl.ARRAY_BUFFER,new Float32Array(waterVertices),this.gl.DYNAMIC_DRAW);this.bodyCount=vertices.length/6;this.bodyDirty=false;
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER,this.body);this.gl.bufferData(this.gl.ARRAY_BUFFER,new Float32Array(vertices),this.gl.DYNAMIC_DRAW);
+  };
   root.NmWorld={Renderer:World,sense:sense,field:field,ray:ray,geometry:geometry,motion:motion,withParticipants:withParticipants};
 })(typeof window!=='undefined'?window:globalThis);

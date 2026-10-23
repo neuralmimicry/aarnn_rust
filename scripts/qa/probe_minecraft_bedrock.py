@@ -150,7 +150,7 @@ def main():
             if not match:raise RuntimeError('Expected canonical snapshot prefix')
             net,_=json.JSONDecoder().raw_decode(prefix,match.end())
             if (net['num_sensory_neurons'],net['num_output_neurons'])!=(p.sensory,p.output):raise RuntimeError('Snapshot dimensions differ')
-            number=port();env=dict(os.environ,AARNN_MINECRAFT_TOKEN=token,RAYON_NUM_THREADS='4',NM_REALTIME_IPC='1')
+            number=port();env=dict(os.environ,AARNN_MINECRAFT_TOKEN=token,RAYON_NUM_THREADS='4',NM_REALTIME_IPC='1',NM_DISABLE_OPENCL='1')
             with (output/(name+'-rust.log')).open('w') as rust_log,(output/(name+'-bridge.log')).open('w') as bridge_log:
                 rust=subprocess.Popen([str(executable),'--tcp',f'127.0.0.1:{number}','--sensory',str(p.sensory),'--output',str(p.output),'--config',str(ROOT/p.config_rel),'--network',str(model)],cwd=output,env=env,stdout=rust_log,stderr=subprocess.STDOUT)
                 bridge=None

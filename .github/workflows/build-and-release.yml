@@ -275,7 +275,7 @@ jobs:
         if: matrix.runner_arch != 'ARM64'
         # Examples and benchmarks are compile-checked by their dedicated
         # packaging/build jobs; avoid duplicating every test harness here.
-        run: cargo clippy --workspace --all-features --lib --bins
+        run: cargo clippy --workspace --exclude aarnn-mujoco --exclude aarnn-webots --all-features --lib --bins
 
       - name: Enforce Gail image tag policy
         run: bash scripts/check_gail_image_tags.sh .

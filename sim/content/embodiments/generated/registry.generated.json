@@ -1,0 +1,424 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "id": "keenon_t8",
+      "aliases": [
+        "keenon_t8"
+      ],
+      "sensory": 19,
+      "output": 8,
+      "model": "keenon_t8.xml",
+      "record": "keenon_t8.json",
+      "config": "keenon_t8.config.json",
+      "network": "",
+      "io_digest": "23d77c7603f4ee8f9c32130a78518d2237d792215df409c126674a2d04ad1192",
+      "model_digest": "d0bb58b5e4737d95456a49b6341c6117898ce0c33a9276a9efca3c013abeadc1"
+    },
+    {
+      "id": "keenon_t9",
+      "aliases": [
+        "keenon_t9"
+      ],
+      "sensory": 19,
+      "output": 8,
+      "model": "keenon_t9.xml",
+      "record": "keenon_t9.json",
+      "config": "keenon_t9.config.json",
+      "network": "",
+      "io_digest": "0f234d26a2fa9fdd7de725ae3b0defe110906ade75d2523ed8fc260879d9c34e",
+      "model_digest": "59311889de091302abce2d64466fae03bd2cf68a733c26065aa0c3210b94328e"
+    },
+    {
+      "id": "keenon_t10",
+      "aliases": [
+        "keenon_t10"
+      ],
+      "sensory": 19,
+      "output": 8,
+      "model": "keenon_t10.xml",
+      "record": "keenon_t10.json",
+      "config": "keenon_t10.config.json",
+      "network": "",
+      "io_digest": "8ddf8654532106e8176657bcd37820329f068a27e509eb3a9fc48e8d8205895f",
+      "model_digest": "46cfe10cd3835823ac09f4f8b90488524882c42ac32519ae296a8ffb73641568"
+    },
+    {
+      "id": "keenon_t11",
+      "aliases": [
+        "keenon_t11"
+      ],
+      "sensory": 19,
+      "output": 8,
+      "model": "keenon_t11.xml",
+      "record": "keenon_t11.json",
+      "config": "keenon_t11.config.json",
+      "network": "",
+      "io_digest": "18586b90ef17ff8d0838610e21d944d65dd18321511fb8c8dba114efdaec24af",
+      "model_digest": "4b35c30344cde98cff1f47247b05a45d834738a118f2f6d3871991835d1fc8f4"
+    },
+    {
+      "id": "keenon_w3",
+      "aliases": [
+        "keenon_w3"
+      ],
+      "sensory": 23,
+      "output": 12,
+      "model": "keenon_w3.xml",
+      "record": "keenon_w3.json",
+      "config": "keenon_w3.config.json",
+      "network": "",
+      "io_digest": "c0759cf93c5db2c0f58828ac364e0c17b70a38ac6a5281e6a4ae96a4e862a1f0",
+      "model_digest": "a743889124bce049f6cb985b6bb5855d21774aec3b266f417da31d5b4e623a58"
+    },
+    {
+      "id": "keenon_s100",
+      "aliases": [
+        "keenon_s100"
+      ],
+      "sensory": 19,
+      "output": 8,
+      "model": "keenon_s100.xml",
+      "record": "keenon_s100.json",
+      "config": "keenon_s100.config.json",
+      "network": "",
+      "io_digest": "b745d2804413ec4cfa0b4bb201f2d937001e62fcae4f548d43c58edf3356855e",
+      "model_digest": "f313533ce6630382661be5a010470cd71eb938f8ea12b0715646e2e1aefe673a"
+    },
+    {
+      "id": "keenon_c30",
+      "aliases": [
+        "keenon_c30"
+      ],
+      "sensory": 21,
+      "output": 10,
+      "model": "keenon_c30.xml",
+      "record": "keenon_c30.json",
+      "config": "keenon_c30.config.json",
+      "network": "",
+      "io_digest": "98aba52a647f34f705a07994bf75bc45871481d5aef0380333b4fa136d22b5ba",
+      "model_digest": "8aeeccb29daf964db9c664e981ba844ea408abe9ae3989480561b6c89de27c42"
+    },
+    {
+      "id": "keenon_c40",
+      "aliases": [
+        "keenon_c40"
+      ],
+      "sensory": 21,
+      "output": 10,
+      "model": "keenon_c40.xml",
+      "record": "keenon_c40.json",
+      "config": "keenon_c40.config.json",
+      "network": "",
+      "io_digest": "db3ca9dcd733f68abcce87e2f8917846ca0c8176af1fe59fbbae3a6953043197",
+      "model_digest": "d1077d54f8f43a30fba493f7f826acfe9e5efa7b7f74b745fa317bd58de72c5f"
+    },
+    {
+      "id": "botinkit_omni",
+      "aliases": [
+        "botinkit_omni"
+      ],
+      "sensory": 15,
+      "output": 4,
+      "model": "botinkit_omni.xml",
+      "record": "botinkit_omni.json",
+      "config": "botinkit_omni.config.json",
+      "network": "",
+      "io_digest": "f2a398e0578bbdee6dadae26b8337a000620e8b335ff9b0f51daa975524fad23",
+      "model_digest": "8ab915bcad86dc01d6b9473a1eb07262dc0e56039dc4c3c6207d629442a71621"
+    },
+    {
+      "id": "cofe_robot_cafe",
+      "aliases": [
+        "cofe_robot_cafe"
+      ],
+      "sensory": 25,
+      "output": 14,
+      "model": "cofe_robot_cafe.xml",
+      "record": "cofe_robot_cafe.json",
+      "config": "cofe_robot_cafe.config.json",
+      "network": "",
+      "io_digest": "3e5a0f2a3ddf8e6c25b211e85bae46089e3bdbf487617096d493bd2ab07e230f",
+      "model_digest": "c53a48fd296307e7dd94ef86be82aa7d9ea81030f3f78a4731cd3f0506ba101f"
+    },
+    {
+      "id": "cofe_smart_bar",
+      "aliases": [
+        "cofe_smart_bar"
+      ],
+      "sensory": 25,
+      "output": 14,
+      "model": "cofe_smart_bar.xml",
+      "record": "cofe_smart_bar.json",
+      "config": "cofe_smart_bar.config.json",
+      "network": "",
+      "io_digest": "7da2ceb8c491db1dc4ffc382c1b32db98eb9d54790cffaaae9cac2129d25f795",
+      "model_digest": "c2adda9c9a6a3c22735c2a54624db20e2853ced653c3cff3dfc4d1ad6e5788bc"
+    },
+    {
+      "id": "xbot_s_pro",
+      "aliases": [
+        "xbot_s_pro"
+      ],
+      "sensory": 39,
+      "output": 28,
+      "model": "xbot_s_pro.xml",
+      "record": "xbot_s_pro.json",
+      "config": "xbot_s_pro.config.json",
+      "network": "",
+      "io_digest": "7dacb487ee1c1ea6583b98c3a4400dcecf855d9a3250d2a8bee38629020e1fdb",
+      "model_digest": "2c2ccd3062735fcfa1b79d919d3e44a6f87253a956110195b1f9f99e5f581502"
+    },
+    {
+      "id": "xbot_ic60",
+      "aliases": [
+        "xbot_ic60"
+      ],
+      "sensory": 25,
+      "output": 14,
+      "model": "xbot_ic60.xml",
+      "record": "xbot_ic60.json",
+      "config": "xbot_ic60.config.json",
+      "network": "",
+      "io_digest": "0bc4b71f72a91f02847dd5e2e88dc59b8385ecc2479f624b5f1575ae166b5c96",
+      "model_digest": "11b7c843b62295bad845a09f645f6feca0604a17dbdb6849f781b2c569e9aa6f"
+    },
+    {
+      "id": "ugot_mecanum",
+      "aliases": [
+        "ugot_mecanum"
+      ],
+      "sensory": 19,
+      "output": 8,
+      "model": "ugot_mecanum.xml",
+      "record": "ugot_mecanum.json",
+      "config": "ugot_mecanum.config.json",
+      "network": "",
+      "io_digest": "ce881cb857c332e8022959cf0401c51d36643bf7271a86279fc655d048a479de",
+      "model_digest": "10f2cf2da01a42db2081c25dce40802819a0a66daf33f9f81540d22901356094"
+    },
+    {
+      "id": "ugot_quadruped",
+      "aliases": [
+        "ugot_quadruped"
+      ],
+      "sensory": 35,
+      "output": 24,
+      "model": "ugot_quadruped.xml",
+      "record": "ugot_quadruped.json",
+      "config": "ugot_quadruped.config.json",
+      "network": "",
+      "io_digest": "a60b710e6cc50af65709f0293c40d9aa1eda4df05aa2249fa8bd53b4f18c4848",
+      "model_digest": "aae0c5bef04935ef228d8351ed2ff58380041c64c0e0b454855db5ad88d101ee"
+    },
+    {
+      "id": "ugot_spider",
+      "aliases": [
+        "ugot_spider"
+      ],
+      "sensory": 35,
+      "output": 24,
+      "model": "ugot_spider.xml",
+      "record": "ugot_spider.json",
+      "config": "ugot_spider.config.json",
+      "network": "",
+      "io_digest": "b17ac35575a8e454992506f797fbe3dc0380edc21aa746b3a9f461bf3ffc3952",
+      "model_digest": "0c4f1d76cb572e031a05afd9bfb5eb691c56c1045607a52f736d58fbfe2a3365"
+    },
+    {
+      "id": "ugot_balance",
+      "aliases": [
+        "ugot_balance"
+      ],
+      "sensory": 15,
+      "output": 4,
+      "model": "ugot_balance.xml",
+      "record": "ugot_balance.json",
+      "config": "ugot_balance.config.json",
+      "network": "",
+      "io_digest": "1ff69274587c023d26c45273f0360c1f0c51db30d2a9030474160e5c242288d5",
+      "model_digest": "62922d2fa46382d4a16e936548b71c14d5aed46194b2a1f2e641b7322785dc0e"
+    },
+    {
+      "id": "ugot_wheelleg",
+      "aliases": [
+        "ugot_wheelleg"
+      ],
+      "sensory": 23,
+      "output": 12,
+      "model": "ugot_wheelleg.xml",
+      "record": "ugot_wheelleg.json",
+      "config": "ugot_wheelleg.config.json",
+      "network": "",
+      "io_digest": "75f072b1cdca4c0dd0624765a53b4afff25ad23564559725ab0b13ca01c1eb94",
+      "model_digest": "b4f03e5fc2370af8fbfed91f46007c9d94fa8ef0121e6110c20e54220aebf021"
+    },
+    {
+      "id": "ugot_engineer",
+      "aliases": [
+        "ugot_engineer"
+      ],
+      "sensory": 27,
+      "output": 16,
+      "model": "ugot_engineer.xml",
+      "record": "ugot_engineer.json",
+      "config": "ugot_engineer.config.json",
+      "network": "",
+      "io_digest": "61666f3b50e5417bd6e6300c741ba96b9ec5e05392479051d36c8784685847b8",
+      "model_digest": "c47ea425ade6bc7a8e68bb075b429bd1ffcef3d487320f688689e84279142d33"
+    },
+    {
+      "id": "ugot_transform",
+      "aliases": [
+        "ugot_transform"
+      ],
+      "sensory": 23,
+      "output": 12,
+      "model": "ugot_transform.xml",
+      "record": "ugot_transform.json",
+      "config": "ugot_transform.config.json",
+      "network": "",
+      "io_digest": "7f957941002dca2dabe05e47b81514602dc9b6783952412ff1de5c75df971155",
+      "model_digest": "b38154ef73d10c57aca747d2026ffefe86379e65d29114425911445faa923540"
+    },
+    {
+      "id": "galbot_g1_golf",
+      "aliases": [
+        "galbot_g1_golf"
+      ],
+      "sensory": 65,
+      "output": 54,
+      "model": "galbot_g1_golf.xml",
+      "record": "galbot_g1_golf.json",
+      "config": "galbot_g1_golf.config.json",
+      "network": "",
+      "io_digest": "e7ec78c9180a8261316c86b76af3419b358fdc048e650e547033a1edd97230e4",
+      "model_digest": "365f3db34bfaf7bf8e3436bee070a937e697155e6f11c957ce9a56fc81457a33"
+    },
+    {
+      "id": "crow_corvus_corone",
+      "aliases": [
+        "crow_corvus_corone"
+      ],
+      "sensory": 492,
+      "output": 64,
+      "model": "crow_corvus_corone.xml",
+      "record": "crow_corvus_corone.json",
+      "config": "crow_corvus_corone.config.json",
+      "network": "",
+      "io_digest": "1109d94dd58ac7a2c4f10120511e1dd54c21b63d7bf20efd1507caf4d742699a",
+      "model_digest": "928d66dc9134ec28f4900f8fd02b640bd163b96056aacaecb1582d29ba428524"
+    },
+    {
+      "id": "celegans",
+      "aliases": [
+        "celegans",
+        "worm",
+        "worms",
+        "c_elegans"
+      ],
+      "sensory": 24,
+      "output": 96,
+      "model": "celegans.xml",
+      "record": "celegans.json",
+      "config": "celegans.config.json",
+      "network": "network_celegans.json",
+      "io_digest": "07baf3479ae1d5d5cce4bbecde7b970f29ac6cfe96a0177748def6f310784c0c",
+      "model_digest": "7687426ce736983704a1d9b1ae1d36dc57431ffebe9cab075a5ff319444632a6"
+    },
+    {
+      "id": "drosophila_banc",
+      "aliases": [
+        "drosophila",
+        "fly",
+        "flies",
+        "fruitfly",
+        "fruitflies",
+        "drosophila_banc",
+        "banc_drosophila",
+        "drosophila_banc_v626",
+        "banc"
+      ],
+      "sensory": 418,
+      "output": 48,
+      "model": "drosophila_banc.xml",
+      "record": "drosophila_banc.json",
+      "config": "drosophila_banc.config.json",
+      "network": "network_drosophila_banc.json",
+      "io_digest": "873f9123c39ee3a94b2e75ab1a982d134df9e73971d9423d79276dbdfc53a8df",
+      "model_digest": "d0ef1676345636fb0a8d67e05c2bd135d40d20d04191c916e7fc7dce8a8b8b40"
+    },
+    {
+      "id": "drosophila_fafb",
+      "aliases": [
+        "drosophila_fafb",
+        "fafb_drosophila",
+        "drosophila_fafb_v783",
+        "fafb"
+      ],
+      "sensory": 418,
+      "output": 48,
+      "model": "drosophila_fafb.xml",
+      "record": "drosophila_fafb.json",
+      "config": "drosophila_fafb.config.json",
+      "network": "network_drosophila_fafb.json",
+      "io_digest": "d61c6d74db2cabb8d82cf1043539f9e4084a0cb0016f4e5b782c7ce1c34ac7ee",
+      "model_digest": "6c99248005066cb771945ad92f1fea8799f18aaf3543a84a679adf0c28114ed7"
+    },
+    {
+      "id": "hexapod",
+      "aliases": [
+        "hexapod",
+        "hex",
+        "hexapods",
+        "freenove_hexapod",
+        "big_hexapod",
+        "freenove",
+        "six_legged"
+      ],
+      "sensory": 34,
+      "output": 18,
+      "model": "hexapod.xml",
+      "record": "hexapod.json",
+      "config": "hexapod.config.json",
+      "network": "network_hexapod.json",
+      "io_digest": "4a55402b54b401bedebbdd3975d892657e59f3f9cc265ccaabac957464914983",
+      "model_digest": "085a25b77e34811c405b96c93f58db14b79572701428a4c906d9c732b3642d4d"
+    },
+    {
+      "id": "nao",
+      "aliases": [
+        "nao",
+        "naos"
+      ],
+      "sensory": 250,
+      "output": 40,
+      "model": "nao.xml",
+      "record": "nao.json",
+      "config": "nao.config.json",
+      "network": "network_nao.json",
+      "io_digest": "08fcb08c55ae94fad081ac79ad8f57f50b5bac6a9909c8121ed3bcacc91b6f52",
+      "model_digest": "7866788b1a77fe3d7148c9be25a0babb1b5793cbc602153ccec05aa6cec102d5"
+    },
+    {
+      "id": "zebrafish",
+      "aliases": [
+        "zebrafish",
+        "zebrafishes",
+        "danio",
+        "danio_rerio",
+        "fish",
+        "zfish",
+        "zf"
+      ],
+      "sensory": 32,
+      "output": 32,
+      "model": "zebrafish.xml",
+      "record": "zebrafish.json",
+      "config": "zebrafish.config.json",
+      "network": "network_zebrafish.json",
+      "io_digest": "e5127570f8af5951858ae0569e8b2ac9403b447c79a21d9d419321b0b1f7e596",
+      "model_digest": "fc28553be4639c7912f2b258a4e45d222972a4205cdf240068165046eb0ee469"
+    }
+  ]
+}

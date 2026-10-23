@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # run_sim.sh — Unified AARNN simulator launcher
 #
-# Selects the simulation backend (Webots, Unreal, Unity, WebGL, or all three)
-# and
-# starts the appropriate AARNN brain processes for the requested robot spec.
+# Selects a native physics/reference or preserved legacy simulator route.
+# Implemented legacy projections may reuse the existing local simulation cluster.
 
 export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
 #
@@ -11,7 +10,7 @@ export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
 #   ./run_sim.sh [options]
 #
 # Options:
-#   --sim <webots|unreal|unity|webgl|minecraft|all>
+#   --sim <webots|unreal|unity|webgl|minecraft|mujoco|isaacsim|all>
 #                     Simulation backend (default: webots).
 #                       webots  — launch Webots + AARNN via run_multi_robot_webots.sh
 #                       unreal  — load distributed brains paused, launch Unreal,
@@ -24,7 +23,16 @@ export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
 #   --robots <spec>   Robot spec, e.g. "celegans=1,hexapod=2,nao=1"
 #                     (default: celegans=1).
 #                     Supported types: celegans, drosophila_banc, drosophila_fafb,
-#                                      hexapod, nao, zebrafish
+#                                      hexapod, nao, zebrafish; plus 22 physical profiles:
+#                       galbot_g1_golf, crow_corvus_corone, ugot_mecanum,
+#                       ugot_quadruped, ugot_spider, ugot_balance, ugot_wheelleg,
+#                       ugot_engineer, ugot_transform, keenon_t8, keenon_t9,
+#                       keenon_t10, keenon_t11, keenon_w3, keenon_s100,
+#                       keenon_c30, keenon_c40, cofe_robot_cafe, cofe_smart_bar,
+#                       botinkit_omni, xbot_ic60, xbot_s_pro.
+#                     New Webots/Unity/Unreal profiles dispatch native factories;
+#                     MuJoCo supports all 28. Isaac needs its own supported runtime.
+#                     Minecraft/WebGL functional mode uses --physics-service.
 #                     Aliases: worm/worms/c_elegans → celegans
 #                              drosophila/fly/flies/fruitfly/banc → drosophila_banc
 #                              fafb → drosophila_fafb
@@ -40,6 +48,7 @@ export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
 #   --node <n>        Number of distributed worker nodes for the selected backend
 #   --nodes <n>       Alias for --node; distribute the configured brain shards
 #                     across this many workers for Webots, Unreal, Unity, or WebGL.
+#                     MuJoCo C. elegans uses this same cluster and preserved network.
 #   --no-build        Skip the selected brain-runtime build (reuse release binaries).
 #   --all-features    Build standalone nn_tcp_server with cargo --all-features.
 #   --engine <path>   Unreal Engine directory (…/UnrealEngine/Engine).
@@ -58,6 +67,24 @@ export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
 #                     Per-brain config map CSV (forwarded to Webots launcher).
 #   --network-map <csv>
 #                     Per-brain network map CSV (forwarded to Webots launcher).
+#   --reference-python  Explicit MuJoCo Python reference/passive-viewer comparison.
+#   --physics-service  For webgl/mujoco/minecraft: private native Rust physics service and
+#                     WebGL viewer, one body, explicit --reference-binding only.
+#                     --token-file PATH [--port N] are forwarded to the service.
+#   --control <auto|npc|silent|aarnn>
+#                     Auto: programmed NPC until a verified brain is ready.
+#                     A connected silent brain owns its body; no NPC drive mixes in.
+#                     Explicit control also selects physical ports of old profiles.
+#   --headless --steps N --realtime --reference-bindings MAP.json
+#                     Native physics options; per-instance reference bindings are opt-in.
+#                     MuJoCo opens a persistent Rust viewer by default. All six legacy
+#                     profiles load their preserved brains; --control npc|silent opts out.
+#                     New profiles remain NPC unless selected with --network-map.
+#                     --headless --steps N is a bounded run; --json prints full state.
+#   --view body|habitat  Initial MuJoCo camera framing; F switches while running.
+#   --output PATH    Evidence file (MuJoCo) or new directory (Webots/Unity/Unreal).
+#                     Unity needs NM_UNITY_EDITOR; Unreal uses --engine or UE_ENGINE.
+#                     --all does not claim native expansion target parity.
 #   --help            Show this usage message.
 #   --nao-social      Fresh local NAO social reference model, chat and autonomous
 #                     encounters. One NAO; see sim/nao/README.md.
@@ -104,6 +131,11 @@ CLUSTER_NODE_COUNT="${NM_CLUSTER_NODES:-1}"
 CLUSTER_NODE_COUNT_SET=0
 NO_BUILD=0
 NAO_SOCIAL=0
+EMBODIMENT_REFERENCE_PYTHON=0
+EMBODIMENT_SERVICE=0
+EMBODIMENT_CONTROL=""
+MUJOCO_MANAGED=0
+MUJOCO_PID=""
 BUILD_ALL_FEATURES=1
 WEBOTS_PASSTHROUGH_ARGS=()
 CONFIG_MAP_CSV=""
@@ -183,6 +215,17 @@ while [ "$#" -gt 0 ]; do
       CLUSTER_NODE_COUNT="${1#*=}"
       CLUSTER_NODE_COUNT_SET=1
       ;;
+    --reference-python)
+      EMBODIMENT_REFERENCE_PYTHON=1
+      ;;
+    --control)
+      shift
+      EMBODIMENT_CONTROL="${1:?--control requires auto, npc, silent or aarnn}"
+      WEBOTS_PASSTHROUGH_ARGS+=(--control "$EMBODIMENT_CONTROL")
+      ;;
+    --physics-service)
+      EMBODIMENT_SERVICE=1
+      ;;
     --no-build)
       NO_BUILD=1
       ;;
@@ -261,9 +304,89 @@ if [ "$NAO_SOCIAL" -eq 1 ]; then
   exec python3 "$ROOT_DIR/scripts/run_nao_social.py" "${social_args[@]}"
 fi
 
+if [ "$EMBODIMENT_SERVICE" -eq 1 ]; then
+  if [[ "$SIM_BACKEND" != webgl && "$SIM_BACKEND" != mujoco && "$SIM_BACKEND" != minecraft ]] || [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ] || [ -n "$CONFIG_MAP_CSV$NETWORK_MAP_CSV" ] || [ "$EMBODIMENT_REFERENCE_PYTHON" -eq 1 ]; then
+    echo 'Physics service requires --sim webgl|mujoco|minecraft, one reference body and explicit binding; cluster remapping is unavailable.' >&2
+    exit 2
+  fi
+  embodiment_profile="$(python3 -c 'import sys; sys.path.insert(0,"scripts"); from robot_profiles import iter_brain_instances; rows=list(iter_brain_instances(sys.argv[1])); assert len(rows)==1,"physics service requires exactly one body"; print(rows[0][1])' "$ROBOT_SPEC")"
+  export AARNN_MUJOCO_DIR="${AARNN_MUJOCO_DIR:-$HOME/Developer/mujoco-3.17.0}"
+  export LD_LIBRARY_PATH="$AARNN_MUJOCO_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  if [ "$NO_BUILD" -eq 0 ]; then cargo build --locked -p aarnn-mujoco --features service; fi
+  exec "$ROOT_DIR/target/debug/aarnn-physics-service" --profile "$embodiment_profile" --port "$WEBGL_PORT" "${WEBOTS_PASSTHROUGH_ARGS[@]}"
+fi
+
+if [ -n "$EMBODIMENT_CONTROL" ] && [[ "$SIM_BACKEND" = webgl || "$SIM_BACKEND" = minecraft || "$SIM_BACKEND" = all ]]; then
+  echo 'Explicit physical control requires --physics-service for WebGL/Minecraft, or one native target at a time; preview/combined routes do not accept this flag.' >&2
+  exit 2
+fi
+
+python3 "$ROBOT_PROFILES_PY" validate-target "$SIM_BACKEND" "$ROBOT_SPEC"
+
+if [ "$SIM_BACKEND" = webots ] && { [ -n "$EMBODIMENT_CONTROL" ] || python3 "$ROBOT_PROFILES_PY" has-new "$ROBOT_SPEC"; }; then
+  if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ] || [ -n "$CONFIG_MAP_CSV$NETWORK_MAP_CSV" ]; then
+    echo 'Native Webots expansion reference mode requires explicit --reference-bindings; cluster remapping is unavailable.' >&2
+    exit 2
+  fi
+  embodiment_python="${NM_MUJOCO_PYTHON:-$ROOT_DIR/target/robot-mujoco-venv/bin/python}"
+  embodiment_options=()
+  if [ "$NO_BUILD" -eq 1 ]; then embodiment_options+=(--no-build); fi
+  exec "$embodiment_python" "$ROOT_DIR/scripts/run_webots_embodiment.py" --robots "$ROBOT_SPEC" "${embodiment_options[@]}" "${WEBOTS_PASSTHROUGH_ARGS[@]}"
+fi
+
+# New game-engine bodies use the canonical physical graph and shared Rust ABI.
+if [[ "$SIM_BACKEND" = unity || "$SIM_BACKEND" = unreal ]] && { [ -n "$EMBODIMENT_CONTROL" ] || python3 "$ROBOT_PROFILES_PY" has-new "$ROBOT_SPEC"; }; then
+  if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ] || [ -n "$CONFIG_MAP_CSV$NETWORK_MAP_CSV" ]; then
+    echo 'Native graph reference mode requires explicit --reference-bindings; distributed remapping is unavailable.' >&2
+    exit 2
+  fi
+  embodiment_options=()
+  if [ "$NO_BUILD" -eq 1 ]; then embodiment_options+=(--no-build); fi
+  export UE_ENGINE
+  exec python3 "$ROOT_DIR/scripts/run_native_embodiment.py" --target "$SIM_BACKEND" --robots "$ROBOT_SPEC" "${embodiment_options[@]}" "${WEBOTS_PASSTHROUGH_ARGS[@]}"
+fi
+
+# Native embodiment adapters own their isolated environment and lifecycle.
+# Forward only simulation options; they never start a physical peripheral.
+if [ "$SIM_BACKEND" = mujoco ] && [ "$EMBODIMENT_REFERENCE_PYTHON" -eq 0 ] && [[ "$EMBODIMENT_CONTROL" != npc && "$EMBODIMENT_CONTROL" != silent ]]; then
+  explicit_bindings=0
+  for arg in "${WEBOTS_PASSTHROUGH_ARGS[@]}"; do
+    case "$arg" in --reference-binding|--reference-bindings) explicit_bindings=1;; esac
+  done
+  if [ "$explicit_bindings" -eq 0 ] && python3 "$ROBOT_PROFILES_PY" managed-brains "$ROBOT_SPEC" --network-map "$NETWORK_MAP_CSV" >/dev/null
+  then MUJOCO_MANAGED=1; fi
+fi
+if { [ "$SIM_BACKEND" = mujoco ] && [ "$MUJOCO_MANAGED" -eq 0 ]; } || [ "$SIM_BACKEND" = isaacsim ]; then
+  if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ] || [ -n "$CONFIG_MAP_CSV$NETWORK_MAP_CSV" ]; then
+    echo 'Native embodiment reference mode requires explicit --reference-bindings; cluster remapping is unavailable.' >&2
+    exit 2
+  fi
+  if [ "$SIM_BACKEND" = mujoco ]; then
+    if [ "$EMBODIMENT_REFERENCE_PYTHON" -eq 0 ]; then
+      export AARNN_MUJOCO_DIR="${AARNN_MUJOCO_DIR:-$HOME/Developer/mujoco-3.17.0}"
+      if [ ! -f "$AARNN_MUJOCO_DIR/lib/libmujoco.so.3.17.0" ]; then
+        echo 'MuJoCo 3.17.0 native SDK unavailable; set AARNN_MUJOCO_DIR to its unpacked directory.' >&2
+        exit 2
+      fi
+      export LD_LIBRARY_PATH="$AARNN_MUJOCO_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      if [ "$NO_BUILD" -eq 0 ]; then cargo build --locked -p aarnn-mujoco --features viewer; fi
+      embodiment_binary="${NM_MUJOCO_BIN:-$ROOT_DIR/target/debug/aarnn-mujoco}"
+      exec "$embodiment_binary" --robots "$ROBOT_SPEC" --assets "$ROOT_DIR/sim/content/embodiments/generated" "${WEBOTS_PASSTHROUGH_ARGS[@]}"
+    fi
+    embodiment_python="${NM_MUJOCO_PYTHON:-$ROOT_DIR/target/robot-mujoco-venv/bin/python}"
+  else
+    embodiment_python="${NM_ISAACSIM_PYTHON:-}"
+    if [ -z "$embodiment_python" ]; then
+      echo 'Isaac Sim unavailable: set NM_ISAACSIM_PYTHON to its supported, separate python.sh.' >&2
+      exit 2
+    fi
+  fi
+  exec "$embodiment_python" "$ROOT_DIR/scripts/run_embodied_sim.py" --sim "$SIM_BACKEND" --robots "$ROBOT_SPEC" "${WEBOTS_PASSTHROUGH_ARGS[@]}"
+fi
+
 # Validate --sim value
 case "$SIM_BACKEND" in
-  webots|unreal|unity|webgl|minecraft|all) ;;
+  webots|unreal|unity|webgl|minecraft|mujoco|all) ;;
   *)
     echo "run_sim.sh: invalid --sim value '$SIM_BACKEND' (must be webots, unreal, unity, webgl, minecraft, or all)" >&2
     exit 1
@@ -295,7 +418,7 @@ if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ] && { ! [[ "$CLUSTER_NODE_COUNT" =~ ^[0-9]
   echo "run_sim.sh: --node/--nodes must be a positive integer, got '$CLUSTER_NODE_COUNT'" >&2
   exit 1
 fi
-if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ]; then
+if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ] && [ "$SIM_BACKEND" != mujoco ]; then
   WEBOTS_PASSTHROUGH_ARGS+=(--nodes "$CLUSTER_NODE_COUNT")
 fi
 
@@ -469,6 +592,11 @@ cleanup_distributed_runtime() {
 }
 
 cleanup_all() {
+  if [ -n "$MUJOCO_PID" ] && kill -0 "$MUJOCO_PID" 2>/dev/null; then
+    kill -TERM "$MUJOCO_PID" 2>/dev/null || true
+    wait "$MUJOCO_PID" 2>/dev/null || true
+  fi
+  MUJOCO_PID=""
   cleanup_tcp_servers TERM
   cleanup_distributed_runtime
   if [ -n "${WEBGL_WEB_PID:-}" ] && kill -0 "$WEBGL_WEB_PID" 2>/dev/null; then
@@ -584,7 +712,9 @@ resolve_brain_arrays() {
   BRAIN_IDS=()
   BRAIN_TYPES=()
   local brain_lines=""
-  if ! brain_lines="$(parse_robot_spec "$ROBOT_SPEC")"; then
+  if [ "$MUJOCO_MANAGED" -eq 1 ]; then
+    brain_lines="$(python3 "$ROBOT_PROFILES_PY" managed-brains "$ROBOT_SPEC" --network-map "$NETWORK_MAP_CSV")" || exit 1
+  elif ! brain_lines="$(parse_robot_spec "$ROBOT_SPEC")"; then
     exit 1
   fi
   while IFS=' ' read -r brain_id brain_type; do
@@ -742,9 +872,8 @@ wait_for_distributed_placement_ready() {
     placement_lines=()
     local all_ready=1
     for brain in "${BRAIN_IDS[@]}"; do
-      line="$(grep -F " - Network ${brain}:" "$placement_log" 2>/dev/null \
-        | grep -F "Distributed across ${expected} nodes" | tail -n 1 || true)"
-      if [ -z "$line" ]; then
+      line="$(grep -F " - Network ${brain}:" "$placement_log" 2>/dev/null | tail -n 1 || true)"
+      if [[ "$line" != *"Distributed across ${expected} nodes"* ]]; then
         all_ready=0
         break
       fi
@@ -802,6 +931,9 @@ wait_for_tcp_bridges_ready() {
 start_distributed_tcp_servers() {
   resolve_brain_arrays
   local total="${#BRAIN_IDS[@]}"
+  if [ "$MUJOCO_MANAGED" -eq 1 ] && [ "$CLUSTER_NODE_COUNT_SET" -eq 0 ] && [ -z "${NM_CLUSTER_NODES:-}" ] && [ "$CLUSTER_NODE_COUNT" -lt "$total" ]; then
+    CLUSTER_NODE_COUNT="$total"
+  fi
   if [ "$CLUSTER_NODE_COUNT" -lt "$total" ]; then
     echo "run_sim.sh: --node/--nodes=$CLUSTER_NODE_COUNT requires at least one worker per brain ($total)." >&2
     exit 1
@@ -835,6 +967,15 @@ start_distributed_tcp_servers() {
   [ -n "$CONFIG_MAP_CSV" ] && cluster_config_map="${cluster_config_map:+$cluster_config_map,}${CONFIG_MAP_CSV}"
   [ -n "$NETWORK_MAP_CSV" ] && cluster_network_map="${cluster_network_map:+$cluster_network_map,}${NETWORK_MAP_CSV}"
 
+  if [ "$MUJOCO_MANAGED" -eq 1 ]; then
+    for (( i=0; i<total; i++ )); do
+      python3 "$ROOT_DIR/scripts/mujoco_bindings.py" --profile "${BRAIN_TYPES[$i]}" --brain "${BRAIN_IDS[$i]}" \
+        --network "$(robot_network_file "${BRAIN_TYPES[$i]}")" --network-map "$cluster_network_map" \
+        --config "$(robot_config_file "${BRAIN_TYPES[$i]}")" --config-map "$cluster_config_map" \
+        --host "$TCP_HOST" --port "$((TCP_BASE_PORT+i))" --output "$ENV_READY_DIR"
+    done
+  fi
+
   local cluster_cmd=(
     env
     "NM_IPC_SOCKET_DIR=$CLUSTER_SOCKET_DIR"
@@ -850,6 +991,7 @@ start_distributed_tcp_servers() {
     # per-brain IPC UIs remain hidden, while this single authoritative view
     # reports every registered worker, including headless shard workers.
     --runtime cluster --no-webots --no-diag
+    --connect-timeout "$TCP_READY_TIMEOUT"
     --node-ui-hidden --nodes "$CLUSTER_NODE_COUNT"
     --orchestrator-port "$CLUSTER_ORCHESTRATOR_PORT"
     --brains "$(IFS=,; echo "${BRAIN_IDS[*]}")"
@@ -880,6 +1022,8 @@ start_distributed_tcp_servers() {
     if [ "$brain_id" = "default" ]; then ipc_path="$CLUSTER_SOCKET_DIR/aarnn_rust.nn"; fi
     local log_file="$CLUSTER_LOG_DIR/bridge_${brain_id}.log"
     local ready_file="$ENV_READY_DIR/${brain_id}.ready"
+    local -a embodiment_args=()
+    if [ "$MUJOCO_MANAGED" -eq 1 ]; then embodiment_args=(--embodiment-contract "$ENV_READY_DIR/${brain_id}.contract.json"); fi
     rm -f "$ready_file"
     "$TCP_AER_BRIDGE_BIN" \
       --listen "$TCP_HOST:$port" --ipc "$ipc_path" \
@@ -887,6 +1031,7 @@ start_distributed_tcp_servers() {
       --output "$(robot_output "$brain_type")" \
       --ready-file "$ready_file" \
       --arm-file "$ARM_FILE" \
+      "${embodiment_args[@]}" \
       >"$log_file" 2>&1 &
     BRIDGE_PIDS+=("$!")
     BRIDGE_PORTS+=("$port")
@@ -906,6 +1051,10 @@ wait_for_environment_bridges_ready() {
   echo ""
   echo "run_sim.sh: waiting for simulator environment readiness (all bridge handshakes, timeout ${TCP_READY_TIMEOUT}s) …"
   while [ "$SECONDS" -le "$deadline" ]; do
+    if [ -n "$MUJOCO_PID" ] && ! kill -0 "$MUJOCO_PID" 2>/dev/null; then
+      echo "run_sim.sh: MuJoCo exited before environment readiness; see $CLUSTER_LOG_DIR/mujoco.log" >&2
+      return 1
+    fi
     ready_count=0
     local i
     for (( i=0; i<total; i++ )); do
@@ -930,7 +1079,8 @@ wait_for_environment_bridges_ready() {
   exit 1
 }
 
-arm_distributed_networks() {
+send_distributed_start() {
+  local brain_id="$1"
   local control_bin="$ROOT_DIR/target/release/aarnn_rust"
   if [ ! -x "$control_bin" ]; then
     echo "run_sim.sh: missing cluster-control binary: $control_bin" >&2
@@ -952,13 +1102,21 @@ arm_distributed_networks() {
       -u NM_GRPC_TLS_DOMAIN
     )
   fi
+  "${control_env[@]}" "$control_bin" \
+    --orchestrator-addr "http://127.0.0.1:$CLUSTER_ORCHESTRATOR_PORT" \
+    --cluster-control-network "$brain_id" \
+    --cluster-control-action start
+}
+
+arm_distributed_networks() {
+  # Desired placement precedes asynchronous LoadNetwork. A missing worker
+  # network ignores legacy Start; membership may also change during import.
+  wait_for_distributed_networks_loaded
+  wait_for_distributed_placement_ready
   local brain_id
   for brain_id in "${BRAIN_IDS[@]}"; do
     echo "run_sim.sh: arming distributed network '$brain_id' after environment readiness …"
-    "${control_env[@]}" "$control_bin" \
-      --orchestrator-addr "http://127.0.0.1:$CLUSTER_ORCHESTRATOR_PORT" \
-      --cluster-control-network "$brain_id" \
-      --cluster-control-action start
+    send_distributed_start "$brain_id"
   done
 
   wait_for_distributed_networks_armed
@@ -968,35 +1126,84 @@ arm_distributed_networks() {
   echo "run_sim.sh: distributed neural processing armed after environment readiness."
 }
 
-wait_for_distributed_networks_armed() {
-  local deadline=$((SECONDS + TCP_READY_TIMEOUT))
-  local -a worker_logs=()
+distributed_worker_log_paths() {
   local brain_id
   for brain_id in "${BRAIN_IDS[@]}"; do
-    worker_logs+=("$CLUSTER_LOG_DIR/webots_${brain_id}.log")
+    printf '%s\n' "$CLUSTER_LOG_DIR/webots_${brain_id}.log"
   done
   local extra_index=1
   local extra_workers=$((CLUSTER_NODE_COUNT - ${#BRAIN_IDS[@]}))
   while [ "$extra_index" -le "$extra_workers" ]; do
-    worker_logs+=("$CLUSTER_LOG_DIR/webots_${BRAIN_IDS[0]}_worker_$(printf '%02d' "$extra_index").log")
+    printf '%s\n' "$CLUSTER_LOG_DIR/webots_${BRAIN_IDS[0]}_worker_$(printf '%02d' "$extra_index").log"
     extra_index=$((extra_index + 1))
   done
+}
 
-  echo "run_sim.sh: waiting for Start to reach all distributed workers …"
+wait_for_distributed_networks_loaded() {
+  local deadline=$((SECONDS + TCP_READY_TIMEOUT))
+  local -a worker_logs=()
+  mapfile -t worker_logs < <(distributed_worker_log_paths)
+  echo "run_sim.sh: waiting for initial network loads on all distributed workers …"
   while [ "$SECONDS" -le "$deadline" ]; do
-    local all_ready=1
-    local log_file
+    local all_ready=1 log_file brain_id
     for log_file in "${worker_logs[@]}"; do
       for brain_id in "${BRAIN_IDS[@]}"; do
-        if ! grep -Fq "simulator network ${brain_id} armed (playing=true)" "$log_file" 2>/dev/null; then
+        if ! grep -Fq "Network ${brain_id} worker started on node " "$log_file" 2>/dev/null; then
           all_ready=0
           break 2
         fi
       done
     done
     if [ "$all_ready" -eq 1 ]; then
+      echo "run_sim.sh: initial network loads confirmed on all ${#worker_logs[@]} distributed worker(s)."
+      return 0
+    fi
+    for pid in "${CLUSTER_PIDS[@]}"; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        echo "run_sim.sh: distributed runtime exited before initial network loads completed." >&2
+        exit 1
+      fi
+    done
+    sleep 1
+  done
+  echo "run_sim.sh: timed out waiting for initial distributed network loads." >&2
+  exit 1
+}
+
+wait_for_distributed_networks_armed() {
+  local deadline=$((SECONDS + TCP_READY_TIMEOUT))
+  local next_retry=$((SECONDS + 5))
+  local -a worker_logs=()
+  mapfile -t worker_logs < <(distributed_worker_log_paths)
+  local brain_id
+
+  echo "run_sim.sh: waiting for Start to reach all distributed workers …"
+  while [ "$SECONDS" -le "$deadline" ]; do
+    local -a missing_brains=()
+    local log_file brain_ready
+    for brain_id in "${BRAIN_IDS[@]}"; do
+      brain_ready=1
+      for log_file in "${worker_logs[@]}"; do
+        if ! grep -Fq "simulator network ${brain_id} armed (playing=true)" "$log_file" 2>/dev/null; then
+          brain_ready=0
+          break
+        fi
+      done
+      if [ "$brain_ready" -eq 0 ]; then missing_brains+=("$brain_id"); fi
+    done
+    if [ "${#missing_brains[@]}" -eq 0 ]; then
       echo "run_sim.sh: Start reached all ${#worker_logs[@]} distributed worker(s) for all ${#BRAIN_IDS[@]} network(s)."
       return 0
+    fi
+    if [ "$SECONDS" -ge "$next_retry" ]; then
+      # Start only sets playing=true in the existing reference RPC. Retry
+      # unacknowledged delivery after membership/load changes, without Reset,
+      # Repeat, biological time advancement or a new actuator route.
+      for brain_id in "${missing_brains[@]}"; do
+        echo "run_sim.sh: retrying idempotent Start for '$brain_id' pending worker acknowledgement …"
+        send_distributed_start "$brain_id"
+      done
+      next_retry=$((SECONDS + 5))
     fi
     sleep 1
   done
@@ -1258,6 +1465,35 @@ prepare_minecraft_token() {
 # Main dispatch
 # ---------------------------------------------------------------------------
 case "$SIM_BACKEND" in
+  mujoco)
+    export AARNN_MUJOCO_DIR="${AARNN_MUJOCO_DIR:-$HOME/Developer/mujoco-3.17.0}"
+    export LD_LIBRARY_PATH="$AARNN_MUJOCO_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    if [ "$NO_BUILD" -eq 0 ]; then cargo build --locked -p aarnn-mujoco --features viewer; fi
+    # Config/network maps are consumed by the shared runtime, never passed to
+    # a physics owner. All other native options retain their original argv.
+    native_args=()
+    i=0
+    while [ "$i" -lt "${#WEBOTS_PASSTHROUGH_ARGS[@]}" ]; do
+      arg="${WEBOTS_PASSTHROUGH_ARGS[$i]}"
+      case "$arg" in
+        --config-map|--network-map) i=$((i+2)); continue;;
+      esac
+      native_args+=("$arg");i=$((i+1))
+    done
+    start_distributed_tcp_servers
+    echo "run_sim.sh: MuJoCo logs and evidence: $CLUSTER_LOG_DIR"
+    NM_AER_REFERENCE_STARTUP_TIMEOUT_MS="$((TCP_READY_TIMEOUT>3600?3600000:TCP_READY_TIMEOUT*1000))" \
+    "${NM_MUJOCO_BIN:-$ROOT_DIR/target/debug/aarnn-mujoco}" --robots "$ROBOT_SPEC" \
+      --assets "$ROOT_DIR/sim/content/embodiments/generated" \
+      --reference-bindings "$ENV_READY_DIR/mujoco-bindings.json" --arm-file "$ARM_FILE" \
+      --output "$CLUSTER_LOG_DIR/mujoco.json" "${native_args[@]}" \
+      > >(tee "$CLUSTER_LOG_DIR/mujoco.log") 2> >(tee -a "$CLUSTER_LOG_DIR/mujoco.log" >&2) &
+    MUJOCO_PID=$!
+    wait_for_environment_bridges_ready
+    arm_distributed_networks
+    wait "$MUJOCO_PID"
+    MUJOCO_PID=""
+    ;;
   webots)
     launch_webots
     ;;

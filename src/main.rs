@@ -49,6 +49,12 @@ mod generated_management;
 #[cfg(feature = "opencl")]
 mod gpu_api;
 mod hierarchical_sharding;
+// The shared morphology module's test fixtures exercise these canonical
+// source modules under the executable crate root as well as the library.
+#[cfg(test)]
+mod knowledge;
+#[cfg(test)]
+mod knowledge_region;
 mod managed_durability;
 mod managed_partial_shard_runtime;
 mod managed_shard_runtime;
@@ -1322,21 +1328,82 @@ fn align_startup_snapshot_io(
     neuron_model: sim::NeuronModel,
     learning: sim::Learning,
 ) -> anyhow::Result<String> {
-    let decoded = crate::runner::decode_snapshot_with_profile_backfill(snapshot_json)?;
-    let original_sensory = decoded.net.num_sensory_neurons;
-    let original_output = decoded.net.num_output_neurons;
+    let metadata = crate::runner::decode_snapshot_metadata_with_profile_backfill(snapshot_json)?;
+    let original_sensory = metadata.net.num_sensory_neurons;
+    let original_output = metadata.net.num_output_neurons;
     let requested_sensory = target_config.num_sensory_neurons;
     let requested_output = target_config.num_output_neurons;
-    let io_metadata_matches = decoded.net.sensory_target_layer
+    let io_metadata_matches = metadata.net.sensory_target_layer
         == target_config.sensory_target_layer
-        && decoded.net.output_source_layer == target_config.output_source_layer
-        && decoded.net.spike_io == target_config.spike_io;
-    if decoded.net.num_sensory_neurons == requested_sensory
-        && decoded.net.num_output_neurons == requested_output
-        && io_metadata_matches
+        && metadata.net.output_source_layer == target_config.output_source_layer
+        && metadata.net.spike_io == target_config.spike_io;
+    // Runner::get_io_layers resolves both None and Some(0) to H0 for
+    // every one-layer profile/model. This is an encoding difference, not
+    // a routing migration. Keep the shortcut narrow: multilayer/default
+    // routing and any explicit nonzero layer retain the full migration.
+    let single_layer_encoding_only = metadata.net.num_hidden_layers == 1
+        && target_config.num_hidden_layers == 1
+        && [
+            metadata.net.sensory_target_layer,
+            metadata.net.output_source_layer,
+            target_config.sensory_target_layer,
+            target_config.output_source_layer,
+        ]
+        .into_iter()
+        .all(|layer| layer.is_none_or(|index| index == 0));
+    if original_sensory == requested_sensory
+        && original_output == requested_output
+        && (single_layer_encoding_only
+            || (metadata.net.sensory_target_layer == target_config.sensory_target_layer
+                && metadata.net.output_source_layer == target_config.output_source_layer))
     {
-        return Ok(snapshot_json.to_owned());
+        if io_metadata_matches {
+            return Ok(snapshot_json.to_owned());
+        }
+        // A metadata-only startup correction must not initialise/import a
+        // growing Runner or regenerate biological state. Raw schema values
+        // retain every weight/runtime/topology number's exact source bytes,
+        // including unknown future fields. Routing semantics/dimensions stay
+        // identical; only encoding metadata changes in this transient distribution
+        // payload. Structural routing changes retain the full migration path.
+        type Fields = std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>;
+        let mut fields: Fields = serde_json::from_str(snapshot_json)?;
+        let mut net: Fields = serde_json::from_str(
+            fields
+                .get("net")
+                .ok_or_else(|| anyhow::anyhow!("snapshot net missing"))?
+                .get(),
+        )?;
+        if metadata.net.spike_io != target_config.spike_io {
+            net.insert(
+                "spike_io".into(),
+                serde_json::value::to_raw_value(&target_config.spike_io)?,
+            );
+        }
+        for (name, layer) in [
+            ("sensory_target_layer", target_config.sensory_target_layer),
+            ("output_source_layer", target_config.output_source_layer),
+        ] {
+            if single_layer_encoding_only {
+                net.insert(name.into(), serde_json::value::to_raw_value(&layer)?);
+            }
+        }
+        fields.insert("net".into(), serde_json::value::to_raw_value(&net)?);
+        if fields
+            .get("rng_seed")
+            .is_none_or(|v| v.get().trim() == "null")
+        {
+            // Retain the existing legacy-alignment seed contract. No present
+            // seed or runtime RNG state is changed; absent seeds become stable
+            // before the same payload is distributed to independent workers.
+            fields.insert(
+                "rng_seed".into(),
+                serde_json::value::to_raw_value(&stable_snapshot_seed(snapshot_json))?,
+            );
+        }
+        return Ok(serde_json::to_string(&fields)?);
     }
+    let decoded = crate::runner::decode_snapshot_with_profile_backfill(snapshot_json)?;
 
     // Snapshot seeds are stable across workers. Older snapshots may not carry
     // one, so derive a deterministic fallback from their bytes rather than
@@ -5844,6 +5911,67 @@ mod startup_snapshot_io_tests {
     }
 
     #[test]
+    fn startup_io_metadata_only_preserves_every_other_raw_payload() {
+        type Fields = std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>;
+        let mut raw: Fields = serde_json::from_str(&zero_output_snapshot()).unwrap();
+        raw.insert(
+            "unknown_future_state".into(),
+            serde_json::value::RawValue::from_string(
+                r#"{"precise":1.2345678901234567890123456789,"id":18446744073709551615}"#.into(),
+            )
+            .unwrap(),
+        );
+        let source = serde_json::to_string(&raw).unwrap();
+        let mut target = decode_snapshot_with_profile_backfill(&source).unwrap().net;
+        target.spike_io.profile = crate::spike_io::profiles::NetworkIoProfileSelector::ZebraFish;
+        let aligned = align_startup_snapshot_io(
+            &source,
+            &target,
+            sim::NeuronModel::Aarnn,
+            sim::Learning::Aarnn,
+        )
+        .unwrap();
+        let mut result: Fields = serde_json::from_str(&aligned).unwrap();
+        let original_net: Fields = serde_json::from_str(raw.remove("net").unwrap().get()).unwrap();
+        let result_net: Fields = serde_json::from_str(result.remove("net").unwrap().get()).unwrap();
+        for (key, value) in &raw {
+            assert_eq!(
+                result[key].get(),
+                value.get(),
+                "changed snapshot field {key}"
+            );
+        }
+        assert_eq!(raw.len(), result.len());
+        for (key, value) in &original_net {
+            if !["spike_io", "sensory_target_layer", "output_source_layer"].contains(&key.as_str())
+            {
+                assert_eq!(
+                    result_net[key].get(),
+                    value.get(),
+                    "changed biological config {key}"
+                );
+            }
+        }
+        assert_eq!(
+            serde_json::from_str::<crate::spike_io::profiles::SpikeIoConfig>(
+                result_net["spike_io"].get()
+            )
+            .unwrap(),
+            target.spike_io
+        );
+        assert_eq!(
+            align_startup_snapshot_io(
+                &aligned,
+                &target,
+                sim::NeuronModel::Aarnn,
+                sim::Learning::Aarnn
+            )
+            .unwrap(),
+            aligned
+        );
+    }
+
+    #[test]
     fn legacy_snapshot_without_rng_seed_gets_a_stable_alignment_seed() {
         let mut legacy: serde_json::Value =
             serde_json::from_str(&zero_width_snapshot()).expect("parse test snapshot");
@@ -5869,6 +5997,75 @@ mod startup_snapshot_io_tests {
         assert_eq!(first, second);
         let aligned = decode_snapshot_with_profile_backfill(&first).expect("decode aligned data");
         assert_eq!(aligned.rng_seed, Some(stable_snapshot_seed(&source)));
+    }
+
+    #[test]
+    fn metadata_only_legacy_alignment_also_materializes_the_existing_stable_seed() {
+        let mut source: serde_json::Value = serde_json::from_str(&zero_output_snapshot()).unwrap();
+        source["rng_seed"] = serde_json::Value::Null;
+        let source = serde_json::to_string(&source).unwrap();
+        let mut target = decode_snapshot_with_profile_backfill(&source).unwrap().net;
+        target.spike_io.profile = crate::spike_io::profiles::NetworkIoProfileSelector::ZebraFish;
+        let aligned =
+            align_startup_snapshot_io(&source, &target, sim::NeuronModel::Lif, sim::Learning::Stdp)
+                .unwrap();
+        let decoded = decode_snapshot_with_profile_backfill(&aligned).unwrap();
+        assert_eq!(decoded.rng_seed, Some(stable_snapshot_seed(&source)));
+        assert_eq!(
+            aligned,
+            align_startup_snapshot_io(&source, &target, sim::NeuronModel::Lif, sim::Learning::Stdp)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn single_layer_default_routing_preserves_snapshot_state_without_reimport() {
+        type Fields = std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>;
+        let runner = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            NetworkConfig {
+                num_sensory_neurons: 2,
+                num_hidden_layers: 1,
+                num_hidden_per_layer_initial: 8,
+                num_output_neurons: 2,
+                clumping_design: crate::config::ClumpingDesign::None,
+                growth_enabled: false,
+                use_morphology: false,
+                ..NetworkConfig::default()
+            },
+            sim::NeuronModel::Lif,
+            sim::Learning::Stdp,
+        );
+        assert_eq!(runner.net.num_hidden_layers, 1);
+        assert_eq!(runner.get_io_layers(), (0, 0));
+        let mut source: serde_json::Value =
+            serde_json::from_str(&runner.export_network_json().unwrap()).unwrap();
+        source["net"]["sensory_target_layer"] = serde_json::json!(0);
+        source["net"]["output_source_layer"] = serde_json::json!(0);
+        source["unknown_future_state"] = serde_json::json!({"retain": "opaque state"});
+        let source = serde_json::to_string(&source).unwrap();
+        let mut target = decode_snapshot_with_profile_backfill(&source).unwrap().net;
+        target.sensory_target_layer = None;
+        target.output_source_layer = None;
+        let aligned =
+            align_startup_snapshot_io(&source, &target, sim::NeuronModel::Lif, sim::Learning::Stdp)
+                .unwrap();
+        let mut before: Fields = serde_json::from_str(&source).unwrap();
+        let mut after: Fields = serde_json::from_str(&aligned).unwrap();
+        let before_net: Fields = serde_json::from_str(before.remove("net").unwrap().get()).unwrap();
+        let after_net: Fields = serde_json::from_str(after.remove("net").unwrap().get()).unwrap();
+        assert_eq!(before.len(), after.len());
+        for (key, value) in before {
+            assert_eq!(value.get(), after[&key].get(), "changed state {key}");
+        }
+        for (key, value) in before_net {
+            if !["sensory_target_layer", "output_source_layer"].contains(&key.as_str()) {
+                assert_eq!(value.get(), after_net[&key].get(), "changed config {key}");
+            }
+        }
+        assert_eq!(after_net["sensory_target_layer"].get(), "null");
+        assert_eq!(after_net["output_source_layer"].get(), "null");
     }
 }
 

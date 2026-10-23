@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from collections import defaultdict
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 
-CANONICAL_TYPES: Tuple[str, ...] = (
+LEGACY_TYPES: Tuple[str, ...] = (
     "celegans",
     "drosophila_banc",
     "drosophila_fafb",
@@ -92,6 +93,20 @@ PROFILES: Dict[str, RobotProfile] = {
         aliases=("zebrafish", "zebrafishes", "danio", "danio_rerio", "fish", "zfish", "zf"),
     ),
 }
+
+
+# Additive native embodiment registry; the six legacy profiles and their
+# trained network paths stay byte-for-byte unchanged. New recipes are untrained.
+_EMBODIMENTS = Path(__file__).resolve().parents[1] / "sim/content/embodiments/generated"
+_registry = _EMBODIMENTS / "registry.generated.json"
+if _registry.is_file():
+    for _entry in json.loads(_registry.read_text())["profiles"]:
+        _id = _entry["id"]
+        if _id in PROFILES:
+            continue
+        PROFILES[_id] = RobotProfile(_id, _entry["sensory"], _entry["output"], "",
+            f"sim/content/embodiments/generated/{_entry['config']}", tuple(_entry["aliases"]))
+CANONICAL_TYPES = tuple(PROFILES)
 
 
 ALIASES: Dict[str, str] = {
@@ -204,7 +219,7 @@ def cmd_profile_field(args: argparse.Namespace) -> int:
         print(profile.output)
         return 0
     if field == "network":
-        print(_resolve_path(args.root_dir, profile.network_rel))
+        print(_resolve_path(args.root_dir, profile.network_rel) if profile.network_rel else "")
         return 0
     if field == "config":
         print(_resolve_path(args.root_dir, profile.config_rel))
@@ -213,9 +228,44 @@ def cmd_profile_field(args: argparse.Namespace) -> int:
     return 2
 
 
+def cmd_validate_target(args: argparse.Namespace) -> int:
+    legacy = {"celegans", "drosophila_banc", "drosophila_fafb", "hexapod", "nao", "zebrafish"}
+    for profile, _ in parse_robot_spec(args.spec):
+        if profile not in legacy and args.target not in {"mujoco", "isaacsim", "webots", "unity", "unreal"}:
+            print(f"ERROR: {profile}: {args.target} native factory/client acceptance is not implemented; use the native MuJoCo adapter or its explicit physics-service viewer.", file=sys.stderr)
+            return 2
+    return 0
+
+
+def cmd_has_new(args: argparse.Namespace) -> int:
+    try:
+        return 0 if any(p not in LEGACY_TYPES for p,_ in parse_robot_spec(args.spec)) else 1
+    except ValueError as error:
+        print(f"ERROR: {error}",file=sys.stderr)
+        return 2
+
+
+def cmd_managed_brains(args: argparse.Namespace) -> int:
+    """Select brains independently; other bodies remain unbound NPCs."""
+    selected={entry.split('=',1)[0] for entry in args.network_map.split(',') if '=' in entry}
+    rows=[(brain,profile) for brain,profile in iter_brain_instances(args.spec) if profile in LEGACY_TYPES or brain in selected]
+    for brain,profile in rows:print(brain,profile)
+    return 0 if rows else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
+    p_managed=sub.add_parser('managed-brains',help='Print preserved or explicitly selected per-instance neural bindings')
+    p_managed.add_argument('spec');p_managed.add_argument('--network-map',default='');p_managed.set_defaults(func=cmd_managed_brains)
+    p_new = sub.add_parser("has-new", help="Exit 0 for a population using an expansion profile; 1 for legacy only")
+    p_new.add_argument("spec")
+    p_new.set_defaults(func=cmd_has_new)
+
+    p_target = sub.add_parser("validate-target", help="Reject unavailable embodiment factories without aliasing")
+    p_target.add_argument("target")
+    p_target.add_argument("spec")
+    p_target.set_defaults(func=cmd_validate_target)
 
     p_brains = sub.add_parser("brains", help="Emit 'brain_id robot_type' lines for a robot spec")
     p_brains.add_argument("spec", help="Robot spec, e.g. 'celegans=1,hexapod=2'")

@@ -1,0 +1,2031 @@
+{
+  "schema_version": 1,
+  "generated_utc": "2026-10-23T17:30:38.609124+00:00",
+  "git_revision": "3925f6c60d38a758db45f76c1e988f6d53835ae4",
+  "branch": "codex/lec-crow-expansion-20261023",
+  "scope": "current task diff; original input packs, unrelated user Webots world/project edits and MuJoCo runtime log excluded; manifest excludes itself",
+  "files": [
+    {
+      "path": ".github/workflows/build-and-release.yml",
+      "bytes": 68836,
+      "mode": "0o664",
+      "sha256": "caf36650a65f6e767622f714f6998f8752ffa6355a1b5e3bf6b86fb4414549dd"
+    },
+    {
+      "path": "Cargo.lock",
+      "bytes": 216624,
+      "mode": "0o664",
+      "sha256": "4880b04ff7ed92829d46d0a0bb06fdc95475ca37e29bb5d0b97951fe769e0f1b"
+    },
+    {
+      "path": "Cargo.toml",
+      "bytes": 7844,
+      "mode": "0o664",
+      "sha256": "a8ea3e37867171ca03fd3cd49b8629d5e23e6e241491cf0d30c42e61af62416f"
+    },
+    {
+      "path": "adapters/mujoco/Cargo.toml",
+      "bytes": 952,
+      "mode": "0o664",
+      "sha256": "d282076381b03fea20ff8d934db4e8d05412bde63d57ccee7da5a4375b99d066"
+    },
+    {
+      "path": "adapters/mujoco/build.rs",
+      "bytes": 1930,
+      "mode": "0o664",
+      "sha256": "77efa4eca3687efa37c7f07437daf64b60f01427b35c635696466a9c20230a61"
+    },
+    {
+      "path": "adapters/mujoco/src/legacy.rs",
+      "bytes": 7798,
+      "mode": "0o664",
+      "sha256": "ce66e8eeaed5eb95784b8f4218f7cd7df5a4dce57436164ec18d466e95125890"
+    },
+    {
+      "path": "adapters/mujoco/src/lib.rs",
+      "bytes": 383,
+      "mode": "0o664",
+      "sha256": "0fc4c73a64f155d82a4fb31009239aac832a3cdcc311ded08a3db6cf75046c4a"
+    },
+    {
+      "path": "adapters/mujoco/src/main.rs",
+      "bytes": 20953,
+      "mode": "0o664",
+      "sha256": "f390d3a6faba340b1b6dfac34b13f6f16c2dd2d7eb3813cf30edeeaea4bd2b98"
+    },
+    {
+      "path": "adapters/mujoco/src/native.rs",
+      "bytes": 27878,
+      "mode": "0o664",
+      "sha256": "856c5fe7fdbc7701a278e8c6f0dbd81646526eee7390d417cda1dac488baaf87"
+    },
+    {
+      "path": "adapters/mujoco/src/service.rs",
+      "bytes": 19087,
+      "mode": "0o664",
+      "sha256": "5913a50c56c9b2956c8efc8795b0d5e6ab154fa4eaccb3ab655a50f1c61129ec"
+    },
+    {
+      "path": "adapters/mujoco/src/viewer.rs",
+      "bytes": 11511,
+      "mode": "0o664",
+      "sha256": "c419710de162321cca5590840868f8209275f2543e951aaa0fe17f1cd594ea1a"
+    },
+    {
+      "path": "adapters/mujoco/src/world.rs",
+      "bytes": 20494,
+      "mode": "0o664",
+      "sha256": "96ff27442c2a5ecee1a955bff8ea3542198092354c91349321c3c78026343fd0"
+    },
+    {
+      "path": "adapters/mujoco/tests/native.rs",
+      "bytes": 12363,
+      "mode": "0o664",
+      "sha256": "7c69c76f8268e66ecafd51aca2af2617285bf501e52ba2eeed357841988e39d9"
+    },
+    {
+      "path": "adapters/webots/Cargo.toml",
+      "bytes": 479,
+      "mode": "0o664",
+      "sha256": "006136da5f78fec48c54fbd50fa93c7d84a0414d5d0d15bc91bb54cd745dd585"
+    },
+    {
+      "path": "adapters/webots/build.rs",
+      "bytes": 583,
+      "mode": "0o664",
+      "sha256": "60c73efffc49ff69fe06883c333d7a7747be7804aec77a2695ece5191d17328d"
+    },
+    {
+      "path": "adapters/webots/src/lib.rs",
+      "bytes": 124,
+      "mode": "0o664",
+      "sha256": "db7cb29e7d704a04213c469ed19c80c6797c7de4813cec29fb12749b93d43166"
+    },
+    {
+      "path": "adapters/webots/src/main.rs",
+      "bytes": 20932,
+      "mode": "0o664",
+      "sha256": "121c84a470499f1cc8cf3a7689cbeb2ee0ef777b1cad5a49d567cf5925782565"
+    },
+    {
+      "path": "adapters/webots/src/native.rs",
+      "bytes": 10971,
+      "mode": "0o664",
+      "sha256": "3b7ca314bc12391b4e6b88783ddd4e32396dc27158bf215d9fb5bba618978b17"
+    },
+    {
+      "path": "crates/aarnn-aer-legacy/Cargo.toml",
+      "bytes": 87,
+      "mode": "0o664",
+      "sha256": "fd21024e3fda6bf2d01a56205a72723f6c6b8b417c98676409d4ef3cd6ac040d"
+    },
+    {
+      "path": "crates/aarnn-aer-legacy/src/lib.rs",
+      "bytes": 7067,
+      "mode": "0o664",
+      "sha256": "19aa787a5a77a1b984208f3bb61e424e66da7a6eb9e888cb108e92c8de2566a5"
+    },
+    {
+      "path": "crates/aarnn-embodiment-ffi/Cargo.toml",
+      "bytes": 263,
+      "mode": "0o664",
+      "sha256": "a0296a52f5a5a54c49d324bb4fab0d03298c755a86cc0b6f82da53e779759ff2"
+    },
+    {
+      "path": "crates/aarnn-embodiment-ffi/include/nm_embodiment.h",
+      "bytes": 1761,
+      "mode": "0o664",
+      "sha256": "fff8e3527591e833d6a0544c5bba611f39ede7612b2003b164fc096a1136d8f0"
+    },
+    {
+      "path": "crates/aarnn-embodiment-ffi/src/lib.rs",
+      "bytes": 25313,
+      "mode": "0o664",
+      "sha256": "cdeca0c9ccead7fb0a82a6595d27575d383e8df8d3072908bfcfc2e53eee81ef"
+    },
+    {
+      "path": "crates/aarnn-embodiment/Cargo.toml",
+      "bytes": 285,
+      "mode": "0o664",
+      "sha256": "915f78294b741b3199d18b82091a13dc33000c41756c6c2117042aca8025ea9d"
+    },
+    {
+      "path": "crates/aarnn-embodiment/src/actuation.rs",
+      "bytes": 11453,
+      "mode": "0o664",
+      "sha256": "913eafa8a73a6e98f59540b49cd63bdccb679216ca524b538ca4c8dc3a1d7646"
+    },
+    {
+      "path": "crates/aarnn-embodiment/src/aer.rs",
+      "bytes": 14738,
+      "mode": "0o664",
+      "sha256": "f15b122c811f2c8bb620b086e819579137a289fd52732ad600aa1694390c9aa0"
+    },
+    {
+      "path": "crates/aarnn-embodiment/src/celegans.rs",
+      "bytes": 6484,
+      "mode": "0o664",
+      "sha256": "c38b96112dc28ceb5256d77ca1e1c2c2b8d1b8dd0bc926ce62539224bfbdaab9"
+    },
+    {
+      "path": "crates/aarnn-embodiment/src/force.rs",
+      "bytes": 3243,
+      "mode": "0o664",
+      "sha256": "fa99be09efad5426e7434852de5ea54e55fbda36599c25b94f1b0f9605ae9501"
+    },
+    {
+      "path": "crates/aarnn-embodiment/src/lib.rs",
+      "bytes": 290,
+      "mode": "0o664",
+      "sha256": "772fbf068fb00da3c5f6a181f37d5bfd172613a56c9689cb2a8bb5216e3411c1"
+    },
+    {
+      "path": "crates/aarnn-embodiment/src/motor.rs",
+      "bytes": 3123,
+      "mode": "0o664",
+      "sha256": "e28f7f9ed148314811008c589df073be56f30bfc6db33354ae3a88a64b0a64b1"
+    },
+    {
+      "path": "crates/aarnn-embodiment/src/npc.rs",
+      "bytes": 3272,
+      "mode": "0o664",
+      "sha256": "5fbccaf11f2e620c56208d8250685d5342e363433ad4f09e38acb7d3bda528fa"
+    },
+    {
+      "path": "crates/aarnn-embodiment/src/projection.rs",
+      "bytes": 6139,
+      "mode": "0o664",
+      "sha256": "d4ad2403d61a5dfde12d3d5d68979756a8f2de24382d76f9269eea02bf2c61d6"
+    },
+    {
+      "path": "crates/aarnn-embodiment/src/schema.rs",
+      "bytes": 3954,
+      "mode": "0o664",
+      "sha256": "47b5fe59d1674e45886fc6b8d1fb349fecce58908a6359d74b69e16fb7850d3d"
+    },
+    {
+      "path": "crates/aarnn-embodiment/src/vision.rs",
+      "bytes": 2195,
+      "mode": "0o664",
+      "sha256": "7502d53545cb7562af7799130a864c0f7809d9444919776a1715155b45f5f4ab"
+    },
+    {
+      "path": "docs/execplans/lec-crow-expansion.md",
+      "bytes": 68285,
+      "mode": "0o664",
+      "sha256": "343f0913d8815c797acbd89aa8da8be96924e1445eec45f2d1f6f30e42ea1ad9"
+    },
+    {
+      "path": "docs/lec-crow-delivery.md",
+      "bytes": 27624,
+      "mode": "0o664",
+      "sha256": "cc626ebe45d66a768a16492e517f00e9c8970c0b96388770d4860deee61b9681"
+    },
+    {
+      "path": "examples/nn_tcp_server.rs",
+      "bytes": 39569,
+      "mode": "0o664",
+      "sha256": "1f0d6e6cfc9ac27e95fc029176afd7d1358ef6bfc658a255b4f7322c9a86e93c"
+    },
+    {
+      "path": "qa/fixtures/lec-crow/CURRENT.md",
+      "bytes": 7426,
+      "mode": "0o664",
+      "sha256": "1d003cad3b7ce37ccf564d4007a9ccdfb11f8fa461864741beb40d7997188109"
+    },
+    {
+      "path": "qa/fixtures/lec-crow/acceptance-matrix.current.json",
+      "bytes": 481346,
+      "mode": "0o664",
+      "sha256": "b9f3693d39be308ad1b6557cb5c4d96ac10272724496b118feeaf5af696a1727"
+    },
+    {
+      "path": "qa/scenarios/LEC-EXPANSION-001.toml",
+      "bytes": 2023,
+      "mode": "0o664",
+      "sha256": "172d4fa59c3104b18cc35f122e639f743bb3113c70a75bd8eb95203bd7f59101"
+    },
+    {
+      "path": "run_sim.sh",
+      "bytes": 195,
+      "mode": "0o775",
+      "sha256": "9076a9e78b29a87417f2f42ad3475275c12cbecf3c2d1f632873d0beb05a1d0a"
+    },
+    {
+      "path": "run_webot.sh",
+      "bytes": 126515,
+      "mode": "0o775",
+      "sha256": "134e410602ac84f3b821c4b1da53d4527fe75c8f70774f34cf3140b16370e608"
+    },
+    {
+      "path": "scripts/build_minecraft_bedrock.py",
+      "bytes": 16095,
+      "mode": "0o664",
+      "sha256": "1b2e9412935d3cc62fd41819b0c2f1cf9970d43277b8f1b32668f32ef2be94d0"
+    },
+    {
+      "path": "scripts/embodiment.py",
+      "bytes": 20711,
+      "mode": "0o664",
+      "sha256": "6da1505ff99c7809a9f746f5e5f3a850104f6c2f9a0cd4315ca561026708aba2"
+    },
+    {
+      "path": "scripts/embodiment_anatomy.py",
+      "bytes": 2895,
+      "mode": "0o664",
+      "sha256": "99d64c74a569f856bab8839e8df2ae3c45eb1bf18bbc79e677fcf0301356111d"
+    },
+    {
+      "path": "scripts/embodiment_archetypes.py",
+      "bytes": 7607,
+      "mode": "0o664",
+      "sha256": "1ff1ee76ca3377f8475aaf7475a4d0e4f559537972ba9ecf2447da1e350a4437"
+    },
+    {
+      "path": "scripts/embodiment_dispatch.sh",
+      "bytes": 1330,
+      "mode": "0o664",
+      "sha256": "53ff003e19d94abeeb9382dfab637df412219ff75a850761347c7c393008ce98"
+    },
+    {
+      "path": "scripts/embodiment_geometry.py",
+      "bytes": 2309,
+      "mode": "0o664",
+      "sha256": "3dd0ef5ae9c5a84864dc8a11a047039cd23d9d446e56b440a47f27a1d2ebd45d"
+    },
+    {
+      "path": "scripts/embodiment_graph.py",
+      "bytes": 11105,
+      "mode": "0o664",
+      "sha256": "2d75e2cc96b8d8523caec13e48bb1f85bcfb8abd8295fe1013e9ee862e2550a4"
+    },
+    {
+      "path": "scripts/embodiment_legacy.py",
+      "bytes": 9547,
+      "mode": "0o664",
+      "sha256": "f1f0c0f5004210a6364ee52ceb7472ca4e1e74df99731699ced4b8961183ab4e"
+    },
+    {
+      "path": "scripts/embodiment_neural.py",
+      "bytes": 9559,
+      "mode": "0o664",
+      "sha256": "ef1ae7875a7b4426ed37b8b815868929cb105df00974f3c82319f42f3813bd75"
+    },
+    {
+      "path": "scripts/embodiment_scene.py",
+      "bytes": 6588,
+      "mode": "0o664",
+      "sha256": "757192c36e2dce0dde3ec75db1df193fbb7b381ff7f60ffa5440302fc8d45ce7"
+    },
+    {
+      "path": "scripts/embodiment_usd.py",
+      "bytes": 7878,
+      "mode": "0o664",
+      "sha256": "4e8fe883ec3cc7539b3a3096568c9f3524c731a497ec30f05a6dea7829ad84b4"
+    },
+    {
+      "path": "scripts/embodiment_webots.py",
+      "bytes": 12463,
+      "mode": "0o664",
+      "sha256": "084e897d349c39e86083fa538f57dad9c9c1baa79fbd473e32b55648b493bb6d"
+    },
+    {
+      "path": "scripts/generate_embodiment_ffi.py",
+      "bytes": 3204,
+      "mode": "0o664",
+      "sha256": "3fb93628af1ff8ad238b484b0c6c6d56f12e743d1861afcffebb37184ad2521d"
+    },
+    {
+      "path": "scripts/mujoco_bindings.py",
+      "bytes": 3793,
+      "mode": "0o664",
+      "sha256": "a7ce87d39e699886799a9fd5817cb31ec4512c8f6d32f1d3ac3027cb514e7c37"
+    },
+    {
+      "path": "scripts/prepare_minecraft_physics.py",
+      "bytes": 2198,
+      "mode": "0o664",
+      "sha256": "7d972526d72d9703cc45caaf5eaa2986845a5b72fb38966ea4e1a40600511f68"
+    },
+    {
+      "path": "scripts/qa/PhysicsSessionProbe.java",
+      "bytes": 1292,
+      "mode": "0o664",
+      "sha256": "1bedd121003260b06ca88a92f006ff4376b3905dca34e127955e3d162c549785"
+    },
+    {
+      "path": "scripts/qa/consolidate_embodiments.py",
+      "bytes": 12902,
+      "mode": "0o664",
+      "sha256": "839d94890d16161d08623a8d0a0809ca5810b1efc243d4987ee6ea0350a8c3f1"
+    },
+    {
+      "path": "scripts/qa/embodiment_lab.py",
+      "bytes": 2792,
+      "mode": "0o664",
+      "sha256": "c4b36b534e03bc82d331e32f1a208c246a112899a6c17ac9b7326057bd52e2c0"
+    },
+    {
+      "path": "scripts/qa/export_webots_embodiment.py",
+      "bytes": 3050,
+      "mode": "0o664",
+      "sha256": "a30ccb16c30594f15790f93b3f85ce283634ca9fd6ba64a94575904e445e8d76"
+    },
+    {
+      "path": "scripts/qa/probe_embodiment_capabilities.py",
+      "bytes": 3491,
+      "mode": "0o664",
+      "sha256": "9601043dd86afb9520f142447001909b8e91129ab822d55a42b6644eda2456cf"
+    },
+    {
+      "path": "scripts/qa/probe_embodiment_fleet.py",
+      "bytes": 4578,
+      "mode": "0o664",
+      "sha256": "64c5087d0c2d781a7aa48c89a063da556d4ae8ca4a12871428da27c6cc298dc6"
+    },
+    {
+      "path": "scripts/qa/probe_embodiment_habitats.py",
+      "bytes": 4927,
+      "mode": "0o664",
+      "sha256": "9b2ce8c38493837a0729dcc87c7111ba8d024b9afcc079ad82494a5830b66847"
+    },
+    {
+      "path": "scripts/qa/probe_embodiment_neural.py",
+      "bytes": 7596,
+      "mode": "0o664",
+      "sha256": "188ddc357440a2eb5d1b86abb8896966eb49f9c68faadeb2b9549a238b68b7a9"
+    },
+    {
+      "path": "scripts/qa/probe_legacy_neural.py",
+      "bytes": 2121,
+      "mode": "0o664",
+      "sha256": "6ef6db998ea9a9858bcc71b320937d90d4cadc9ee0b4deeeb4e9de367ee4f9eb"
+    },
+    {
+      "path": "scripts/qa/probe_minecraft_bedrock.py",
+      "bytes": 13242,
+      "mode": "0o664",
+      "sha256": "be844fc7ed1bb20c082b5c99e4d03c6e30700d76c6d789915bbd93b6ff7a4363"
+    },
+    {
+      "path": "scripts/qa/probe_minecraft_neural.py",
+      "bytes": 7748,
+      "mode": "0o664",
+      "sha256": "a9df8ce5e762b4535c7b4192a15ed1ecbf986d2fe6d73cf625e51d02004431d7"
+    },
+    {
+      "path": "scripts/qa/probe_mujoco_managed.py",
+      "bytes": 6506,
+      "mode": "0o664",
+      "sha256": "15131cf1d75fab10b3279170a90ce528c60919b7ed322edaf9c37259605c9c2c"
+    },
+    {
+      "path": "scripts/qa/probe_mujoco_population.py",
+      "bytes": 3130,
+      "mode": "0o664",
+      "sha256": "b9f954c0a7e761a96a0e76944b674a5a1a95cf53a38f6637f54eddf34a2dfa34"
+    },
+    {
+      "path": "scripts/qa/render_embodiment_habitats.py",
+      "bytes": 2402,
+      "mode": "0o664",
+      "sha256": "5d680b4004f1ab1860cdd1aabbc752c15c45053f195a00ce48af3b26c2286cf6"
+    },
+    {
+      "path": "scripts/qa/report_embodiment_changes.py",
+      "bytes": 1610,
+      "mode": "0o664",
+      "sha256": "da6bf63efa6235080c16ef050512bd709e424560d62f7ff053760ee6fcadfb3e"
+    },
+    {
+      "path": "scripts/qa/run_embodiments.py",
+      "bytes": 37634,
+      "mode": "0o664",
+      "sha256": "a339456fb4e057f3925b742411beb837ca2dab408c442ccb87e2ec9bec1b7fd3"
+    },
+    {
+      "path": "scripts/qa/test_embodiment_ffi.py",
+      "bytes": 3127,
+      "mode": "0o664",
+      "sha256": "b2a8d97e9aa75e200fce4900339e9f05cc240e245721041d13f3f816900415ab"
+    },
+    {
+      "path": "scripts/qa/test_embodiment_graph.py",
+      "bytes": 4675,
+      "mode": "0o664",
+      "sha256": "097ad0377b6423060d83ab5a9396a16aecc23b6ba23147d19aec01bfa485d748"
+    },
+    {
+      "path": "scripts/qa/test_embodiment_launchers.py",
+      "bytes": 5967,
+      "mode": "0o664",
+      "sha256": "62c3598838d709b59bc0685aeb89e627b20ce1e5bd8688c33ef4dc290d6aa037"
+    },
+    {
+      "path": "scripts/qa/test_embodiments.py",
+      "bytes": 4625,
+      "mode": "0o664",
+      "sha256": "cea46abb7a2e29e59455cb1c70ff2a1cea2952468226255c2842318ef33ea6ba"
+    },
+    {
+      "path": "scripts/qa/test_habitat_browser.cjs",
+      "bytes": 3136,
+      "mode": "0o664",
+      "sha256": "57bc52c46a4ed3645fba1612018248face106605af2920c9d8e75da7bf0c5778"
+    },
+    {
+      "path": "scripts/qa/test_legacy_bindings.py",
+      "bytes": 3760,
+      "mode": "0o664",
+      "sha256": "9e213771461a61c1c5f313030aba5fa0449bd95a9be2760ba6c94c7e1cd739eb"
+    },
+    {
+      "path": "scripts/qa/test_minecraft_physics.cjs",
+      "bytes": 3478,
+      "mode": "0o664",
+      "sha256": "d421e99d17173910027401b79d18d20def7d26ba346fa663fb6f434fceb9a8a7"
+    },
+    {
+      "path": "scripts/qa/test_physics_service.py",
+      "bytes": 2858,
+      "mode": "0o664",
+      "sha256": "d09fd610ab7f77ac96032932be929036cbdfdbe6eb0f758f0e3f6ed8db410203"
+    },
+    {
+      "path": "scripts/qa/test_rust_physics_service.py",
+      "bytes": 7537,
+      "mode": "0o664",
+      "sha256": "c96d24d8ce4690a40bebc939a811073593c5efa1fb25925ae7672ddc6afd0082"
+    },
+    {
+      "path": "scripts/qa/test_simulator_content.py",
+      "bytes": 16496,
+      "mode": "0o664",
+      "sha256": "351c6b588b2ecc11b81c88b22bd684a751c15bacdda9c94fa30aa4fe6d9dfc6e"
+    },
+    {
+      "path": "scripts/robot_aer.py",
+      "bytes": 7603,
+      "mode": "0o664",
+      "sha256": "c1951c5849832d527952286186888c1186dc6ec49d69e4e011d63f6cdf3cae5e"
+    },
+    {
+      "path": "scripts/robot_profiles.py",
+      "bytes": 10283,
+      "mode": "0o775",
+      "sha256": "3fecb1ef40782fc8d59fdebeed81b521bd0f0e7b1c9af82378977bd35576abdb"
+    },
+    {
+      "path": "scripts/run_embodied_sim.py",
+      "bytes": 4156,
+      "mode": "0o664",
+      "sha256": "1019326d1c338aef668a6abe9a7a72d5dc626e57426b8b132d37e2e700cae5ee"
+    },
+    {
+      "path": "scripts/run_isaacsim_sim.sh",
+      "bytes": 206,
+      "mode": "0o775",
+      "sha256": "9d75745655af0fab88fe5a0180bfd75a14bec4d3bc232b0f196d0bf7b72968cd"
+    },
+    {
+      "path": "scripts/run_minecraft_sim.sh",
+      "bytes": 239,
+      "mode": "0o775",
+      "sha256": "4ded752650b43bf2ef2ad2a17ff0b56fb4318a68e5c556ba3aa61e0bde6d37c0"
+    },
+    {
+      "path": "scripts/run_mujoco_sim.sh",
+      "bytes": 202,
+      "mode": "0o775",
+      "sha256": "af233b3ad49fda5ee7dc04f7f46c61b276587af68dd9a6a95f91ba0911f5e084"
+    },
+    {
+      "path": "scripts/run_multi_robot_webots.sh",
+      "bytes": 77099,
+      "mode": "0o775",
+      "sha256": "de1196f5ce48bda351c26980c7b9497b6dde408f9b855bde86e72838c82dcc0a"
+    },
+    {
+      "path": "scripts/run_native_embodiment.py",
+      "bytes": 8169,
+      "mode": "0o664",
+      "sha256": "82e5e6727a82b110833915485a9f01657defdae796a5f158c0de25ecbf4aecca"
+    },
+    {
+      "path": "scripts/run_sim.sh",
+      "bytes": 60652,
+      "mode": "0o775",
+      "sha256": "f5e1b47bb50d7751fb1b1bbb381236df65e0c7754072d3828618bdff75ab0b5b"
+    },
+    {
+      "path": "scripts/run_unity_sim.sh",
+      "bytes": 4110,
+      "mode": "0o775",
+      "sha256": "5d10a94748ddbacec1a0f45d539fe9b95df587395d3cab01cb53746e2b699773"
+    },
+    {
+      "path": "scripts/run_unreal_sim.sh",
+      "bytes": 3704,
+      "mode": "0o775",
+      "sha256": "fdcba658cac12f2e15dee61929908fe842844185691215d74b3ef33ca66090a9"
+    },
+    {
+      "path": "scripts/run_webgl_sim.sh",
+      "bytes": 404,
+      "mode": "0o775",
+      "sha256": "18fd324593b5bc771aa311e221d79be5e4e45e7955b0865ab8c468521caf55b3"
+    },
+    {
+      "path": "scripts/run_webots_embodiment.py",
+      "bytes": 6165,
+      "mode": "0o664",
+      "sha256": "87537c8d2adb07ede954900cea1ea292a62caefe444750004834d3f66fca5bb8"
+    },
+    {
+      "path": "sim/content/embodiments/NOTICE.md",
+      "bytes": 4988,
+      "mode": "0o664",
+      "sha256": "dc31f680a02394be620b5d1b519edbf3718b5c01d79df8671c50d835adbc71f5"
+    },
+    {
+      "path": "sim/content/embodiments/README.md",
+      "bytes": 12708,
+      "mode": "0o664",
+      "sha256": "ca017999fde5d9de1413facecd52e9ed2f7e468a6090f3a8f2019d807ad1fe0e"
+    },
+    {
+      "path": "sim/content/embodiments/celegans-simulation-v1.json",
+      "bytes": 2333,
+      "mode": "0o664",
+      "sha256": "7dca4ac6f98327c99a20d02872473aa34c3bb85f0a964d4174d10dc55550d66e"
+    },
+    {
+      "path": "sim/content/embodiments/celegans-simulation-v2.json",
+      "bytes": 3345,
+      "mode": "0o664",
+      "sha256": "084cb0eef89ca1316cb118176c0b7c2240d7d2b2f2515c03f16462c59e418380"
+    },
+    {
+      "path": "sim/content/embodiments/generated/botinkit_omni.config.json",
+      "bytes": 205,
+      "mode": "0o664",
+      "sha256": "90b48dd3303dcc0aed828257b25f986df5bbc8420c7eea8de4261ec309771aba"
+    },
+    {
+      "path": "sim/content/embodiments/generated/botinkit_omni.json",
+      "bytes": 112742,
+      "mode": "0o664",
+      "sha256": "4a1e0eaf8e4bfe00b4f47e3c87563c90355dc156601359d89bd92f1825a4c298"
+    },
+    {
+      "path": "sim/content/embodiments/generated/botinkit_omni.usda",
+      "bytes": 50685,
+      "mode": "0o664",
+      "sha256": "93038caef61107f8f075dd5e023430d40f1a991575182c1ea7bdc4a9e74a9bc9"
+    },
+    {
+      "path": "sim/content/embodiments/generated/botinkit_omni.xml",
+      "bytes": 23187,
+      "mode": "0o664",
+      "sha256": "4c3137f501e51770f3afb33222dbcbf5acfbb14140ef083a3eefab97df01206d"
+    },
+    {
+      "path": "sim/content/embodiments/generated/celegans.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "95e3086bb6e2a92d2e0cafa5516aaa924cbd2e37dc33a6b9e9b9e264eac7056a"
+    },
+    {
+      "path": "sim/content/embodiments/generated/celegans.json",
+      "bytes": 298589,
+      "mode": "0o664",
+      "sha256": "2f4ed3745ab39ea3e97ea11077e017b8df659226746114349a3895db961e6a78"
+    },
+    {
+      "path": "sim/content/embodiments/generated/celegans.usda",
+      "bytes": 210963,
+      "mode": "0o664",
+      "sha256": "9212bb2d7165cdf2dcec937a336fa3f7c65f4d243fedc3bbd4a888d8dc448c79"
+    },
+    {
+      "path": "sim/content/embodiments/generated/celegans.xml",
+      "bytes": 81277,
+      "mode": "0o664",
+      "sha256": "e2bd927d48b8e55e653cd0d928277bc87165213e4d44c1765ea6626e11f157b3"
+    },
+    {
+      "path": "sim/content/embodiments/generated/cofe_robot_cafe.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "1048c28e69384b6cfe5309cc413c59be69210105d06b3cd177d9b6afab39ba1b"
+    },
+    {
+      "path": "sim/content/embodiments/generated/cofe_robot_cafe.json",
+      "bytes": 130889,
+      "mode": "0o664",
+      "sha256": "45225210e8a461b57705f9e0db900010b5033f336bcd9d2d8a93126f2908bb3d"
+    },
+    {
+      "path": "sim/content/embodiments/generated/cofe_robot_cafe.usda",
+      "bytes": 65696,
+      "mode": "0o664",
+      "sha256": "39881d6b257a4fddda25882898733a91916c6720d555c3d4c29f6277689cc5e4"
+    },
+    {
+      "path": "sim/content/embodiments/generated/cofe_robot_cafe.xml",
+      "bytes": 26401,
+      "mode": "0o664",
+      "sha256": "cb252699b0557586717f9638854c57a9fdccc07fd75344937b294b9d38271852"
+    },
+    {
+      "path": "sim/content/embodiments/generated/cofe_smart_bar.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "1048c28e69384b6cfe5309cc413c59be69210105d06b3cd177d9b6afab39ba1b"
+    },
+    {
+      "path": "sim/content/embodiments/generated/cofe_smart_bar.json",
+      "bytes": 130896,
+      "mode": "0o664",
+      "sha256": "5ab2c4d12749382dbf713cb9568debddaf375feb9ff302f4875e84892ced0ee9"
+    },
+    {
+      "path": "sim/content/embodiments/generated/cofe_smart_bar.usda",
+      "bytes": 65740,
+      "mode": "0o664",
+      "sha256": "3773be26f3cc29f18e38fadb0c55c49a1ba9db8291493af8ad61ea4a348e9a33"
+    },
+    {
+      "path": "sim/content/embodiments/generated/cofe_smart_bar.xml",
+      "bytes": 26364,
+      "mode": "0o664",
+      "sha256": "28b07f7d0e1986a63fe872a4a203e29f92cde9e8bd6a47212f655d968b6e89c2"
+    },
+    {
+      "path": "sim/content/embodiments/generated/crow_corvus_corone.config.json",
+      "bytes": 207,
+      "mode": "0o664",
+      "sha256": "dd7d6beaaca8e19cd39d7b41c89e3bf3908e2f0f9cbd052ba182a91ee8b62108"
+    },
+    {
+      "path": "sim/content/embodiments/generated/crow_corvus_corone.json",
+      "bytes": 301034,
+      "mode": "0o664",
+      "sha256": "48736eccc24397ebf7d2674d0a02e96551800c0157b3597ab03dd9514f22df5e"
+    },
+    {
+      "path": "sim/content/embodiments/generated/crow_corvus_corone.usda",
+      "bytes": 123418,
+      "mode": "0o664",
+      "sha256": "86db20289784c7f5edf0f9e987412823d548b94dfd6642202ed22191e02d2220"
+    },
+    {
+      "path": "sim/content/embodiments/generated/crow_corvus_corone.xml",
+      "bytes": 39587,
+      "mode": "0o664",
+      "sha256": "0d47146b0c26c77bae2d504b2549d47e0574e428821ac26c76c2ef2e3d44d860"
+    },
+    {
+      "path": "sim/content/embodiments/generated/drosophila_banc.config.json",
+      "bytes": 207,
+      "mode": "0o664",
+      "sha256": "920d9130caf71565793f1b4b7af63db0424969e4f3ac3ea3b29a9c86498ea2fc"
+    },
+    {
+      "path": "sim/content/embodiments/generated/drosophila_banc.json",
+      "bytes": 444191,
+      "mode": "0o664",
+      "sha256": "cf226664874405f69889891eece8a85942c6c3b402396c7d661f7912028ca6c7"
+    },
+    {
+      "path": "sim/content/embodiments/generated/drosophila_banc.usda",
+      "bytes": 156571,
+      "mode": "0o664",
+      "sha256": "e2f495db4674f0561f6ca931e107c34d4cd9e97e79895b2e6dedf16b1b44bb74"
+    },
+    {
+      "path": "sim/content/embodiments/generated/drosophila_banc.xml",
+      "bytes": 63277,
+      "mode": "0o664",
+      "sha256": "87fe70f618b0e639dd73c8f487d6b00329a0f941f58e47bd7248386477064bb3"
+    },
+    {
+      "path": "sim/content/embodiments/generated/drosophila_fafb.config.json",
+      "bytes": 207,
+      "mode": "0o664",
+      "sha256": "920d9130caf71565793f1b4b7af63db0424969e4f3ac3ea3b29a9c86498ea2fc"
+    },
+    {
+      "path": "sim/content/embodiments/generated/drosophila_fafb.json",
+      "bytes": 444191,
+      "mode": "0o664",
+      "sha256": "64c4c302f2b35cda60f1f18294b136a72ce6e75198c8aa8d63ceaab3742c7ef5"
+    },
+    {
+      "path": "sim/content/embodiments/generated/drosophila_fafb.usda",
+      "bytes": 156571,
+      "mode": "0o664",
+      "sha256": "24d4085012e426826614771d0d5563573230ee1493dd5e98b63ff1a7b4c03693"
+    },
+    {
+      "path": "sim/content/embodiments/generated/drosophila_fafb.xml",
+      "bytes": 63277,
+      "mode": "0o664",
+      "sha256": "6bc0b40e9a15b261a2d03c05cb7af35e7e49853ffb7378063788830d231a6b6d"
+    },
+    {
+      "path": "sim/content/embodiments/generated/galbot_g1_golf.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "498d09478de95ffc543816e5bcef1a042c630b99229a945496375c19419589f9"
+    },
+    {
+      "path": "sim/content/embodiments/generated/galbot_g1_golf.json",
+      "bytes": 398970,
+      "mode": "0o664",
+      "sha256": "20454f2d4a34289a2cd5dc955f2b2c8efd714917db936e9d1b8be1f52e2ab3fb"
+    },
+    {
+      "path": "sim/content/embodiments/generated/galbot_g1_golf.usda",
+      "bytes": 45618,
+      "mode": "0o664",
+      "sha256": "0cfe90d46175b8d8ba1f4ab18525581db760b83f79f61c36fa038b29669f8c1a"
+    },
+    {
+      "path": "sim/content/embodiments/generated/galbot_g1_golf.xml",
+      "bytes": 153856,
+      "mode": "0o664",
+      "sha256": "ff2819a9c8bd45b7d1b2fbe74da617b739e6c1df71575a5ad86e21e7df11a51b"
+    },
+    {
+      "path": "sim/content/embodiments/generated/hexapod.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "77c0a0c4e790f3484f950ab81a6e011980c5af78d40688b8d48d095e61f57cf4"
+    },
+    {
+      "path": "sim/content/embodiments/generated/hexapod.json",
+      "bytes": 183726,
+      "mode": "0o664",
+      "sha256": "6a23feeb059aeccb945d9c8db9edeef85103766b9c1dc2d450fe42028f0dcc3c"
+    },
+    {
+      "path": "sim/content/embodiments/generated/hexapod.usda",
+      "bytes": 98778,
+      "mode": "0o664",
+      "sha256": "e2421a76ff1461f54d0bd66eabde8d6b2c6ca43dc7beff729a2ecc0ef7ba685e"
+    },
+    {
+      "path": "sim/content/embodiments/generated/hexapod.xml",
+      "bytes": 38349,
+      "mode": "0o664",
+      "sha256": "e962627df5fcc031278ca487d39a8f0d072b28e00aa63ca044818820feaaf21a"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_c30.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "b2bcbbc234fcf29bfe570f254d181d621c9f0845dc64edaf6f0d086dbbcae39f"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_c30.json",
+      "bytes": 123680,
+      "mode": "0o664",
+      "sha256": "3d1bbe9274d330515c47ac0bc45aa323f022689c0da65904fa1672a19e1777a7"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_c30.usda",
+      "bytes": 58686,
+      "mode": "0o664",
+      "sha256": "1e1af0fa6f914f9cea956802d6d05f69256253bd055bc1c1d76ef3ace23606e2"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_c30.xml",
+      "bytes": 25208,
+      "mode": "0o664",
+      "sha256": "6c59b2e44e44b3570dd2057821a9aff56c8407f53767fc78285463fe2cd038df"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_c40.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "b2bcbbc234fcf29bfe570f254d181d621c9f0845dc64edaf6f0d086dbbcae39f"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_c40.json",
+      "bytes": 123716,
+      "mode": "0o664",
+      "sha256": "72ca7a7b5ec0876a0081374fd99896beed3f63c30425cb1189f563616a039775"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_c40.usda",
+      "bytes": 58646,
+      "mode": "0o664",
+      "sha256": "392ce450fd789595e6f9ff63ff6df1d89cdc0ff02099d9dbb180d581270cd046"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_c40.xml",
+      "bytes": 25168,
+      "mode": "0o664",
+      "sha256": "b909a50f32ba4937bea458ac377cc07c837c97be6fdbb2f7cf88e97e620a0a3a"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_s100.config.json",
+      "bytes": 205,
+      "mode": "0o664",
+      "sha256": "0b5c2453e7d34c1e385e7431138ea8dce9cc3f1906a41565c1cb3813a8f63d16"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_s100.json",
+      "bytes": 122666,
+      "mode": "0o664",
+      "sha256": "7044d5e6cfcf12215da4ec20a8624cc192422db95de3f0b01356f4b1d7ba9647"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_s100.usda",
+      "bytes": 58441,
+      "mode": "0o664",
+      "sha256": "ed70a68fbbcab4b3bbc9756e5daa410f2025f2c555b53829216d84959f881412"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_s100.xml",
+      "bytes": 25289,
+      "mode": "0o664",
+      "sha256": "f1a0a71f46cfa49e51443e7af9faaed5bcd45233146290397e2a8daf95392794"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t10.config.json",
+      "bytes": 205,
+      "mode": "0o664",
+      "sha256": "0b5c2453e7d34c1e385e7431138ea8dce9cc3f1906a41565c1cb3813a8f63d16"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t10.json",
+      "bytes": 122499,
+      "mode": "0o664",
+      "sha256": "aee400552c51c925b3ae0df9a6293a025759542daebd926a0ec68d1b4b4d0c73"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t10.usda",
+      "bytes": 58328,
+      "mode": "0o664",
+      "sha256": "42663f7072e85581614ced8a73837efe90a0f7b9e9dfceca3d2592ecffd8676f"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t10.xml",
+      "bytes": 25211,
+      "mode": "0o664",
+      "sha256": "24be5c82b5cbbf1e8a85b302d9d0673bd4205338124ae5ea11da33711a592aa3"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t11.config.json",
+      "bytes": 205,
+      "mode": "0o664",
+      "sha256": "0b5c2453e7d34c1e385e7431138ea8dce9cc3f1906a41565c1cb3813a8f63d16"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t11.json",
+      "bytes": 122140,
+      "mode": "0o664",
+      "sha256": "93a90426f6e5496f15e06f9280e454a845596ae031a7a4075f337f04f4db42f5"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t11.usda",
+      "bytes": 57940,
+      "mode": "0o664",
+      "sha256": "5ab5f39334e330fe6188b854b628e0eb3a6201ad23927da785070fe537ec4f65"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t11.xml",
+      "bytes": 25106,
+      "mode": "0o664",
+      "sha256": "fdd9aeb9a00db2f4b10558129aa40bfc967526363c59e2e8ae13e94d4be4fb03"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t8.config.json",
+      "bytes": 205,
+      "mode": "0o664",
+      "sha256": "0b5c2453e7d34c1e385e7431138ea8dce9cc3f1906a41565c1cb3813a8f63d16"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t8.json",
+      "bytes": 122210,
+      "mode": "0o664",
+      "sha256": "18a0679d840e507d0d05e2cc5a55562924ac9359003bb80a90bc05a8a23ed073"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t8.usda",
+      "bytes": 57951,
+      "mode": "0o664",
+      "sha256": "7419937a02a898544524ff7b9d87496a732a258195329b48c826bedc174b801d"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t8.xml",
+      "bytes": 25141,
+      "mode": "0o664",
+      "sha256": "710c067697e9a914a30fba949e096cba611d4ddbf56b6fd4c61ffb627f981d68"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t9.config.json",
+      "bytes": 205,
+      "mode": "0o664",
+      "sha256": "0b5c2453e7d34c1e385e7431138ea8dce9cc3f1906a41565c1cb3813a8f63d16"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t9.json",
+      "bytes": 122344,
+      "mode": "0o664",
+      "sha256": "1772893677eef2c83d2863c29e9f2a2c034f27e40946868de15e4a592cc09e60"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t9.usda",
+      "bytes": 58252,
+      "mode": "0o664",
+      "sha256": "f9bd9eb05aef25b204c18f89ae3b587177476d14f61e29da469663687f8ad8ba"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_t9.xml",
+      "bytes": 25076,
+      "mode": "0o664",
+      "sha256": "979bf829a28e6b3603477f1b3c9a0ec8f72de443cc6a22cf64db188713eb6077"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_w3.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "19df11d0601e3bd02ca144a662cf749cd0c06ac9e5520cd0533fd553aec007fc"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_w3.json",
+      "bytes": 127837,
+      "mode": "0o664",
+      "sha256": "0ee15e75f5ca585a57c99f0b7d85a3ce8872417a8d8fe1d5142116d10c2a386b"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_w3.usda",
+      "bytes": 62468,
+      "mode": "0o664",
+      "sha256": "ec89a44115efcf94b3a4e927642982b1354477d6f5ebcee3be1b0690bf9a82b0"
+    },
+    {
+      "path": "sim/content/embodiments/generated/keenon_w3.xml",
+      "bytes": 26162,
+      "mode": "0o664",
+      "sha256": "1724654b4bb99b8e6895df888689e5fd122bad84aa7cc09e6ad72bcc307cef5c"
+    },
+    {
+      "path": "sim/content/embodiments/generated/nao.config.json",
+      "bytes": 207,
+      "mode": "0o664",
+      "sha256": "ecf6f5cb0708b2b883684cce423d24fac0074d19182e60d4135b9bf19348196e"
+    },
+    {
+      "path": "sim/content/embodiments/generated/nao.json",
+      "bytes": 296188,
+      "mode": "0o664",
+      "sha256": "91562598f2dd60f948b248b4f35a4446159d27d920c1dca997b72c5a0c82988e"
+    },
+    {
+      "path": "sim/content/embodiments/generated/nao.usda",
+      "bytes": 124104,
+      "mode": "0o664",
+      "sha256": "1dcd520f0de8254b50e3cf2f8e8ea92f9468c4e1e490d180e0f1b1fc2c782160"
+    },
+    {
+      "path": "sim/content/embodiments/generated/nao.xml",
+      "bytes": 39115,
+      "mode": "0o664",
+      "sha256": "b21978ac3a2aaad7220b9ba32ccbd3ca3eb0b46e411b5eda612c75ccb5732669"
+    },
+    {
+      "path": "sim/content/embodiments/generated/registry.generated.json",
+      "bytes": 13124,
+      "mode": "0o664",
+      "sha256": "52e66d44cbff65a4093231b2697e8714d19a4f6e5e83371b6cc438f734dea7f8"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_balance.config.json",
+      "bytes": 205,
+      "mode": "0o664",
+      "sha256": "90b48dd3303dcc0aed828257b25f986df5bbc8420c7eea8de4261ec309771aba"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_balance.json",
+      "bytes": 131796,
+      "mode": "0o664",
+      "sha256": "4d143f5e10bca7881acdf5fc247def82f88043a36c448ae98c0474bdabd54958"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_balance.usda",
+      "bytes": 59322,
+      "mode": "0o664",
+      "sha256": "d3b01ea991eb194e673ad6782a9017b3fde377e66e4dcf00483807043366a951"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_balance.xml",
+      "bytes": 27113,
+      "mode": "0o664",
+      "sha256": "617a4a3dc203a9681023137e061d7879ba8e3872fe02cccde4a40a05a2a6469b"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_engineer.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "e5dc5e1f5a9fe18ce4a265175cc2325e14deb114b85b1f493949b370c162083d"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_engineer.json",
+      "bytes": 148873,
+      "mode": "0o664",
+      "sha256": "0da63f0ea840829c596586baa7ae19058798cbb0a0b7d9ed74e8f6db9f05cc07"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_engineer.usda",
+      "bytes": 72942,
+      "mode": "0o664",
+      "sha256": "8fd0b0e63e818e06990c439d1e51b35abeed7bd4d4742cf1fc82230a9b55ce21"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_engineer.xml",
+      "bytes": 29859,
+      "mode": "0o664",
+      "sha256": "da8bd77a9302d711e5f202b35411b6471ec604575a7a802ad746f3eeba7140fe"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_mecanum.config.json",
+      "bytes": 205,
+      "mode": "0o664",
+      "sha256": "0b5c2453e7d34c1e385e7431138ea8dce9cc3f1906a41565c1cb3813a8f63d16"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_mecanum.json",
+      "bytes": 197341,
+      "mode": "0o664",
+      "sha256": "39d6f3ad432b05237ef1b0cd079d0b12565f66245b8e297a16068f2103d182e3"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_mecanum.usda",
+      "bytes": 129209,
+      "mode": "0o664",
+      "sha256": "7f3441a33355015a70814d88968c827d7421bb72674d2f50100cfde38345e1a1"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_mecanum.xml",
+      "bytes": 47555,
+      "mode": "0o664",
+      "sha256": "bbc3cef6618badf81b551b0d4dbe266eb090d8d2cbb3f5f180d3a6bdc1d781d7"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_quadruped.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "025a7f7b9ec4f8d77699a12a97449cbfa15f3d3dc6b7e24d51cb79a03b12c497"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_quadruped.json",
+      "bytes": 156505,
+      "mode": "0o664",
+      "sha256": "a3367ba35d3856055342e6aa49988eafbada4c7d00748eeab97b4dad9fb8d2e2"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_quadruped.usda",
+      "bytes": 78651,
+      "mode": "0o664",
+      "sha256": "b5606201d2d13235e339543b6de7d108c4f6f7013ebafcba8ba2d0acb97000e7"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_quadruped.xml",
+      "bytes": 30519,
+      "mode": "0o664",
+      "sha256": "13f0fa04612112eb01d64029b94c00c817636e50615bdf2dbfa9c2f0248ca77b"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_spider.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "025a7f7b9ec4f8d77699a12a97449cbfa15f3d3dc6b7e24d51cb79a03b12c497"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_spider.json",
+      "bytes": 156439,
+      "mode": "0o664",
+      "sha256": "4616d5282ad30195c3916b74894c206febfcebc99c44012e213289713a1efbb9"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_spider.usda",
+      "bytes": 78591,
+      "mode": "0o664",
+      "sha256": "9308523fca1929d0d52692cb569d26c50c8fd9f07704191abcc3826acab4216b"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_spider.xml",
+      "bytes": 30516,
+      "mode": "0o664",
+      "sha256": "6337254d15c68b5e4f67dd5b6e3cd1b2595b0abbdd2aa1edc2e22a4221cb84af"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_transform.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "19df11d0601e3bd02ca144a662cf749cd0c06ac9e5520cd0533fd553aec007fc"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_transform.json",
+      "bytes": 142204,
+      "mode": "0o664",
+      "sha256": "77a719a548f65d4f0bb23051653eeef86721d018a4f985255813f81f32b51c1a"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_transform.usda",
+      "bytes": 67311,
+      "mode": "0o664",
+      "sha256": "0f32245feb2cbd2b4666912f118d31234aedd981e2a2f1a235bd1b56025cda7f"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_transform.xml",
+      "bytes": 28749,
+      "mode": "0o664",
+      "sha256": "29812a09a22ec8021323e188a59c64cca69aa064fb90abe8c83a3129ad7b35a4"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_wheelleg.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "19df11d0601e3bd02ca144a662cf749cd0c06ac9e5520cd0533fd553aec007fc"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_wheelleg.json",
+      "bytes": 141546,
+      "mode": "0o664",
+      "sha256": "a8c2d1ddd03316b8a161719a2717839599b70ce59ba05c00b4e2ba65ce66042f"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_wheelleg.usda",
+      "bytes": 67020,
+      "mode": "0o664",
+      "sha256": "f77d35d3a9ffd70b38faa20dd816dc4aee6dc840b4948643cba6711cf7b9f59c"
+    },
+    {
+      "path": "sim/content/embodiments/generated/ugot_wheelleg.xml",
+      "bytes": 28432,
+      "mode": "0o664",
+      "sha256": "ad331565f9cd90e83050f13ac9c72cf629660165f589d455d0323a679aa60ffe"
+    },
+    {
+      "path": "sim/content/embodiments/generated/xbot_ic60.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "1048c28e69384b6cfe5309cc413c59be69210105d06b3cd177d9b6afab39ba1b"
+    },
+    {
+      "path": "sim/content/embodiments/generated/xbot_ic60.json",
+      "bytes": 130763,
+      "mode": "0o664",
+      "sha256": "d0b32355d33cb9138c177c3971f9a71052650af75ccf098e7014e7821b03d6ed"
+    },
+    {
+      "path": "sim/content/embodiments/generated/xbot_ic60.usda",
+      "bytes": 65645,
+      "mode": "0o664",
+      "sha256": "88f7b922da1a59dea629d0785a5491661b8075890f343e861b86501c0c70904d"
+    },
+    {
+      "path": "sim/content/embodiments/generated/xbot_ic60.xml",
+      "bytes": 26292,
+      "mode": "0o664",
+      "sha256": "13347bcc0faa12e7bb988a5b3508e22ae5244dbee6cb73c8cbba7061f02030a8"
+    },
+    {
+      "path": "sim/content/embodiments/generated/xbot_s_pro.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "6ab7494014d79ae6f4ef03ea9f41305809303c06caeb922c93e0ef6373611c4e"
+    },
+    {
+      "path": "sim/content/embodiments/generated/xbot_s_pro.json",
+      "bytes": 151073,
+      "mode": "0o664",
+      "sha256": "c3c6af2a0989aea17499ae41ca3526efa9fe88ebd19e62f9b18c461c47b959fe"
+    },
+    {
+      "path": "sim/content/embodiments/generated/xbot_s_pro.usda",
+      "bytes": 81765,
+      "mode": "0o664",
+      "sha256": "13eb798f54b16215d9e3e646535092219cbafc705e872fc5e314476474871c54"
+    },
+    {
+      "path": "sim/content/embodiments/generated/xbot_s_pro.xml",
+      "bytes": 29693,
+      "mode": "0o664",
+      "sha256": "adfb068fc24c633012d7cb52e5378045bb0e4297037e9cd4aad95a59551e8c1f"
+    },
+    {
+      "path": "sim/content/embodiments/generated/zebrafish.config.json",
+      "bytes": 206,
+      "mode": "0o664",
+      "sha256": "f6255ecddeef4b47df5250c00c6a52f3b78af238150e8e438246f45932405e41"
+    },
+    {
+      "path": "sim/content/embodiments/generated/zebrafish.json",
+      "bytes": 240054,
+      "mode": "0o664",
+      "sha256": "a703093ad471b84419059a4eff786ca31a31556acee7cc1c3a277ce3d1e22e99"
+    },
+    {
+      "path": "sim/content/embodiments/generated/zebrafish.usda",
+      "bytes": 127966,
+      "mode": "0o664",
+      "sha256": "a834362ad84f5d796ea50e2caa3495249a855f112d345d9fc6dec85d723fd945"
+    },
+    {
+      "path": "sim/content/embodiments/generated/zebrafish.xml",
+      "bytes": 52793,
+      "mode": "0o664",
+      "sha256": "c8f879e4d47fca34b4fe6ecfaf0e29a26a48fb999867ffe86dc4f91028532e06"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/botinkit_omni.json",
+      "bytes": 226231,
+      "mode": "0o664",
+      "sha256": "1bad8dd28707ab4a431c703e616349e4d72283bbd5196e01e63010f19b209573"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/celegans.json",
+      "bytes": 1677117,
+      "mode": "0o664",
+      "sha256": "751335e9dbdb8516ff3cf8e93de420d392308b2ddf04e996d6a8ca3ae724f4e5"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/cofe_robot_cafe.json",
+      "bytes": 247732,
+      "mode": "0o664",
+      "sha256": "ba1e577d0e7a8122766a59228b1855470e429d9d8cb20481ebc15308ca00c095"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/cofe_smart_bar.json",
+      "bytes": 247847,
+      "mode": "0o664",
+      "sha256": "0800233b9d35c8f95e90f9c177b35f9fd9b1c4009a9344068409f5ca8bfb81ca"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/crow_corvus_corone.json",
+      "bytes": 834654,
+      "mode": "0o664",
+      "sha256": "f8e0573323a839233b704ba6abc5a3b92dda060a42f0993bee319a159c2cdd78"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/drosophila_banc.json",
+      "bytes": 969282,
+      "mode": "0o664",
+      "sha256": "9db8a7b227fc3a36a6f065c47be7cca9e3930e78c188e9c9a6354776f43a8297"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/drosophila_fafb.json",
+      "bytes": 969282,
+      "mode": "0o664",
+      "sha256": "038e03626b961e11e23a97a99b72c62801bc4fb962ad9d218093e09f65814e0b"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/galbot_g1_golf.json",
+      "bytes": 13178436,
+      "mode": "0o664",
+      "sha256": "d9f5b41b35d4c440d44e3093c72c4674e6311f2146fb31cf1b7e99095d493546"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/hexapod.json",
+      "bytes": 356969,
+      "mode": "0o664",
+      "sha256": "b93ed843ef25d8c41d792a5655271332b786f086a11ef1b49686934523b9b6e6"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/keenon_c30.json",
+      "bytes": 244182,
+      "mode": "0o664",
+      "sha256": "6be83e373691d6efe777ecff77fa9b2e33b1ddfb50d1709a4ed568d2574fa7cc"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/keenon_c40.json",
+      "bytes": 243457,
+      "mode": "0o664",
+      "sha256": "ba538262cf66da4d2ca0631b5ad5d977bfc830d1421d1177c33a3a1a01cb589b"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/keenon_s100.json",
+      "bytes": 237802,
+      "mode": "0o664",
+      "sha256": "cac774ac8e1bdb6100655c31c85e72a4c11c835a08f155b6ac635ea6dfe3bf47"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/keenon_t10.json",
+      "bytes": 237126,
+      "mode": "0o664",
+      "sha256": "0cbe7ca1541b4bd9918dc86434344d2616c753138223afd03c1fa3e76be83f9b"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/keenon_t11.json",
+      "bytes": 237151,
+      "mode": "0o664",
+      "sha256": "95f21d0819faf9767f54c5222607350361553010da9b220fa9cf9f15b694125e"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/keenon_t8.json",
+      "bytes": 237288,
+      "mode": "0o664",
+      "sha256": "6b40c7c5c2d27cb691a0889fc254899748ca9fee847cdeac1b8705ee4f86daa2"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/keenon_t9.json",
+      "bytes": 236912,
+      "mode": "0o664",
+      "sha256": "7d43f51c624cca7c017b8702cdf218673e19ffca59b2a2b40330f3584eef5b08"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/keenon_w3.json",
+      "bytes": 245985,
+      "mode": "0o664",
+      "sha256": "f49e7ffc4cad3b116db67d4d3ccd10226d08cd1ee1e8bd3f3527652d5cdb2f29"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/nao.json",
+      "bytes": 532224,
+      "mode": "0o664",
+      "sha256": "76c55603c870747e61b969a02b11059ab953e627ae4c765ddb075f2a1e2defa2"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/ugot_balance.json",
+      "bytes": 224931,
+      "mode": "0o664",
+      "sha256": "5c483905d01cc7ac7eb08eb23ee84943d824415b0d54bf85327382a3aefce560"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/ugot_engineer.json",
+      "bytes": 252167,
+      "mode": "0o664",
+      "sha256": "43737e0d66bf65ac15e15c986bdbe95b238f028f1ee55c486f7a65f36046af98"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/ugot_mecanum.json",
+      "bytes": 477731,
+      "mode": "0o664",
+      "sha256": "2db2503da53c8ca9b3be64210aa146d9de27483025c38c8449f3bbeeaf5c4ba1"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/ugot_quadruped.json",
+      "bytes": 257537,
+      "mode": "0o664",
+      "sha256": "25e0e0c93c9cf8e88c9109860897bdcaf9233b781a976d05eb3af8ed40dc209f"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/ugot_spider.json",
+      "bytes": 257527,
+      "mode": "0o664",
+      "sha256": "997b8d16041583097a0269974983181c969d55d448bbfbb3daf4b0fde71d245b"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/ugot_transform.json",
+      "bytes": 241011,
+      "mode": "0o664",
+      "sha256": "8775978969dcec768adaa9e49ad0b0a3374a58b9e2f569cd10ab21c4c3a495f7"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/ugot_wheelleg.json",
+      "bytes": 240102,
+      "mode": "0o664",
+      "sha256": "d7615e1850ec614f26650d4f63f67bc705efd29b6ff6c9fd969e83abdde089ef"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/xbot_ic60.json",
+      "bytes": 247484,
+      "mode": "0o664",
+      "sha256": "480996804e3cbbf8943ed75e08af075244ed30988dbd4bf06bacf100f7bc8b17"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/xbot_s_pro.json",
+      "bytes": 278006,
+      "mode": "0o664",
+      "sha256": "792ec1da0283bbc9d49762cc812f1c46af4753748b8d468aa6ed662defa4113c"
+    },
+    {
+      "path": "sim/content/embodiments/graphs/zebrafish.json",
+      "bytes": 761031,
+      "mode": "0o664",
+      "sha256": "9bedb5ebce403a8a2838b377280c6ebd2dc5c6fec4556819058f195d4d2ee16d"
+    },
+    {
+      "path": "sim/content/embodiments/legacy-native-v1.json",
+      "bytes": 5412,
+      "mode": "0o664",
+      "sha256": "ba3bc61514d0e72e95a905f7f319682af6842d996dcac1489c021a316d08c5ea"
+    },
+    {
+      "path": "sim/content/embodiments/licenses/Galbot-Apache-2.0.txt",
+      "bytes": 11358,
+      "mode": "0o644",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "sim/content/embodiments/licenses/UGOT-MIT.txt",
+      "bytes": 1056,
+      "mode": "0o644",
+      "sha256": "1126322e2cc8d165adc4c792eeb195717de2bcc7b39be1ce77959d78e87ef685"
+    },
+    {
+      "path": "sim/content/embodiments/policy.json",
+      "bytes": 1391,
+      "mode": "0o664",
+      "sha256": "35a2dbc6477ae9308c4f5eae4d09ccffc2f7aadce2cb54ce29018d63e43b9e2f"
+    },
+    {
+      "path": "sim/content/embodiments/webots/botinkit_omni.wbt",
+      "bytes": 779231,
+      "mode": "0o664",
+      "sha256": "bebb59d55a2b1714be0b3eaeabdfd8114737dc59e21813924d96c4c80e4ae2c9"
+    },
+    {
+      "path": "sim/content/embodiments/webots/botinkit_omni.webots.json",
+      "bytes": 53917,
+      "mode": "0o664",
+      "sha256": "64c7880d0f8b2b16b70f805e2616c96ddc84c271be2e4a9b47caca662e329d32"
+    },
+    {
+      "path": "sim/content/embodiments/webots/celegans.wbt",
+      "bytes": 2017037,
+      "mode": "0o664",
+      "sha256": "7d91ef7b249a7bf2e99788f0d7dde39c100c2c6d236c797c38ab5979eb7143f2"
+    },
+    {
+      "path": "sim/content/embodiments/webots/celegans.webots.json",
+      "bytes": 86042,
+      "mode": "0o664",
+      "sha256": "62ace2250071cda149802113fa309950293711bf6d65cadd02c61eae8c8a4184"
+    },
+    {
+      "path": "sim/content/embodiments/webots/cofe_robot_cafe.wbt",
+      "bytes": 788256,
+      "mode": "0o664",
+      "sha256": "1fd13e903a084ee7d19a3842d9256ff9ea03b8fa42035fd16e10c20eb5009aaa"
+    },
+    {
+      "path": "sim/content/embodiments/webots/cofe_robot_cafe.webots.json",
+      "bytes": 56778,
+      "mode": "0o664",
+      "sha256": "6ea27f1cef36128275e8912f63681b8a4adf4736b0af16bf5d5a4272f274aaca"
+    },
+    {
+      "path": "sim/content/embodiments/webots/cofe_smart_bar.wbt",
+      "bytes": 787962,
+      "mode": "0o664",
+      "sha256": "e9377d596dedbd12005e68abe3270de7a624ba36480437d0defb66917a0a8cc2"
+    },
+    {
+      "path": "sim/content/embodiments/webots/cofe_smart_bar.webots.json",
+      "bytes": 56776,
+      "mode": "0o664",
+      "sha256": "aed7cc680a5ba73697ca12416369300bddd2f3af7d78bc03c63f36b0ea293941"
+    },
+    {
+      "path": "sim/content/embodiments/webots/crow_corvus_corone.wbt",
+      "bytes": 1171877,
+      "mode": "0o664",
+      "sha256": "b4acea1f0fcc936f0e4f2b80b7a6fe73b31fc304384cf31409f4e28dd34bc654"
+    },
+    {
+      "path": "sim/content/embodiments/webots/crow_corvus_corone.webots.json",
+      "bytes": 64322,
+      "mode": "0o664",
+      "sha256": "ec498689e49ebadba8f1a55776b506bf04e807507601739d71fc0b1e125b89f6"
+    },
+    {
+      "path": "sim/content/embodiments/webots/drosophila_banc.wbt",
+      "bytes": 2111177,
+      "mode": "0o664",
+      "sha256": "96d5dffc8c6c0c99fa941b6472d467613dbd4add382f551a59ab2a80dce8cbe0"
+    },
+    {
+      "path": "sim/content/embodiments/webots/drosophila_banc.webots.json",
+      "bytes": 81067,
+      "mode": "0o664",
+      "sha256": "029e44537240c8ee033cf4d156afc1191eb21d7ebc0dd3a3b141b5b35224d259"
+    },
+    {
+      "path": "sim/content/embodiments/webots/drosophila_fafb.wbt",
+      "bytes": 2111177,
+      "mode": "0o664",
+      "sha256": "4f8a6ce26105a06015928cca0bc0363b589b9a173712f05bbd330185ee2e297c"
+    },
+    {
+      "path": "sim/content/embodiments/webots/drosophila_fafb.webots.json",
+      "bytes": 81067,
+      "mode": "0o664",
+      "sha256": "9cc052cb0957191dfae12202f8f0f62dabcf937a6f5e4671afaefbbe0d43f056"
+    },
+    {
+      "path": "sim/content/embodiments/webots/galbot_g1_golf.wbt",
+      "bytes": 8437752,
+      "mode": "0o664",
+      "sha256": "a496e25ec0d21d742478549a8a290314300cd7e96cb10c1877546870f41a40a3"
+    },
+    {
+      "path": "sim/content/embodiments/webots/galbot_g1_golf.webots.json",
+      "bytes": 87554,
+      "mode": "0o664",
+      "sha256": "b16e737eedc215395fafc7fca79f7341ca3559a63c2bfbe94986c00e1da04a00"
+    },
+    {
+      "path": "sim/content/embodiments/webots/hexapod.wbt",
+      "bytes": 956106,
+      "mode": "0o664",
+      "sha256": "6d8987213f16ff82f3b7bc60c7656625bf34d54d1b3251b7fc3331a264b486a8"
+    },
+    {
+      "path": "sim/content/embodiments/webots/hexapod.webots.json",
+      "bytes": 70217,
+      "mode": "0o664",
+      "sha256": "03220277168e7879cf1edbfb2e88397f2c7c469c6d67be870cf08db9ad8e4e8f"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_c30.wbt",
+      "bytes": 783032,
+      "mode": "0o664",
+      "sha256": "1b07eac25cd145ae0cf45862f8dec5a10733b2f509ca656b138240428d23128a"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_c30.webots.json",
+      "bytes": 55209,
+      "mode": "0o664",
+      "sha256": "7f7b1134563883251df2aac8c8061d0c3054d2cd60e17ecdc91d284f2766bdf7"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_c40.wbt",
+      "bytes": 783256,
+      "mode": "0o664",
+      "sha256": "5e1ab72a0d511eb8137ad13b6c42b9a847a3f6993c0307d06318007fed289e83"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_c40.webots.json",
+      "bytes": 55209,
+      "mode": "0o664",
+      "sha256": "41450ce820419c606d941ee00f97710281725dc799814dd8b73f696a40529501"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_s100.wbt",
+      "bytes": 783428,
+      "mode": "0o664",
+      "sha256": "e14802f4f64e9148b6e1baf4bf6276298011271f67e7d34d30640a69c0b862d5"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_s100.webots.json",
+      "bytes": 54746,
+      "mode": "0o664",
+      "sha256": "f52dbca164189e495bdd3b62709930d8c6b94e585fea773af6b350ab0aa08ea8"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_t10.wbt",
+      "bytes": 783096,
+      "mode": "0o664",
+      "sha256": "f266941a0cceb696bdcd66ace2416af01edf0a9a1f2043ca8519198f8b991567"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_t10.webots.json",
+      "bytes": 54749,
+      "mode": "0o664",
+      "sha256": "152714a912740fae40a65b10dc8d8f2056fe3f4f74c21d391863b92adebdf56d"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_t11.wbt",
+      "bytes": 782843,
+      "mode": "0o664",
+      "sha256": "605450aa65789bcb98d559f5bd36e38bca7dcc30fa1dfc1590b35400b434931c"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_t11.webots.json",
+      "bytes": 54749,
+      "mode": "0o664",
+      "sha256": "bd0aafa8227b9017d338fb180d347e603b977d9c196a7d9aa4fe8ce403f90fee"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_t8.wbt",
+      "bytes": 782724,
+      "mode": "0o664",
+      "sha256": "62ce760e4cc9808a988d75276ebfec22ea2a5297f3a4b53efb39ae944e0418f7"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_t8.webots.json",
+      "bytes": 54748,
+      "mode": "0o664",
+      "sha256": "9beece5c2e1fc44d94e5fe4ef971067c54459ca1614a6a80e835fc9e4e2bf1f6"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_t9.wbt",
+      "bytes": 782887,
+      "mode": "0o664",
+      "sha256": "1eb1fc93f23a7c3469d6ac4657fe8a01d3d28f68d6629f578eda189640eb2a2e"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_t9.webots.json",
+      "bytes": 54761,
+      "mode": "0o664",
+      "sha256": "04099466e09f7d5ad256b44da4a97e25beca05f30e373de2aea133e7a21841cd"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_w3.wbt",
+      "bytes": 785172,
+      "mode": "0o664",
+      "sha256": "4b997b5969e52e9012538a529e48163dff70dbfc09a4a86dcefd0f03cc3e0d2b"
+    },
+    {
+      "path": "sim/content/embodiments/webots/keenon_w3.webots.json",
+      "bytes": 55580,
+      "mode": "0o664",
+      "sha256": "cf68bbde6c0d21ddbd1068dba66ec22974ad481d6abbed97602222cedc530862"
+    },
+    {
+      "path": "sim/content/embodiments/webots/nao.wbt",
+      "bytes": 819587,
+      "mode": "0o664",
+      "sha256": "ae4a0def17b2d20854a984b83d726c7ccfe8ec048b1855ac38e0527823f5dc1a"
+    },
+    {
+      "path": "sim/content/embodiments/webots/nao.webots.json",
+      "bytes": 68794,
+      "mode": "0o664",
+      "sha256": "2db62acdb91287aa83e7f98bdc9e9beb595a9cb09537b2c42a39cbff42f4393b"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_balance.wbt",
+      "bytes": 899318,
+      "mode": "0o664",
+      "sha256": "87dff9ff6b98031e1489f85c6428eac0f28737af9f2f70cdf25cc460ec81c822"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_balance.webots.json",
+      "bytes": 63578,
+      "mode": "0o664",
+      "sha256": "bb58cb0aef639789d36ef649ced7622fd8963f734a813b061d6200b88c91625f"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_engineer.wbt",
+      "bytes": 906587,
+      "mode": "0o664",
+      "sha256": "db43590f2dd3b22f7927871afd261c4dab69f0b11ca237ff6d899aea1129ec68"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_engineer.webots.json",
+      "bytes": 66693,
+      "mode": "0o664",
+      "sha256": "7bbe20da2974b6298af0b982c4ad389f40c7f64bd2a1e33eb539e9612a19a423"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_mecanum.wbt",
+      "bytes": 940672,
+      "mode": "0o664",
+      "sha256": "daa4f9e6ae802367e3a0dc50317638db78d8b3d0543d448eed34326a4d15b8a6"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_mecanum.webots.json",
+      "bytes": 79543,
+      "mode": "0o664",
+      "sha256": "62244ea414f9d73a8a3c45eff656de08796bb8e7ebd5de38f700d10a17edb297"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_quadruped.wbt",
+      "bytes": 910259,
+      "mode": "0o664",
+      "sha256": "e85f9ac76eeac46de12ace966bd8ea7f7abd5831e2fadd2e331c4267985971de"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_quadruped.webots.json",
+      "bytes": 67556,
+      "mode": "0o664",
+      "sha256": "8d66224da078f39038ce61e56486df4bbc03aa427d30842e376be698a2a24831"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_spider.wbt",
+      "bytes": 909380,
+      "mode": "0o664",
+      "sha256": "3e70d8ece49f82b5ca4fcec0e5e124e3573d2ed4303bbc4b535207ea05725b49"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_spider.webots.json",
+      "bytes": 67553,
+      "mode": "0o664",
+      "sha256": "16e206126c222834cbd026e10006e6fe66188a0d8009d94d1529f7a8f3051a7c"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_transform.wbt",
+      "bytes": 903803,
+      "mode": "0o664",
+      "sha256": "668051e15813c6d8da02609457dbebfd25f2c5ccdb57e15e65cc23233d662307"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_transform.webots.json",
+      "bytes": 65265,
+      "mode": "0o664",
+      "sha256": "2530ea4f85d7297c9cb0da1980bfacf5d9af11a3ee5600e3f3c088a142b2abd1"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_wheelleg.wbt",
+      "bytes": 903431,
+      "mode": "0o664",
+      "sha256": "9ffa77df8f0eb2ba89647ae8d447f757fbda3976ed6f35dd15c9db612390674c"
+    },
+    {
+      "path": "sim/content/embodiments/webots/ugot_wheelleg.webots.json",
+      "bytes": 65122,
+      "mode": "0o664",
+      "sha256": "c6d2adbfe634c1f34dfc93464e371f65d8f2fabc92c6a1713dc2170fbbffab32"
+    },
+    {
+      "path": "sim/content/embodiments/webots/xbot_ic60.wbt",
+      "bytes": 786686,
+      "mode": "0o664",
+      "sha256": "b4cc830273965f99fc96d6ac86c5fc589fe6a6e3db6382b131b85a69fd5fc9e7"
+    },
+    {
+      "path": "sim/content/embodiments/webots/xbot_ic60.webots.json",
+      "bytes": 56772,
+      "mode": "0o664",
+      "sha256": "682c00a518b2be6490572e03a2f60ddbd4dcd80ad28baab1bf78ed0dfa478aed"
+    },
+    {
+      "path": "sim/content/embodiments/webots/xbot_s_pro.wbt",
+      "bytes": 795342,
+      "mode": "0o664",
+      "sha256": "cb09533dd42a6e6544e941762e0cce750a19e87cf474024c5848176ce39694cd"
+    },
+    {
+      "path": "sim/content/embodiments/webots/xbot_s_pro.webots.json",
+      "bytes": 60451,
+      "mode": "0o664",
+      "sha256": "c2d0bcbdbc76f0b34b2009ca6fc1a4a651591cd719854d4812cc247ccb7d0ec2"
+    },
+    {
+      "path": "sim/content/embodiments/webots/zebrafish.wbt",
+      "bytes": 2084222,
+      "mode": "0o664",
+      "sha256": "7dd3cbf021c05452d2141a8439bcc54390ecb0c814a3ee4cd33f4c660562e676"
+    },
+    {
+      "path": "sim/content/embodiments/webots/zebrafish.webots.json",
+      "bytes": 91689,
+      "mode": "0o664",
+      "sha256": "7e0c2b3e8883a68eaf1193c267ad784e2cb3e76372b3aae5585125584096beb1"
+    },
+    {
+      "path": "sim/isaacsim/README.md",
+      "bytes": 1533,
+      "mode": "0o664",
+      "sha256": "ccb591c44484e0c2ffabb674517b34b906c4ed41e3d81e772420b8c2a17afa6a"
+    },
+    {
+      "path": "sim/isaacsim/usd-conversion-requirements.lock",
+      "bytes": 99,
+      "mode": "0o664",
+      "sha256": "752754b943dc99dd42ac3e362f6110a2651f380c53fcb4f8aa02edf41e8d90c8"
+    },
+    {
+      "path": "sim/minecraft/PHYSICS.md",
+      "bytes": 4366,
+      "mode": "0o664",
+      "sha256": "5a6aaca0026d253bf2ef9ead2e05c07bb5ef2beff4adf0fdf6cee9f34e67c4fd"
+    },
+    {
+      "path": "sim/minecraft/bedrock/scripts/physics-runtime.js",
+      "bytes": 4827,
+      "mode": "0o664",
+      "sha256": "d2eecee83ea5d7ebbf79ce383d00bdb60b9e0f509ab2406e7cd4c2fc40e3a4a2"
+    },
+    {
+      "path": "sim/minecraft/bedrock/scripts/physics-session.js",
+      "bytes": 4004,
+      "mode": "0o664",
+      "sha256": "f7e6c66865ed2df1502a82f240af00d298275b9d18cc00825b89501a65e99b13"
+    },
+    {
+      "path": "sim/minecraft/bedrock/scripts/runtime.js",
+      "bytes": 12302,
+      "mode": "0o664",
+      "sha256": "c2b3e57a69d48dee4b2b81feb5ad131a04c176dc095c487210ecfc708be0a274"
+    },
+    {
+      "path": "sim/minecraft/bedrock/scripts/server.js",
+      "bytes": 3193,
+      "mode": "0o664",
+      "sha256": "5af5418dc06fedff28662a2bae881244fbd338b58b105b4b37164595189b4cb5"
+    },
+    {
+      "path": "sim/minecraft/build.gradle",
+      "bytes": 6054,
+      "mode": "0o664",
+      "sha256": "76e803397b8d9632637a2d2a1401de85efb5365507ca6b3249da8caf3fbaf39c"
+    },
+    {
+      "path": "sim/minecraft/src/1.21.1/java/org/neuralmimicry/minecraft/AarnnMod.java",
+      "bytes": 9082,
+      "mode": "0o664",
+      "sha256": "1d1515df585a00a093d30b9dee838546a86979febf45c588dcf581a31224bd72"
+    },
+    {
+      "path": "sim/minecraft/src/1.21.1/java/org/neuralmimicry/minecraft/PhysicsCompat.java",
+      "bytes": 571,
+      "mode": "0o664",
+      "sha256": "3ae34fd44778be2cec17aafbe9f08b79eac57ff1857666c6814f28c3bbd9e250"
+    },
+    {
+      "path": "sim/minecraft/src/26.2/java/org/neuralmimicry/minecraft/AarnnMod.java",
+      "bytes": 12126,
+      "mode": "0o664",
+      "sha256": "d40c79d9af7b22982382f84b9154958761cdb65011b1cad5e3c5550eb6468712"
+    },
+    {
+      "path": "sim/minecraft/src/26.2/java/org/neuralmimicry/minecraft/PhysicsCompat.java",
+      "bytes": 577,
+      "mode": "0o664",
+      "sha256": "9f15b0f4ddaecc67b5bb4c7022345281045117c0a4e2cdd1f08e01772af438ac"
+    },
+    {
+      "path": "sim/minecraft/src/main/java/org/neuralmimicry/minecraft/Gateway.java",
+      "bytes": 9664,
+      "mode": "0o664",
+      "sha256": "c08b8c1a30306cf5ecaf4e1f016dcba5dd12896decfde88aab9a1087cf6dd382"
+    },
+    {
+      "path": "sim/minecraft/src/main/java/org/neuralmimicry/minecraft/PhysicsSession.java",
+      "bytes": 7935,
+      "mode": "0o664",
+      "sha256": "aef9bd2f594105504d50aefdd53ed815d4e9684b3d7a6c42eb55fe94f10d58ad"
+    },
+    {
+      "path": "sim/minecraft/src/main/java/org/neuralmimicry/minecraft/PhysicsViewer.java",
+      "bytes": 9515,
+      "mode": "0o664",
+      "sha256": "46e70ddd3ebf2852ee7de11c7a5582e0d00bd724212265fa83cfbcd1dbac30e8"
+    },
+    {
+      "path": "sim/minecraft/src/main/resources/aarnn.accesswidener",
+      "bytes": 335,
+      "mode": "0o664",
+      "sha256": "066e78859c059bed9abf5f3f6b04519659c3e21387a1cec2a2930ea36e987229"
+    },
+    {
+      "path": "sim/minecraft/src/main/resources/fabric.mod.json",
+      "bytes": 617,
+      "mode": "0o664",
+      "sha256": "8bb91663f693edb2be50087d9d8b67e432b313d9ad94864331327dd150c27527"
+    },
+    {
+      "path": "sim/mujoco/aerodynamics.py",
+      "bytes": 1836,
+      "mode": "0o664",
+      "sha256": "eb08e650d9a10851b0396c52a6f12191b730bc913c07d77353bbfb3ee22a810b"
+    },
+    {
+      "path": "sim/mujoco/reference-requirements.lock",
+      "bytes": 243,
+      "mode": "0o664",
+      "sha256": "6f364f47f05d0263f610d7f7fbe4261a9fcdcef4b26a87b531a5b4be932c484a"
+    },
+    {
+      "path": "sim/mujoco/runtime.py",
+      "bytes": 16469,
+      "mode": "0o664",
+      "sha256": "be35a54a983f2a053b409f8d3c644503299849611e8a178a32c513feb910b9c8"
+    },
+    {
+      "path": "sim/mujoco/service.py",
+      "bytes": 8568,
+      "mode": "0o664",
+      "sha256": "f824fc783a34f4d5acdee1325e64cd6c7bdb5e42499dad983e9e663a7857a0ee"
+    },
+    {
+      "path": "sim/unity/Assets/NeuralMimicry/Editor/EmbodimentEditor.cs",
+      "bytes": 378,
+      "mode": "0o664",
+      "sha256": "3b0ebac2224def22c6546a35b7f55913195ba4a72520f62b37234f2af12aa1a6"
+    },
+    {
+      "path": "sim/unity/Assets/NeuralMimicry/Runtime/Embodiment/EmbodimentFactory.cs",
+      "bytes": 29188,
+      "mode": "0o664",
+      "sha256": "48d51987124c24840e9451b34565fe43dee12935011cfd6309927edf0f252a9d"
+    },
+    {
+      "path": "sim/unity/Assets/NeuralMimicry/Runtime/Embodiment/EmbodimentNative.generated.cs",
+      "bytes": 2863,
+      "mode": "0o664",
+      "sha256": "2fe1455f022e5224a2d2b95b3451b5c16bf131355c9e3f326ab001e8a54c4c3e"
+    },
+    {
+      "path": "sim/unreal/Source/NmAerBridge/NmAerBridge.Build.cs",
+      "bytes": 897,
+      "mode": "0o664",
+      "sha256": "a91ea1428326cc6cc9df89958627f90039b29737fe4f992b60545b209460f11a"
+    },
+    {
+      "path": "sim/unreal/Source/NmAerBridge/Private/NmEmbodimentWorld.cpp",
+      "bytes": 40576,
+      "mode": "0o664",
+      "sha256": "bba60a70b1d297aa960f844f72b4c7abb0bbcaa14ba9215caee07a2737a956da"
+    },
+    {
+      "path": "sim/unreal/Source/NmAerBridge/Private/NmSimGameMode.cpp",
+      "bytes": 19749,
+      "mode": "0o664",
+      "sha256": "9428c22f63254dfe6436a989eeb7111d03329b48a66084f3677d069e27bf140c"
+    },
+    {
+      "path": "sim/unreal/Source/NmAerBridge/Public/NmEmbodimentWorld.h",
+      "bytes": 906,
+      "mode": "0o664",
+      "sha256": "2c0442f229e531bdeac6575046c74a4f721e52188f7ef6860dfddc7eadcee528"
+    },
+    {
+      "path": "src/aer.rs",
+      "bytes": 155,
+      "mode": "0o664",
+      "sha256": "e93b80e5f767e70a7912bbd7579b7d45317cafae9a6e5a17ed1437efc34ca004"
+    },
+    {
+      "path": "src/bin/tcp_aer_ipc_bridge.rs",
+      "bytes": 3811,
+      "mode": "0o664",
+      "sha256": "87af5e4ee6840c7ec3da27844511113de21191e720d9b109fc457d3dbdf9fbd5"
+    },
+    {
+      "path": "src/main.rs",
+      "bytes": 246157,
+      "mode": "0o664",
+      "sha256": "a3e142829ff0a9de7c5818a398482b5fa11b1c9662d8c92915bde9c5172c5c19"
+    },
+    {
+      "path": "src/tcp_aer_ipc_bridge.rs",
+      "bytes": 29784,
+      "mode": "0o664",
+      "sha256": "986aaffab746ae086a46f356f21dc82b3c26462e5721630baf7508161e9f2699"
+    },
+    {
+      "path": "tools/xtask/src/main.rs",
+      "bytes": 23882,
+      "mode": "0o664",
+      "sha256": "fab2327485b35e7c62eec98bfa6f06e89364ae2580095a32a22539aa6059a629"
+    },
+    {
+      "path": "web_ui/physics-view.html",
+      "bytes": 1438,
+      "mode": "0o664",
+      "sha256": "a1ce4a870354713cada55d0e76e3e84158a6c509d988254b6c5bf5001cd7e223"
+    },
+    {
+      "path": "web_ui/physics-view.js",
+      "bytes": 2683,
+      "mode": "0o664",
+      "sha256": "42246867dc9f2a5fa910ea8fa37826732dee4aa3ca7f7341db94428941b17226"
+    },
+    {
+      "path": "web_ui/webgl-world.js",
+      "bytes": 20397,
+      "mode": "0o664",
+      "sha256": "23fb354801df9d7c59320ad67f35a0bd8cb0fa1f1e32c4333a0ec0f004de9492"
+    }
+  ]
+}

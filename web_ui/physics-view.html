@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AARNN functional physics viewer</title>
+<style>body{font:16px system-ui;background:#161c23;color:#e5edf7;margin:24px}button,input{font:inherit;padding:8px;margin:4px}canvas{display:block;width:100%;height:65vh;background:#202b35}pre{white-space:pre-wrap}label{display:block}</style>
+<h1>Functional physics service</h1><p>MuJoCo owns physics and sensory capture. This WebGL viewer displays published collision geometry (mesh hulls use bounding boxes).</p>
+<label>Private simulation token <input id="token" type="password" autocomplete="off"></label><button id="connect">Connect view</button>
+<button data-action="pause">Pause</button><button data-action="step">Step</button><button data-action="resume">Resume</button><button data-action="reset">Reset body</button><button id="stop">Disarm</button><button data-action="arm">Arm reference output</button><button id="detach">Detach view</button>
+<label>One-metre collision voxel, slot 0: <input id="position" value="2,0,0.5" aria-label="Voxel x,y,z in metres"><button data-action="obstacle">Place in world</button></label>
+<pre id="status" role="status">Disconnected</pre><canvas id="view" aria-label="Published native collision geometry in three dimensions"></canvas><script src="/webgl-world.js"></script><script type="module" src="/viewer.js"></script></html>

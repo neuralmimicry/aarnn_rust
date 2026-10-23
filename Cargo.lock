@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "aarnn-aer-legacy"
+version = "0.1.0"
+
+[[package]]
 name = "aarnn-biox6-exporter"
 version = "0.1.0"
 dependencies = [
@@ -16,9 +20,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "aarnn-embodiment"
+version = "0.1.0"
+dependencies = [
+ "aarnn-aer-legacy",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "aarnn-embodiment-ffi"
+version = "0.1.0"
+dependencies = [
+ "aarnn-embodiment",
+ "serde_json",
+]
+
+[[package]]
+name = "aarnn-mujoco"
+version = "0.1.0"
+dependencies = [
+ "aarnn-embodiment",
+ "axum",
+ "bindgen 0.73.2",
+ "libloading 0.8.9",
+ "serde",
+ "serde_json",
+ "sha2",
+ "signal-hook",
+ "tokio",
+]
+
+[[package]]
+name = "aarnn-webots"
+version = "0.1.0"
+dependencies = [
+ "aarnn-embodiment",
+ "serde",
+ "serde_json",
+ "sha2",
+ "signal-hook",
+]
+
+[[package]]
 name = "aarnn_rust"
 version = "0.1.43"
 dependencies = [
+ "aarnn-aer-legacy",
  "aarnn-biox6-exporter",
  "anyhow",
  "argon2",
@@ -6447,6 +6496,16 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "signal-hook"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d881a16cf4426aa584979d30bd82cb33429027e42122b169753d6ef1085ed6e2"
+dependencies = [
+ "libc",
+ "signal-hook-registry",
+]
 
 [[package]]
 name = "signal-hook-registry"

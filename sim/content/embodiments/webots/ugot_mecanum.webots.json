@@ -1,0 +1,3822 @@
+{
+  "schema_version": 1,
+  "profile_id": "ugot_mecanum",
+  "model_digest": "10f2cf2da01a42db2081c25dce40802819a0a66daf33f9f81540d22901356094",
+  "io_digest": "ce881cb857c332e8022959cf0401c51d36643bf7271a86279fc655d048a479de",
+  "targets": [
+    {
+      "joint": "front_left_joint",
+      "device": "front_left_joint",
+      "sensor": "front_left_joint_position",
+      "body": 2,
+      "kind": "rotational",
+      "actuator": 0,
+      "gain": 1.0,
+      "bias": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "gear": 0.196133,
+      "force_range": [
+        -1000000.0,
+        1000000.0
+      ],
+      "damping": 0.002,
+      "driven": true
+    },
+    {
+      "joint": "front_left_roller_00_joint",
+      "device": "front_left_roller_00_joint",
+      "sensor": "front_left_roller_00_joint_position",
+      "body": 3,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_left_roller_01_joint",
+      "device": "front_left_roller_01_joint",
+      "sensor": "front_left_roller_01_joint_position",
+      "body": 4,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_left_roller_02_joint",
+      "device": "front_left_roller_02_joint",
+      "sensor": "front_left_roller_02_joint_position",
+      "body": 5,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_left_roller_03_joint",
+      "device": "front_left_roller_03_joint",
+      "sensor": "front_left_roller_03_joint_position",
+      "body": 6,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_left_roller_04_joint",
+      "device": "front_left_roller_04_joint",
+      "sensor": "front_left_roller_04_joint_position",
+      "body": 7,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_left_roller_05_joint",
+      "device": "front_left_roller_05_joint",
+      "sensor": "front_left_roller_05_joint_position",
+      "body": 8,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_left_roller_06_joint",
+      "device": "front_left_roller_06_joint",
+      "sensor": "front_left_roller_06_joint_position",
+      "body": 9,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_left_roller_07_joint",
+      "device": "front_left_roller_07_joint",
+      "sensor": "front_left_roller_07_joint_position",
+      "body": 10,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_left_roller_08_joint",
+      "device": "front_left_roller_08_joint",
+      "sensor": "front_left_roller_08_joint_position",
+      "body": 11,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_right_joint",
+      "device": "front_right_joint",
+      "sensor": "front_right_joint_position",
+      "body": 12,
+      "kind": "rotational",
+      "actuator": 1,
+      "gain": 1.0,
+      "bias": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "gear": 0.196133,
+      "force_range": [
+        -1000000.0,
+        1000000.0
+      ],
+      "damping": 0.002,
+      "driven": true
+    },
+    {
+      "joint": "front_right_roller_00_joint",
+      "device": "front_right_roller_00_joint",
+      "sensor": "front_right_roller_00_joint_position",
+      "body": 13,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_right_roller_01_joint",
+      "device": "front_right_roller_01_joint",
+      "sensor": "front_right_roller_01_joint_position",
+      "body": 14,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_right_roller_02_joint",
+      "device": "front_right_roller_02_joint",
+      "sensor": "front_right_roller_02_joint_position",
+      "body": 15,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_right_roller_03_joint",
+      "device": "front_right_roller_03_joint",
+      "sensor": "front_right_roller_03_joint_position",
+      "body": 16,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_right_roller_04_joint",
+      "device": "front_right_roller_04_joint",
+      "sensor": "front_right_roller_04_joint_position",
+      "body": 17,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_right_roller_05_joint",
+      "device": "front_right_roller_05_joint",
+      "sensor": "front_right_roller_05_joint_position",
+      "body": 18,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_right_roller_06_joint",
+      "device": "front_right_roller_06_joint",
+      "sensor": "front_right_roller_06_joint_position",
+      "body": 19,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_right_roller_07_joint",
+      "device": "front_right_roller_07_joint",
+      "sensor": "front_right_roller_07_joint_position",
+      "body": 20,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "front_right_roller_08_joint",
+      "device": "front_right_roller_08_joint",
+      "sensor": "front_right_roller_08_joint_position",
+      "body": 21,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_left_joint",
+      "device": "rear_left_joint",
+      "sensor": "rear_left_joint_position",
+      "body": 22,
+      "kind": "rotational",
+      "actuator": 2,
+      "gain": 1.0,
+      "bias": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "gear": 0.196133,
+      "force_range": [
+        -1000000.0,
+        1000000.0
+      ],
+      "damping": 0.002,
+      "driven": true
+    },
+    {
+      "joint": "rear_left_roller_00_joint",
+      "device": "rear_left_roller_00_joint",
+      "sensor": "rear_left_roller_00_joint_position",
+      "body": 23,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_left_roller_01_joint",
+      "device": "rear_left_roller_01_joint",
+      "sensor": "rear_left_roller_01_joint_position",
+      "body": 24,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_left_roller_02_joint",
+      "device": "rear_left_roller_02_joint",
+      "sensor": "rear_left_roller_02_joint_position",
+      "body": 25,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_left_roller_03_joint",
+      "device": "rear_left_roller_03_joint",
+      "sensor": "rear_left_roller_03_joint_position",
+      "body": 26,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_left_roller_04_joint",
+      "device": "rear_left_roller_04_joint",
+      "sensor": "rear_left_roller_04_joint_position",
+      "body": 27,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_left_roller_05_joint",
+      "device": "rear_left_roller_05_joint",
+      "sensor": "rear_left_roller_05_joint_position",
+      "body": 28,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_left_roller_06_joint",
+      "device": "rear_left_roller_06_joint",
+      "sensor": "rear_left_roller_06_joint_position",
+      "body": 29,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_left_roller_07_joint",
+      "device": "rear_left_roller_07_joint",
+      "sensor": "rear_left_roller_07_joint_position",
+      "body": 30,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_left_roller_08_joint",
+      "device": "rear_left_roller_08_joint",
+      "sensor": "rear_left_roller_08_joint_position",
+      "body": 31,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_right_joint",
+      "device": "rear_right_joint",
+      "sensor": "rear_right_joint_position",
+      "body": 32,
+      "kind": "rotational",
+      "actuator": 3,
+      "gain": 1.0,
+      "bias": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "gear": 0.196133,
+      "force_range": [
+        -1000000.0,
+        1000000.0
+      ],
+      "damping": 0.002,
+      "driven": true
+    },
+    {
+      "joint": "rear_right_roller_00_joint",
+      "device": "rear_right_roller_00_joint",
+      "sensor": "rear_right_roller_00_joint_position",
+      "body": 33,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_right_roller_01_joint",
+      "device": "rear_right_roller_01_joint",
+      "sensor": "rear_right_roller_01_joint_position",
+      "body": 34,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_right_roller_02_joint",
+      "device": "rear_right_roller_02_joint",
+      "sensor": "rear_right_roller_02_joint_position",
+      "body": 35,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_right_roller_03_joint",
+      "device": "rear_right_roller_03_joint",
+      "sensor": "rear_right_roller_03_joint_position",
+      "body": 36,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_right_roller_04_joint",
+      "device": "rear_right_roller_04_joint",
+      "sensor": "rear_right_roller_04_joint_position",
+      "body": 37,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_right_roller_05_joint",
+      "device": "rear_right_roller_05_joint",
+      "sensor": "rear_right_roller_05_joint_position",
+      "body": 38,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_right_roller_06_joint",
+      "device": "rear_right_roller_06_joint",
+      "sensor": "rear_right_roller_06_joint_position",
+      "body": 39,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_right_roller_07_joint",
+      "device": "rear_right_roller_07_joint",
+      "sensor": "rear_right_roller_07_joint_position",
+      "body": 40,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    },
+    {
+      "joint": "rear_right_roller_08_joint",
+      "device": "rear_right_roller_08_joint",
+      "sensor": "rear_right_roller_08_joint_position",
+      "body": 41,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 4e-05,
+      "driven": false
+    }
+  ],
+  "constraints": [],
+  "fixed_world_bodies": [],
+  "composite_mass_kg": 2.5509999999999997,
+  "controller_transfer": "untrained",
+  "calibration": "ODE contact/constraint response not calibrated; all self-collision suppressed; mesh collisions use Webots dynamic convex policy; fixed-link masses merged exactly",
+  "coordinates": "X-forward Y-left Z-up; SI",
+  "scope": "native articulated source; runtime and learned task gates independent",
+  "scene": {
+    "version": "native-habitats-v1",
+    "habitat_id": "terrain",
+    "title": "Sensorimotor terrain course",
+    "half_extent_m": 1.3,
+    "catalogue_digest": "4d0d506e80f146acf04e34ee781f67ab465c6d1f336b73c799bc3e3904a6b2d8",
+    "substrate": [
+      0.27,
+      0.25,
+      0.2
+    ],
+    "cues": [
+      "graded steps",
+      "rough gravel",
+      "slalom gates",
+      "contrasting visual targets",
+      "foot contact and sonar"
+    ],
+    "objects": [
+      {
+        "id": "rim_0",
+        "shape": "box",
+        "position": [
+          0.0,
+          1.3,
+          0.11699999999999999
+        ],
+        "size": [
+          2.6,
+          0.0325,
+          0.23399999999999999
+        ],
+        "colour": [
+          0.42,
+          0.5,
+          0.47
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "rim_1",
+        "shape": "box",
+        "position": [
+          0.0,
+          -1.3,
+          0.045500000000000006
+        ],
+        "size": [
+          2.6,
+          0.0325,
+          0.09100000000000001
+        ],
+        "colour": [
+          0.42,
+          0.5,
+          0.47
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "rim_2",
+        "shape": "box",
+        "position": [
+          1.3,
+          0.0,
+          0.11699999999999999
+        ],
+        "size": [
+          0.0325,
+          2.6,
+          0.23399999999999999
+        ],
+        "colour": [
+          0.42,
+          0.5,
+          0.47
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "rim_3",
+        "shape": "box",
+        "position": [
+          -1.3,
+          0.0,
+          0.11699999999999999
+        ],
+        "size": [
+          0.0325,
+          2.6,
+          0.23399999999999999
+        ],
+        "colour": [
+          0.42,
+          0.5,
+          0.47
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_00",
+        "shape": "sphere",
+        "position": [
+          -1.1960000000000002,
+          -1.1960000000000002,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2376,
+          0.22,
+          0.17600000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_01",
+        "shape": "sphere",
+        "position": [
+          -0.31972277227722773,
+          0.220621359223301,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.24840000000000004,
+          0.23,
+          0.18400000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_02",
+        "shape": "sphere",
+        "position": [
+          0.5565544554455446,
+          -0.7547572815533982,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2592,
+          0.24,
+          0.192
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_03",
+        "shape": "sphere",
+        "position": [
+          -0.9591683168316831,
+          0.6618640776699031,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.27,
+          0.25,
+          0.2
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_04",
+        "shape": "sphere",
+        "position": [
+          -0.08289108910891083,
+          -0.3135145631067962,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.28080000000000005,
+          0.26,
+          0.20800000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_05",
+        "shape": "sphere",
+        "position": [
+          0.7933861386138614,
+          1.103106796116505,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2376,
+          0.22,
+          0.17600000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_06",
+        "shape": "sphere",
+        "position": [
+          -0.7223366336633664,
+          0.1277281553398057,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.24840000000000004,
+          0.23,
+          0.18400000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_07",
+        "shape": "sphere",
+        "position": [
+          0.15394059405940594,
+          -0.8476504854368933,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2592,
+          0.24,
+          0.192
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_08",
+        "shape": "sphere",
+        "position": [
+          1.0302178217821785,
+          0.5689708737864078,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.27,
+          0.25,
+          0.2
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_09",
+        "shape": "sphere",
+        "position": [
+          -0.4855049504950495,
+          -0.4064077669902912,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.28080000000000005,
+          0.26,
+          0.20800000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_10",
+        "shape": "sphere",
+        "position": [
+          0.390772277227723,
+          1.0102135922330098,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2376,
+          0.22,
+          0.17600000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_11",
+        "shape": "sphere",
+        "position": [
+          -1.124950495049505,
+          0.03483495145631067,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.24840000000000004,
+          0.23,
+          0.18400000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_12",
+        "shape": "sphere",
+        "position": [
+          -0.24867326732673262,
+          -0.9405436893203885,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2592,
+          0.24,
+          0.192
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_13",
+        "shape": "sphere",
+        "position": [
+          0.6276039603960397,
+          0.47607766990291267,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.27,
+          0.25,
+          0.2
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_14",
+        "shape": "sphere",
+        "position": [
+          -0.8881188118811882,
+          -0.49930097087378655,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.28080000000000005,
+          0.26,
+          0.20800000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_15",
+        "shape": "sphere",
+        "position": [
+          -0.011841584158415852,
+          0.9173203883495147,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2376,
+          0.22,
+          0.17600000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_16",
+        "shape": "sphere",
+        "position": [
+          0.8644356435643565,
+          -0.0580582524271845,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.24840000000000004,
+          0.23,
+          0.18400000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_17",
+        "shape": "sphere",
+        "position": [
+          -0.6512871287128713,
+          -1.0334368932038835,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2592,
+          0.24,
+          0.192
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_18",
+        "shape": "sphere",
+        "position": [
+          0.22499009900990105,
+          0.3831844660194177,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.27,
+          0.25,
+          0.2
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_19",
+        "shape": "sphere",
+        "position": [
+          1.1012673267326734,
+          -0.5921941747572816,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.28080000000000005,
+          0.26,
+          0.20800000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_20",
+        "shape": "sphere",
+        "position": [
+          -0.4144554455445544,
+          0.8244271844660194,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2376,
+          0.22,
+          0.17600000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_21",
+        "shape": "sphere",
+        "position": [
+          0.4618217821782178,
+          -0.15095145631067966,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.24840000000000004,
+          0.23,
+          0.18400000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_22",
+        "shape": "sphere",
+        "position": [
+          -1.05390099009901,
+          -1.1263300970873789,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2592,
+          0.24,
+          0.192
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_23",
+        "shape": "sphere",
+        "position": [
+          -0.17762376237623764,
+          0.2902912621359224,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.27,
+          0.25,
+          0.2
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_24",
+        "shape": "sphere",
+        "position": [
+          0.6986534653465348,
+          -0.6850873786407768,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.28080000000000005,
+          0.26,
+          0.20800000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_25",
+        "shape": "sphere",
+        "position": [
+          -0.8170693069306931,
+          0.7315339805825244,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2376,
+          0.22,
+          0.17600000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_26",
+        "shape": "sphere",
+        "position": [
+          0.05920792079207926,
+          -0.24384466019417483,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.24840000000000004,
+          0.23,
+          0.18400000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_27",
+        "shape": "sphere",
+        "position": [
+          0.9354851485148516,
+          1.1727766990291264,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2592,
+          0.24,
+          0.192
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_28",
+        "shape": "sphere",
+        "position": [
+          -0.5802376237623763,
+          0.19739805825242704,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.27,
+          0.25,
+          0.2
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_29",
+        "shape": "sphere",
+        "position": [
+          0.2960396039603962,
+          -0.7779805825242719,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.28080000000000005,
+          0.26,
+          0.20800000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_30",
+        "shape": "sphere",
+        "position": [
+          1.1723168316831685,
+          0.6386407766990291,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2376,
+          0.22,
+          0.17600000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_31",
+        "shape": "sphere",
+        "position": [
+          -0.34340594059405943,
+          -0.33673786407766987,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.24840000000000004,
+          0.23,
+          0.18400000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_32",
+        "shape": "sphere",
+        "position": [
+          0.5328712871287129,
+          1.079883495145631,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2592,
+          0.24,
+          0.192
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_33",
+        "shape": "sphere",
+        "position": [
+          -0.982851485148515,
+          0.10450485436893202,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.27,
+          0.25,
+          0.2
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_34",
+        "shape": "sphere",
+        "position": [
+          -0.10657425742574253,
+          -0.870873786407767,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.28080000000000005,
+          0.26,
+          0.20800000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_35",
+        "shape": "sphere",
+        "position": [
+          0.7697029702970297,
+          0.545747572815534,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2376,
+          0.22,
+          0.17600000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_36",
+        "shape": "sphere",
+        "position": [
+          -0.7460198019801981,
+          -0.429631067961165,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.24840000000000004,
+          0.23,
+          0.18400000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_37",
+        "shape": "sphere",
+        "position": [
+          0.1302574257425745,
+          0.9869902912621361,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2592,
+          0.24,
+          0.192
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_38",
+        "shape": "sphere",
+        "position": [
+          1.0065346534653468,
+          0.011611650485436843,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.27,
+          0.25,
+          0.2
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_39",
+        "shape": "sphere",
+        "position": [
+          -0.5091881188118812,
+          -0.9637669902912622,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.28080000000000005,
+          0.26,
+          0.20800000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_40",
+        "shape": "sphere",
+        "position": [
+          0.3670891089108913,
+          0.452854368932039,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2376,
+          0.22,
+          0.17600000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_41",
+        "shape": "sphere",
+        "position": [
+          -1.1486336633663368,
+          -0.5225242718446602,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.24840000000000004,
+          0.23,
+          0.18400000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_42",
+        "shape": "sphere",
+        "position": [
+          -0.2723564356435643,
+          0.8940970873786408,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2592,
+          0.24,
+          0.192
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_43",
+        "shape": "sphere",
+        "position": [
+          0.603920792079208,
+          -0.08128155339805819,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.27,
+          0.25,
+          0.2
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_44",
+        "shape": "sphere",
+        "position": [
+          -0.91180198019802,
+          -1.0566601941747573,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.28080000000000005,
+          0.26,
+          0.20800000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_45",
+        "shape": "sphere",
+        "position": [
+          -0.035524752475247556,
+          0.3599611650485437,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2376,
+          0.22,
+          0.17600000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_46",
+        "shape": "sphere",
+        "position": [
+          0.8407524752475248,
+          -0.6154174757281554,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.24840000000000004,
+          0.23,
+          0.18400000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_47",
+        "shape": "sphere",
+        "position": [
+          -0.674970297029703,
+          0.8012038834951457,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2592,
+          0.24,
+          0.192
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_48",
+        "shape": "sphere",
+        "position": [
+          0.20130693069306935,
+          -0.1741747572815535,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.27,
+          0.25,
+          0.2
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_49",
+        "shape": "sphere",
+        "position": [
+          1.0775841584158417,
+          -1.1495533980582526,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.28080000000000005,
+          0.26,
+          0.20800000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_50",
+        "shape": "sphere",
+        "position": [
+          -0.4381386138613861,
+          0.2670679611650484,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2376,
+          0.22,
+          0.17600000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_51",
+        "shape": "sphere",
+        "position": [
+          0.4381386138613864,
+          -0.7083106796116505,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.24840000000000004,
+          0.23,
+          0.18400000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_52",
+        "shape": "sphere",
+        "position": [
+          -1.0775841584158417,
+          0.7083106796116504,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2592,
+          0.24,
+          0.192
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_53",
+        "shape": "sphere",
+        "position": [
+          -0.20130693069306935,
+          -0.26706796116504855,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.27,
+          0.25,
+          0.2
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_54",
+        "shape": "sphere",
+        "position": [
+          0.6749702970297031,
+          1.1495533980582524,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.28080000000000005,
+          0.26,
+          0.20800000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_55",
+        "shape": "sphere",
+        "position": [
+          -0.8407524752475248,
+          0.17417475728155335,
+          0.0039000000000000003
+        ],
+        "size": [
+          0.0195,
+          0.0143,
+          0.0078000000000000005
+        ],
+        "colour": [
+          0.2376,
+          0.22,
+          0.17600000000000002
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "graded_step_0",
+        "shape": "box",
+        "position": [
+          0.41600000000000004,
+          0.624,
+          0.015600000000000001
+        ],
+        "size": [
+          0.13,
+          0.5720000000000001,
+          0.031200000000000002
+        ],
+        "colour": [
+          0.48,
+          0.4,
+          0.27
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "graded_step_1",
+        "shape": "box",
+        "position": [
+          0.546,
+          0.624,
+          0.031200000000000002
+        ],
+        "size": [
+          0.13,
+          0.5720000000000001,
+          0.062400000000000004
+        ],
+        "colour": [
+          0.48,
+          0.4,
+          0.27
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "graded_step_2",
+        "shape": "box",
+        "position": [
+          0.676,
+          0.624,
+          0.04680000000000001
+        ],
+        "size": [
+          0.13,
+          0.5720000000000001,
+          0.09360000000000002
+        ],
+        "colour": [
+          0.48,
+          0.4,
+          0.27
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "graded_step_3",
+        "shape": "box",
+        "position": [
+          0.8060000000000002,
+          0.624,
+          0.062400000000000004
+        ],
+        "size": [
+          0.13,
+          0.5720000000000001,
+          0.12480000000000001
+        ],
+        "colour": [
+          0.48,
+          0.4,
+          0.27
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "graded_step_4",
+        "shape": "box",
+        "position": [
+          0.9359999999999999,
+          0.624,
+          0.078
+        ],
+        "size": [
+          0.13,
+          0.5720000000000001,
+          0.156
+        ],
+        "colour": [
+          0.48,
+          0.4,
+          0.27
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_0",
+        "shape": "sphere",
+        "position": [
+          -0.8450000000000001,
+          0.169,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.38,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_1",
+        "shape": "sphere",
+        "position": [
+          -0.6955000000000001,
+          0.169,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.41000000000000003,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_2",
+        "shape": "sphere",
+        "position": [
+          -0.546,
+          0.169,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.44,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_3",
+        "shape": "sphere",
+        "position": [
+          -0.3965,
+          0.169,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.38,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_4",
+        "shape": "sphere",
+        "position": [
+          -0.8450000000000001,
+          0.338,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.41000000000000003,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_5",
+        "shape": "sphere",
+        "position": [
+          -0.6955000000000001,
+          0.338,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.44,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_6",
+        "shape": "sphere",
+        "position": [
+          -0.546,
+          0.338,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.38,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_7",
+        "shape": "sphere",
+        "position": [
+          -0.3965,
+          0.338,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.41000000000000003,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_8",
+        "shape": "sphere",
+        "position": [
+          -0.8450000000000001,
+          0.507,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.44,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_9",
+        "shape": "sphere",
+        "position": [
+          -0.6955000000000001,
+          0.507,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.38,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_10",
+        "shape": "sphere",
+        "position": [
+          -0.546,
+          0.507,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.41000000000000003,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_11",
+        "shape": "sphere",
+        "position": [
+          -0.3965,
+          0.507,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.44,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_12",
+        "shape": "sphere",
+        "position": [
+          -0.8450000000000001,
+          0.676,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.38,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "gravel_13",
+        "shape": "sphere",
+        "position": [
+          -0.6955000000000001,
+          0.676,
+          0.0286
+        ],
+        "size": [
+          0.09100000000000001,
+          0.11699999999999999,
+          0.0572
+        ],
+        "colour": [
+          0.41000000000000003,
+          0.36,
+          0.31
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "slalom_0",
+        "shape": "cylinder",
+        "position": [
+          -0.78,
+          -0.741,
+          0.20800000000000002
+        ],
+        "size": [
+          0.11699999999999999,
+          0.11699999999999999,
+          0.41600000000000004
+        ],
+        "colour": [
+          0.76,
+          0.47,
+          0.12
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "slalom_1",
+        "shape": "cylinder",
+        "position": [
+          -0.312,
+          -0.585,
+          0.20800000000000002
+        ],
+        "size": [
+          0.11699999999999999,
+          0.11699999999999999,
+          0.41600000000000004
+        ],
+        "colour": [
+          0.76,
+          0.47,
+          0.12
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "slalom_2",
+        "shape": "cylinder",
+        "position": [
+          0.156,
+          -0.741,
+          0.20800000000000002
+        ],
+        "size": [
+          0.11699999999999999,
+          0.11699999999999999,
+          0.41600000000000004
+        ],
+        "colour": [
+          0.76,
+          0.47,
+          0.12
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "slalom_3",
+        "shape": "cylinder",
+        "position": [
+          0.6240000000000001,
+          -0.585,
+          0.20800000000000002
+        ],
+        "size": [
+          0.11699999999999999,
+          0.11699999999999999,
+          0.41600000000000004
+        ],
+        "colour": [
+          0.76,
+          0.47,
+          0.12
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "traction_mat",
+        "shape": "box",
+        "position": [
+          0.624,
+          -0.13,
+          0.0078000000000000005
+        ],
+        "size": [
+          0.624,
+          0.52,
+          0.015600000000000001
+        ],
+        "colour": [
+          0.13,
+          0.2,
+          0.23
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "mat_rib_0",
+        "shape": "box",
+        "position": [
+          0.377,
+          -0.13,
+          0.0234
+        ],
+        "size": [
+          0.015600000000000001,
+          0.52,
+          0.031200000000000002
+        ],
+        "colour": [
+          0.22,
+          0.29,
+          0.3
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "mat_rib_1",
+        "shape": "box",
+        "position": [
+          0.44199999999999995,
+          -0.13,
+          0.0234
+        ],
+        "size": [
+          0.015600000000000001,
+          0.52,
+          0.031200000000000002
+        ],
+        "colour": [
+          0.22,
+          0.29,
+          0.3
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "mat_rib_2",
+        "shape": "box",
+        "position": [
+          0.507,
+          -0.13,
+          0.0234
+        ],
+        "size": [
+          0.015600000000000001,
+          0.52,
+          0.031200000000000002
+        ],
+        "colour": [
+          0.22,
+          0.29,
+          0.3
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "mat_rib_3",
+        "shape": "box",
+        "position": [
+          0.5720000000000001,
+          -0.13,
+          0.0234
+        ],
+        "size": [
+          0.015600000000000001,
+          0.52,
+          0.031200000000000002
+        ],
+        "colour": [
+          0.22,
+          0.29,
+          0.3
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "mat_rib_4",
+        "shape": "box",
+        "position": [
+          0.637,
+          -0.13,
+          0.0234
+        ],
+        "size": [
+          0.015600000000000001,
+          0.52,
+          0.031200000000000002
+        ],
+        "colour": [
+          0.22,
+          0.29,
+          0.3
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "mat_rib_5",
+        "shape": "box",
+        "position": [
+          0.7020000000000001,
+          -0.13,
+          0.0234
+        ],
+        "size": [
+          0.015600000000000001,
+          0.52,
+          0.031200000000000002
+        ],
+        "colour": [
+          0.22,
+          0.29,
+          0.3
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "mat_rib_6",
+        "shape": "box",
+        "position": [
+          0.7670000000000001,
+          -0.13,
+          0.0234
+        ],
+        "size": [
+          0.015600000000000001,
+          0.52,
+          0.031200000000000002
+        ],
+        "colour": [
+          0.22,
+          0.29,
+          0.3
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "mat_rib_7",
+        "shape": "box",
+        "position": [
+          0.8320000000000001,
+          -0.13,
+          0.0234
+        ],
+        "size": [
+          0.015600000000000001,
+          0.52,
+          0.031200000000000002
+        ],
+        "colour": [
+          0.22,
+          0.29,
+          0.3
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_0",
+        "shape": "box",
+        "position": [
+          -1.1700000000000002,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_1",
+        "shape": "box",
+        "position": [
+          -1.014,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_2",
+        "shape": "box",
+        "position": [
+          -0.8580000000000001,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_3",
+        "shape": "box",
+        "position": [
+          -0.7020000000000001,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_4",
+        "shape": "box",
+        "position": [
+          -0.546,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_5",
+        "shape": "box",
+        "position": [
+          -0.39000000000000007,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_6",
+        "shape": "box",
+        "position": [
+          -0.23400000000000007,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_7",
+        "shape": "box",
+        "position": [
+          -0.07800000000000007,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_8",
+        "shape": "box",
+        "position": [
+          0.07799999999999993,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_9",
+        "shape": "box",
+        "position": [
+          0.23400000000000007,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_10",
+        "shape": "box",
+        "position": [
+          0.3899999999999999,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_11",
+        "shape": "box",
+        "position": [
+          0.5459999999999998,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_12",
+        "shape": "box",
+        "position": [
+          0.702,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_13",
+        "shape": "box",
+        "position": [
+          0.8580000000000001,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_14",
+        "shape": "box",
+        "position": [
+          1.014,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_15",
+        "shape": "box",
+        "position": [
+          1.1699999999999997,
+          1.2727,
+          0.1287
+        ],
+        "size": [
+          0.078,
+          0.015600000000000001,
+          0.15209999999999999
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "light_beacon",
+        "shape": "sphere",
+        "position": [
+          0.949,
+          0.949,
+          0.338
+        ],
+        "size": [
+          0.0975,
+          0.0975,
+          0.0975
+        ],
+        "colour": [
+          0.99,
+          0.86,
+          0.52
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "emissive",
+        "cue": "light",
+        "radius": 2.3400000000000003,
+        "strength": 1,
+        "anchor": "root",
+        "internal": false
+      }
+    ],
+    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
+  },
+  "world_geometry_count": 110,
+  "digest": "7ba018800eadeadff938e9fa952a574292e5b23afe5d0e25c82e9e2bfda1ff83"
+}

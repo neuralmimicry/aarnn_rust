@@ -1,0 +1,2 @@
+# Python 3.12 offline USD converter only; this is NOT an Isaac runtime environment.
+usd-core==26.5

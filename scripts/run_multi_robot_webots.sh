@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Profile-based native expansion uses the shared dispatcher before legacy GPU,
+# network generation or remote lifecycle code can run.
+_aarnn_dispatch_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$_aarnn_dispatch_root/scripts/embodiment_dispatch.sh"
+aarnn_dispatch_embodiment webots new "$_aarnn_dispatch_root" "$@"
+unset _aarnn_dispatch_root
+
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 source "$ROOT_DIR/scripts/webots_runtime_profile.sh"

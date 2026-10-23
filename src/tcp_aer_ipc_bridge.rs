@@ -48,6 +48,109 @@ pub struct BridgeConfig {
     pub timeout: Duration,
     pub ready_file: Option<PathBuf>,
     pub arm_file: Option<PathBuf>,
+    pub embodiment: Option<ReferenceContract>,
+}
+
+/// Pinned local simulation contract. This identifies a compatibility session,
+/// never a production writer term or committed-effect authority.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReferenceContract {
+    pub brain_id: String,
+    pub brain_generation: u64,
+    pub model_digest: String,
+    pub io_digest: String,
+    pub s_names: Vec<String>,
+    pub o_names: Vec<String>,
+    pub sensory_base: u32,
+    pub output_base: u32,
+}
+impl ReferenceContract {
+    fn validate(&self, config: &BridgeConfig) -> Result<(), BridgeError> {
+        if !matches!(config.listen_host.as_str(), "127.0.0.1" | "::1")
+            || self.brain_id.is_empty()
+            || self.brain_generation == 0
+            || self.s_names.len() != config.sensory
+            || self.o_names.len() != config.output
+            || self.s_names.is_empty()
+            || self.s_names.len() > 4096
+            || self.o_names.is_empty()
+            || self.o_names.len() > 4096
+            || self.sensory_base != 4096
+            || self.output_base != config.aer_output_base
+            || [&self.model_digest, &self.io_digest]
+                .iter()
+                .any(|d| d.len() != 64 || !d.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err(BridgeError::Protocol(
+                "invalid loopback embodiment contract".into(),
+            ));
+        }
+        for names in [&self.s_names, &self.o_names] {
+            let unique: std::collections::HashSet<_> = names.iter().collect();
+            if unique.len() != names.len() || names.iter().any(|n| n.is_empty() || n.len() > 256) {
+                return Err(BridgeError::Protocol("invalid/duplicate IO names".into()));
+            }
+        }
+        Ok(())
+    }
+    fn handshake(&self, payload: &[u8]) -> Result<(), BridgeError> {
+        let value: Value =
+            serde_json::from_slice(payload).map_err(|e| BridgeError::Protocol(e.to_string()))?;
+        for (key, expected) in [
+            ("brain_id", serde_json::json!(self.brain_id)),
+            ("brain_generation", serde_json::json!(self.brain_generation)),
+            ("model_digest", serde_json::json!(self.model_digest)),
+            ("io_digest", serde_json::json!(self.io_digest)),
+            ("s_names", serde_json::json!(self.s_names)),
+            ("o_names", serde_json::json!(self.o_names)),
+            ("sensory", serde_json::json!(self.s_names.len())),
+            ("output", serde_json::json!(self.o_names.len())),
+            ("sensory_base", serde_json::json!(self.sensory_base)),
+            ("output_base", serde_json::json!(self.output_base)),
+            ("dt_ms", serde_json::json!(2.0)),
+        ] {
+            if value.get(key) != Some(&expected) {
+                return Err(BridgeError::Protocol(format!(
+                    "embodiment handshake mismatch: {key}"
+                )));
+            }
+        }
+        Ok(())
+    }
+    fn response(&self, response: &[u8]) -> Result<Vec<u8>, BridgeError> {
+        if response_dimensions(response, 0, 0)? != (self.s_names.len(), self.o_names.len()) {
+            return Err(BridgeError::Protocol(
+                "IPC dimensions differ from pinned embodiment; resize rejected".into(),
+            ));
+        }
+        let mut value: Value =
+            serde_json::from_slice(response).map_err(|e| BridgeError::Protocol(e.to_string()))?;
+        for (key, v) in [
+            ("brain_id", serde_json::json!(self.brain_id)),
+            ("brain_generation", serde_json::json!(self.brain_generation)),
+            ("model_digest", serde_json::json!(self.model_digest)),
+            ("io_digest", serde_json::json!(self.io_digest)),
+            ("expected_s", serde_json::json!(self.s_names.len())),
+            ("expected_o", serde_json::json!(self.o_names.len())),
+        ] {
+            value[key] = v;
+        }
+        serde_json::to_vec(&value).map_err(|e| BridgeError::Protocol(e.to_string()))
+    }
+    fn frame(&self, payload: &[u8]) -> Result<(), BridgeError> {
+        let events = aarnn_aer_legacy::decode_events_bounded(
+            payload,
+            self.sensory_base,
+            self.s_names.len() as u32,
+            self.s_names.len(),
+        )
+        .map_err(|e| BridgeError::Protocol(format!("embodiment AER1 input: {e}")))?;
+        if events.iter().any(|e| e.value != 1) {
+            return Err(BridgeError::Protocol("embodiment input polarity".into()));
+        }
+        Ok(())
+    }
 }
 
 impl BridgeConfig {
@@ -70,6 +173,9 @@ pub async fn run(
     config: BridgeConfig,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), BridgeError> {
+    if let Some(contract) = &config.embodiment {
+        contract.validate(&config)?;
+    }
     let bind_address = if config.listen_host.contains(':') {
         format!("[{}]:{}", config.listen_host, config.listen_port)
     } else {
@@ -93,11 +199,15 @@ pub async fn run(
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(DEFAULT_MAX_PENDING_REQUESTS)
         .clamp(1, 4096);
-    let max_clients = std::env::var("NM_TCP_AER_BRIDGE_MAX_CLIENTS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_MAX_CLIENTS)
-        .clamp(1, 256);
+    let max_clients = if config.embodiment.is_some() {
+        1
+    } else {
+        std::env::var("NM_TCP_AER_BRIDGE_MAX_CLIENTS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_MAX_CLIENTS)
+            .clamp(1, 256)
+    };
     println!(
         "[tcp_aer_ipc_bridge] bounded client capacity={} pending IPC requests={}",
         max_clients, queue_capacity
@@ -195,10 +305,24 @@ async fn handle_client_io(
         output: initial_output,
         dt_ms: 1.0,
     };
+    let mut handshaken = false;
 
     loop {
         let payload = read_frame(stream, config.timeout, shutdown).await?;
         let is_json = payload.first() == Some(&b'{');
+        if let Some(contract) = &config.embodiment {
+            if is_json {
+                if handshaken {
+                    return Err(BridgeError::Protocol("duplicate handshake".into()));
+                }
+                contract.handshake(&payload)?;
+            } else {
+                if !handshaken {
+                    return Err(BridgeError::Protocol("handshake required".into()));
+                }
+                contract.frame(&payload)?;
+            }
+        }
         if is_json {
             let (sensory, output, dt_ms) =
                 handshake_dimensions(&payload, negotiated.sensory, negotiated.output);
@@ -221,11 +345,17 @@ async fn handle_client_io(
         let response = exchange_ipc(&ipc, &ipc_tx, &payload, config.timeout, shutdown).await?;
 
         if response.first() == Some(&b'{') {
+            let response = if let Some(contract) = &config.embodiment {
+                contract.response(&response)?
+            } else {
+                response
+            };
             let (sensory, output) =
                 response_dimensions(&response, negotiated.sensory, negotiated.output)?;
             negotiated.sensory = sensory;
             negotiated.output = output;
             if is_json {
+                handshaken = true;
                 mark_ready(config.ready_file.as_deref()).await?;
             }
             write_frame(stream, &response, config.timeout, shutdown).await?;
@@ -543,6 +673,80 @@ fn aer_timestamp(payload: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pinned_embodiment_rejects_aliases_resizes_remote_hosts_and_wrong_aer_window() {
+        let contract = ReferenceContract {
+            brain_id: "worm_0".into(),
+            brain_generation: 1,
+            model_digest: "a".repeat(64),
+            io_digest: "b".repeat(64),
+            s_names: vec!["touch".into()],
+            o_names: vec!["MDL01".into()],
+            sensory_base: 4096,
+            output_base: 16384,
+        };
+        let mut config = BridgeConfig {
+            listen_host: "127.0.0.1".into(),
+            listen_port: 1234,
+            ipc_path: "/tmp/test.sock".into(),
+            sensory: 1,
+            output: 1,
+            aer_output_base: 16384,
+            aer_threshold: 0.5,
+            timeout: Duration::from_secs(2),
+            ready_file: None,
+            arm_file: None,
+            embodiment: Some(contract.clone()),
+        };
+        contract.validate(&config).unwrap();
+        config.listen_host = "0.0.0.0".into();
+        assert!(contract.validate(&config).is_err());
+        let mut handshake = serde_json::json!({"brain_id":"worm_0","brain_generation":1,"model_digest":"a".repeat(64),"io_digest":"b".repeat(64),"s_names":["touch"],"o_names":["MDL01"],"sensory":1,"output":1,"sensory_base":4096,"output_base":16384,"dt_ms":2.0});
+        contract
+            .handshake(handshake.to_string().as_bytes())
+            .unwrap();
+        for (key, value) in [
+            ("brain_id", serde_json::json!("other")),
+            ("s_names", serde_json::json!(["alias"])),
+            ("sensory", serde_json::json!(2)),
+            ("dt_ms", serde_json::json!(32.)),
+            ("model_digest", serde_json::json!("c".repeat(64))),
+        ] {
+            let saved = handshake[key].clone();
+            handshake[key] = value;
+            assert!(
+                contract
+                    .handshake(handshake.to_string().as_bytes())
+                    .is_err(),
+                "{key}"
+            );
+            handshake[key] = saved;
+        }
+        assert!(
+            contract
+                .response(br#"{"expected_s":2,"expected_o":1}"#)
+                .is_err()
+        );
+        let response: Value = serde_json::from_slice(
+            &contract
+                .response(br#"{"expected_s":1,"expected_o":1}"#)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(response["brain_id"], "worm_0");
+        let packet = aarnn_aer_legacy::encode_spikes(42_000, 4096, &[1]);
+        contract.frame(&packet).unwrap();
+        assert_eq!(aer_timestamp(&packet), 42_000);
+        assert!(
+            contract
+                .frame(&aarnn_aer_legacy::encode_spikes(42_000, 0, &[1]))
+                .is_err()
+        );
+        assert!(contract.frame(&packet[..12 + 1]).is_err());
+        // AER1 is a compatibility protocol, not AARNN-AER/1 or FPAA UDP.
+        assert!(contract.frame(b"AARNN-AER/1").is_err());
+    }
 
     #[test]
     fn frame_bounds_and_handshake_dimensions_are_bounded() {

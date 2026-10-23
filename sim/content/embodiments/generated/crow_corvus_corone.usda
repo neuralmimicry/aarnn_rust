@@ -1,0 +1,2983 @@
+#usda 1.0
+(
+    defaultPrim = "Robot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "Robot" (
+    prepend apiSchemas = ["PhysicsArticulationRootAPI"]
+    customData = {
+        string aarnnIODigest = "1109d94dd58ac7a2c4f10120511e1dd54c21b63d7bf20efd1507caf4d742699a"
+        string aarnnModelDigest = "928d66dc9134ec28f4900f8fd02b640bd163b96056aacaecb1582d29ba428524"
+    }
+)
+{
+    def Xform "torso" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.0004234, 0.0010877, 0.00101762)
+        float physics:mass = 0.292
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, 0, 0.25)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Sphere "torso_skin" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.025, 0.025, 0.03)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.12, 0.055, 0.065)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "neck_yaw_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (4.8e-7, 4.8e-7, 4.8e-7)
+        float physics:mass = 0.005
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.11, 0, 0.28500000000000003)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "neck_yaw_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.012)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "neck_pitch_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (4.8e-7, 4.8e-7, 4.8e-7)
+        float physics:mass = 0.005
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.11, 0, 0.28500000000000003)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "neck_pitch_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.012)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "neck_roll_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.000018053333, 0.000025133333, 0.000023746667)
+        float physics:mass = 0.04
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.11, 0, 0.28500000000000003)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "neck_roll_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.034, 0.025, 0.027)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_eye__1"
+        {
+            color3f[] primvars:displayColor = [(0.025, 0.018, 0.012)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.005, 0.005, 0.005)
+            double3 xformOp:translate = (0.025, -0.024, 0.012)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_eye_glint__1"
+        {
+            color3f[] primvars:displayColor = [(0.46, 0.49, 0.48)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.0012, 0.0012, 0.0012)
+            double3 xformOp:translate = (0.027, -0.028, 0.014)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_eye_1"
+        {
+            color3f[] primvars:displayColor = [(0.025, 0.018, 0.012)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.005, 0.005, 0.005)
+            double3 xformOp:translate = (0.025, 0.024, 0.012)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_eye_glint_1"
+        {
+            color3f[] primvars:displayColor = [(0.46, 0.49, 0.48)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.0012, 0.0012, 0.0012)
+            double3 xformOp:translate = (0.027, 0.028, 0.014)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "beak_gape_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (3e-7, 0.0000021016667, 0.0000022816666)
+        float physics:mass = 0.005
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.15, 0, 0.275)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "beak_gape_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.035, 0.012, 0.006)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "left_wing_shoulder_flap_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (1.92e-7, 1.92e-7, 1.92e-7)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, 0.045, 0.275)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "left_wing_shoulder_flap_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.012)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "left_wing_shoulder_sweep_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (1.92e-7, 1.92e-7, 1.92e-7)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, 0.045, 0.275)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "left_wing_shoulder_sweep_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.012)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "left_wing_humerus_twist_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.000032773332, 0.000020273334, 0.000052833333)
+        float physics:mass = 0.02
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, 0.045, 0.275)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "left_wing_humerus_twist_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.055, 0.07, 0.004)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "left_wing_elbow_flex_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.000024545, 0.000012545, 0.000037)
+        float physics:mass = 0.015
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, 0.185, 0.275)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "left_wing_elbow_flex_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.05, 0.07, 0.003)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "left_wing_wrist_fold_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (1.92e-7, 1.92e-7, 1.92e-7)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, 0.325, 0.275)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "left_wing_wrist_fold_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.012)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "left_wing_wrist_twist_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.000019212, 0.000006087, 0.000025275)
+        float physics:mass = 0.009
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, 0.325, 0.275)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "left_wing_wrist_twist_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.045, 0.08, 0.002)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_left_primary_0"
+        {
+            color3f[] primvars:displayColor = [(0.035, 0.042, 0.052)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.07, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, 0.025, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_left_primary_1"
+        {
+            color3f[] primvars:displayColor = [(0.0365, 0.043, 0.053)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.068, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, 0.038, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_left_primary_2"
+        {
+            color3f[] primvars:displayColor = [(0.038, 0.044, 0.054)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.066, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, 0.051000000000000004, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_left_primary_3"
+        {
+            color3f[] primvars:displayColor = [(0.0395, 0.045, 0.055)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.064, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, 0.064, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_left_primary_4"
+        {
+            color3f[] primvars:displayColor = [(0.041, 0.046, 0.056)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.062, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, 0.077, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_left_primary_5"
+        {
+            color3f[] primvars:displayColor = [(0.0425, 0.047, 0.057)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.06, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, 0.09, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_left_primary_6"
+        {
+            color3f[] primvars:displayColor = [(0.044, 0.048, 0.058)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.058, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, 0.10300000000000001, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_left_primary_7"
+        {
+            color3f[] primvars:displayColor = [(0.0455, 0.049, 0.059)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.056, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, 0.11599999999999999, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_left_primary_8"
+        {
+            color3f[] primvars:displayColor = [(0.047, 0.05, 0.06)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.054, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, 0.129, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "right_wing_shoulder_flap_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (1.92e-7, 1.92e-7, 1.92e-7)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, -0.045, 0.275)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "right_wing_shoulder_flap_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.012)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "right_wing_shoulder_sweep_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (1.92e-7, 1.92e-7, 1.92e-7)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, -0.045, 0.275)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "right_wing_shoulder_sweep_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.012)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "right_wing_humerus_twist_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.000032773332, 0.000020273334, 0.000052833333)
+        float physics:mass = 0.02
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, -0.045, 0.275)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "right_wing_humerus_twist_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.055, 0.07, 0.004)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "right_wing_elbow_flex_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.000024545, 0.000012545, 0.000037)
+        float physics:mass = 0.015
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, -0.185, 0.275)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "right_wing_elbow_flex_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.05, 0.07, 0.003)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "right_wing_wrist_fold_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (1.92e-7, 1.92e-7, 1.92e-7)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, -0.325, 0.275)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "right_wing_wrist_fold_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.012)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "right_wing_wrist_twist_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.000019212, 0.000006087, 0.000025275)
+        float physics:mass = 0.009
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, -0.325, 0.275)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "right_wing_wrist_twist_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.045, 0.08, 0.002)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_right_primary_0"
+        {
+            color3f[] primvars:displayColor = [(0.035, 0.042, 0.052)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.07, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, -0.025, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_right_primary_1"
+        {
+            color3f[] primvars:displayColor = [(0.0365, 0.043, 0.053)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.068, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, -0.038, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_right_primary_2"
+        {
+            color3f[] primvars:displayColor = [(0.038, 0.044, 0.054)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.066, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, -0.051000000000000004, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_right_primary_3"
+        {
+            color3f[] primvars:displayColor = [(0.0395, 0.045, 0.055)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.064, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, -0.064, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_right_primary_4"
+        {
+            color3f[] primvars:displayColor = [(0.041, 0.046, 0.056)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.062, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, -0.077, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_right_primary_5"
+        {
+            color3f[] primvars:displayColor = [(0.0425, 0.047, 0.057)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.06, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, -0.09, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_right_primary_6"
+        {
+            color3f[] primvars:displayColor = [(0.044, 0.048, 0.058)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.058, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, -0.10300000000000001, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_right_primary_7"
+        {
+            color3f[] primvars:displayColor = [(0.0455, 0.049, 0.059)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.056, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, -0.11599999999999999, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_right_primary_8"
+        {
+            color3f[] primvars:displayColor = [(0.047, 0.05, 0.06)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.054, 0.014, 0.0014)
+            double3 xformOp:translate = (-0.035, -0.129, -0.002)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "tail_pitch_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (8.533333e-8, 8.533333e-8, 8.533333e-8)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-0.11, 0, 0.25)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "tail_pitch_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.008)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "tail_yaw_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (8.533333e-8, 8.533333e-8, 8.533333e-8)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-0.11, 0, 0.25)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "tail_yaw_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.008)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "tail_fan_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.000007458, 0.000015524667, 0.000022916667)
+        float physics:mass = 0.011
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-0.11, 0, 0.25)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "tail_fan_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.065, 0.045, 0.003)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_tail_feather_0"
+        {
+            color3f[] primvars:displayColor = [(0.035, 0.038, 0.045)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.055, 0.009, 0.0014)
+            double3 xformOp:translate = (-0.025, -0.026999999999999996, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_tail_feather_1"
+        {
+            color3f[] primvars:displayColor = [(0.035, 0.038, 0.045)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.055, 0.009, 0.0014)
+            double3 xformOp:translate = (-0.025, -0.018, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_tail_feather_2"
+        {
+            color3f[] primvars:displayColor = [(0.035, 0.038, 0.045)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.055, 0.009, 0.0014)
+            double3 xformOp:translate = (-0.025, -0.009, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_tail_feather_3"
+        {
+            color3f[] primvars:displayColor = [(0.035, 0.038, 0.045)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.055, 0.009, 0.0014)
+            double3 xformOp:translate = (-0.025, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_tail_feather_4"
+        {
+            color3f[] primvars:displayColor = [(0.035, 0.038, 0.045)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.055, 0.009, 0.0014)
+            double3 xformOp:translate = (-0.025, 0.009, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_tail_feather_5"
+        {
+            color3f[] primvars:displayColor = [(0.035, 0.038, 0.045)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.055, 0.009, 0.0014)
+            double3 xformOp:translate = (-0.025, 0.018, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "anatomy_tail_feather_6"
+        {
+            color3f[] primvars:displayColor = [(0.035, 0.038, 0.045)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.055, 0.009, 0.0014)
+            double3 xformOp:translate = (-0.025, 0.026999999999999996, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "left_leg_hip_pitch_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (8.533333e-8, 8.533333e-8, 8.533333e-8)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-0.02, 0.035, 0.21)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "left_leg_hip_pitch_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.008)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "left_leg_hip_roll_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (4.64e-7, 4.64e-7, 1.28e-7)
+        float physics:mass = 0.003
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-0.02, 0.035, 0.21)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "left_leg_hip_roll_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.02)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "left_leg_knee_flex_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.000001378, 0.000001378, 2.56e-7)
+        float physics:mass = 0.006
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.005000000000000001, 0.035, 0.175)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "left_leg_knee_flex_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.025)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "left_leg_ankle_pitch_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (2.34e-7, 7.2e-7, 8.1e-7)
+        float physics:mass = 0.006
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-0.004999999999999999, 0.035, 0.13)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "left_leg_ankle_pitch_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.018, 0.009, 0.006)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "left_leg_front_toes_curl_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.0058333334, 0, 0)
+        float3 physics:diagonalInertia = (9.1884243e-7, 6.383095e-7, 3.0149067e-7)
+        float physics:mass = 0.0045
+        quatf physics:principalAxes = (0, 0.70710677, 0, 0.70710677)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.015000000000000001, 0.035, 0.11800000000000001)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "left_leg_front_toes_curl_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.003)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Capsule "left_toe1" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.035227829907617074
+            color3f[] primvars:displayColor = [(0.5, 0.5, 0.5)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.002
+            quatf xformOp:orient = (0.70710677, -0.080289565, -0.70253366, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.0175, -0.012, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Capsule "left_toe2" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.035
+            color3f[] primvars:displayColor = [(0.5, 0.5, 0.5)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.002
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.0175, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Capsule "left_toe3" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.035227829907617074
+            color3f[] primvars:displayColor = [(0.5, 0.5, 0.5)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.002
+            quatf xformOp:orient = (0.70710677, 0.080289565, -0.70253366, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.0175, 0.012, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "left_leg_hallux_curl_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (1.5e-8, 1.275e-7, 1.275e-7)
+        float physics:mass = 0.0025
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-0.004999999999999999, 0.035, 0.11800000000000001)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "left_leg_hallux_curl_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.003, 0.003)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "right_leg_hip_pitch_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (8.533333e-8, 8.533333e-8, 8.533333e-8)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-0.02, -0.035, 0.21)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "right_leg_hip_pitch_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.008)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "right_leg_hip_roll_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (4.64e-7, 4.64e-7, 1.28e-7)
+        float physics:mass = 0.003
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-0.02, -0.035, 0.21)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "right_leg_hip_roll_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.02)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "right_leg_knee_flex_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.000001378, 0.000001378, 2.56e-7)
+        float physics:mass = 0.006
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.005000000000000001, -0.035, 0.175)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "right_leg_knee_flex_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.025)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "right_leg_ankle_pitch_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (2.34e-7, 7.2e-7, 8.1e-7)
+        float physics:mass = 0.006
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-0.004999999999999999, -0.035, 0.13)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "right_leg_ankle_pitch_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.018, 0.009, 0.006)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "right_leg_front_toes_curl_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.0058333334, 0, 0)
+        float3 physics:diagonalInertia = (9.1884243e-7, 6.383095e-7, 3.0149067e-7)
+        float physics:mass = 0.0045
+        quatf physics:principalAxes = (0, 0.70710677, 0, 0.70710677)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.015000000000000001, -0.035, 0.11800000000000001)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "right_leg_front_toes_curl_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.003)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Capsule "right_toe1" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.035227829907617074
+            color3f[] primvars:displayColor = [(0.5, 0.5, 0.5)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.002
+            quatf xformOp:orient = (0.70710677, -0.080289565, -0.70253366, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.0175, -0.012, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Capsule "right_toe2" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.035
+            color3f[] primvars:displayColor = [(0.5, 0.5, 0.5)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.002
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.0175, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Capsule "right_toe3" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.035227829907617074
+            color3f[] primvars:displayColor = [(0.5, 0.5, 0.5)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.002
+            quatf xformOp:orient = (0.70710677, 0.080289565, -0.70253366, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.0175, 0.012, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "right_leg_hallux_curl_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (1.5e-8, 1.275e-7, 1.275e-7)
+        float physics:mass = 0.0025
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-0.004999999999999999, -0.035, 0.11800000000000001)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "right_leg_hallux_curl_geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.03, 0.03, 0.035)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.003, 0.003)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def PhysicsRevoluteJoint "joint_neck_yaw" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "neck_yaw"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/torso>
+        rel physics:body1 = </Robot/neck_yaw_link>
+        point3f physics:localPos0 = (0.11, 0, 0.035)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_neck_pitch" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "neck_pitch"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/neck_yaw_link>
+        rel physics:body1 = </Robot/neck_pitch_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_neck_roll" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "neck_roll"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/neck_pitch_link>
+        rel physics:body1 = </Robot/neck_roll_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_beak_gape" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "beak_gape"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/neck_roll_link>
+        rel physics:body1 = </Robot/beak_gape_link>
+        point3f physics:localPos0 = (0.04, 0, -0.01)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_left_wing_shoulder_flap" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "left_wing_shoulder_flap"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/torso>
+        rel physics:body1 = </Robot/left_wing_shoulder_flap_link>
+        point3f physics:localPos0 = (0, 0.045, 0.025)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_left_wing_shoulder_sweep" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "left_wing_shoulder_sweep"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/left_wing_shoulder_flap_link>
+        rel physics:body1 = </Robot/left_wing_shoulder_sweep_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_left_wing_humerus_twist" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "left_wing_humerus_twist"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/left_wing_shoulder_sweep_link>
+        rel physics:body1 = </Robot/left_wing_humerus_twist_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_left_wing_elbow_flex" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "left_wing_elbow_flex"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/left_wing_humerus_twist_link>
+        rel physics:body1 = </Robot/left_wing_elbow_flex_link>
+        point3f physics:localPos0 = (0, 0.14, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_left_wing_wrist_fold" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "left_wing_wrist_fold"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/left_wing_elbow_flex_link>
+        rel physics:body1 = </Robot/left_wing_wrist_fold_link>
+        point3f physics:localPos0 = (0, 0.14, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_left_wing_wrist_twist" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "left_wing_wrist_twist"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/left_wing_wrist_fold_link>
+        rel physics:body1 = </Robot/left_wing_wrist_twist_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_right_wing_shoulder_flap" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "right_wing_shoulder_flap"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/torso>
+        rel physics:body1 = </Robot/right_wing_shoulder_flap_link>
+        point3f physics:localPos0 = (0, -0.045, 0.025)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_right_wing_shoulder_sweep" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "right_wing_shoulder_sweep"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/right_wing_shoulder_flap_link>
+        rel physics:body1 = </Robot/right_wing_shoulder_sweep_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_right_wing_humerus_twist" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "right_wing_humerus_twist"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/right_wing_shoulder_sweep_link>
+        rel physics:body1 = </Robot/right_wing_humerus_twist_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_right_wing_elbow_flex" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "right_wing_elbow_flex"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/right_wing_humerus_twist_link>
+        rel physics:body1 = </Robot/right_wing_elbow_flex_link>
+        point3f physics:localPos0 = (0, -0.14, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_right_wing_wrist_fold" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "right_wing_wrist_fold"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/right_wing_elbow_flex_link>
+        rel physics:body1 = </Robot/right_wing_wrist_fold_link>
+        point3f physics:localPos0 = (0, -0.14, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_right_wing_wrist_twist" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "right_wing_wrist_twist"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/right_wing_wrist_fold_link>
+        rel physics:body1 = </Robot/right_wing_wrist_twist_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_tail_pitch" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "tail_pitch"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/torso>
+        rel physics:body1 = </Robot/tail_pitch_link>
+        point3f physics:localPos0 = (-0.11, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_tail_yaw" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "tail_yaw"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/tail_pitch_link>
+        rel physics:body1 = </Robot/tail_yaw_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_tail_fan" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "tail_fan"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/tail_yaw_link>
+        rel physics:body1 = </Robot/tail_fan_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_left_leg_hip_pitch" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "left_leg_hip_pitch"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/torso>
+        rel physics:body1 = </Robot/left_leg_hip_pitch_link>
+        point3f physics:localPos0 = (-0.02, 0.035, -0.04)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_left_leg_hip_roll" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "left_leg_hip_roll"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/left_leg_hip_pitch_link>
+        rel physics:body1 = </Robot/left_leg_hip_roll_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_left_leg_knee_flex" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "left_leg_knee_flex"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/left_leg_hip_roll_link>
+        rel physics:body1 = </Robot/left_leg_knee_flex_link>
+        point3f physics:localPos0 = (0.025, 0, -0.035)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_left_leg_ankle_pitch" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "left_leg_ankle_pitch"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/left_leg_knee_flex_link>
+        rel physics:body1 = </Robot/left_leg_ankle_pitch_link>
+        point3f physics:localPos0 = (-0.01, 0, -0.045)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_left_leg_front_toes_curl" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "left_leg_front_toes_curl"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/left_leg_ankle_pitch_link>
+        rel physics:body1 = </Robot/left_leg_front_toes_curl_link>
+        point3f physics:localPos0 = (0.02, 0, -0.012)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_left_leg_hallux_curl" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "left_leg_hallux_curl"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/left_leg_front_toes_curl_link>
+        rel physics:body1 = </Robot/left_leg_hallux_curl_link>
+        point3f physics:localPos0 = (-0.02, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_right_leg_hip_pitch" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "right_leg_hip_pitch"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/torso>
+        rel physics:body1 = </Robot/right_leg_hip_pitch_link>
+        point3f physics:localPos0 = (-0.02, -0.035, -0.04)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_right_leg_hip_roll" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "right_leg_hip_roll"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/right_leg_hip_pitch_link>
+        rel physics:body1 = </Robot/right_leg_hip_roll_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_right_leg_knee_flex" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "right_leg_knee_flex"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/right_leg_hip_roll_link>
+        rel physics:body1 = </Robot/right_leg_knee_flex_link>
+        point3f physics:localPos0 = (0.025, 0, -0.035)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_right_leg_ankle_pitch" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "right_leg_ankle_pitch"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/right_leg_knee_flex_link>
+        rel physics:body1 = </Robot/right_leg_ankle_pitch_link>
+        point3f physics:localPos0 = (-0.01, 0, -0.045)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_right_leg_front_toes_curl" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "right_leg_front_toes_curl"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/right_leg_ankle_pitch_link>
+        rel physics:body1 = </Robot/right_leg_front_toes_curl_link>
+        point3f physics:localPos0 = (0.02, 0, -0.012)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+
+    def PhysicsRevoluteJoint "joint_right_leg_hallux_curl" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "right_leg_hallux_curl"
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/right_leg_front_toes_curl_link>
+        rel physics:body1 = </Robot/right_leg_hallux_curl_link>
+        point3f physics:localPos0 = (-0.02, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -85.94367
+        float physics:upperLimit = 85.94367
+    }
+}
+
+def Xform "Habitat"
+{
+    def Cube "ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        color3f[] primvars:displayColor = [(0.19, 0.25, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (3.36, 3.36, 0.025)
+        double3 xformOp:translate = (0, 0, -0.025)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_rim_0" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        color3f[] primvars:displayColor = [(0.42, 0.5, 0.47)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (2.8, 0.035, 1.12)
+        double3 xformOp:translate = (0, 2.8, 1.1199999999999999)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_rim_1" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        color3f[] primvars:displayColor = [(0.42, 0.5, 0.47)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (2.8, 0.035, 0.098)
+        double3 xformOp:translate = (0, -2.8, 0.098)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_rim_2" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        color3f[] primvars:displayColor = [(0.42, 0.5, 0.47)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.035, 2.8, 1.12)
+        double3 xformOp:translate = (2.8, 0, 1.1199999999999999)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_rim_3" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        color3f[] primvars:displayColor = [(0.42, 0.5, 0.47)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.035, 2.8, 1.12)
+        double3 xformOp:translate = (-2.8, 0, 1.1199999999999999)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_00"
+    {
+        color3f[] primvars:displayColor = [(0.1672, 0.22, 0.1056)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-2.576, -2.576, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_01"
+    {
+        color3f[] primvars:displayColor = [(0.1748, 0.23, 0.1104)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-0.6886336633663366, 0.4751844660194175, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_02"
+    {
+        color3f[] primvars:displayColor = [(0.1824, 0.24, 0.1152)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (1.1987326732673267, -1.6256310679611652, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_03"
+    {
+        color3f[] primvars:displayColor = [(0.19, 0.25, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-2.06590099009901, 1.4255533980582527, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_04"
+    {
+        color3f[] primvars:displayColor = [(0.1976, 0.26, 0.1248)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-0.17853465346534636, -0.6752621359223302, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_05"
+    {
+        color3f[] primvars:displayColor = [(0.1672, 0.22, 0.1056)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (1.7088316831683168, 2.3759223300970875, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_06"
+    {
+        color3f[] primvars:displayColor = [(0.1748, 0.23, 0.1104)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-1.5558019801980199, 0.27510679611650457, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_07"
+    {
+        color3f[] primvars:displayColor = [(0.1824, 0.24, 0.1152)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (0.3315643564356435, -1.8257087378640775, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_08"
+    {
+        color3f[] primvars:displayColor = [(0.19, 0.25, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (2.218930693069307, 1.2254757281553397, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_09"
+    {
+        color3f[] primvars:displayColor = [(0.1976, 0.26, 0.1248)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-1.0457029702970297, -0.8753398058252425, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_10"
+    {
+        color3f[] primvars:displayColor = [(0.1672, 0.22, 0.1056)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (0.8416633663366341, 2.1758446601941746, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_11"
+    {
+        color3f[] primvars:displayColor = [(0.1748, 0.23, 0.1104)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-2.422970297029703, 0.0750291262135922, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_12"
+    {
+        color3f[] primvars:displayColor = [(0.1824, 0.24, 0.1152)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-0.5356039603960394, -2.02578640776699, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_13"
+    {
+        color3f[] primvars:displayColor = [(0.19, 0.25, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (1.3517623762376239, 1.0253980582524274, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_14"
+    {
+        color3f[] primvars:displayColor = [(0.1976, 0.26, 0.1248)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-1.9128712871287128, -1.0754174757281554, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_15"
+    {
+        color3f[] primvars:displayColor = [(0.1672, 0.22, 0.1056)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-0.025504950495049528, 1.9757669902912622, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_16"
+    {
+        color3f[] primvars:displayColor = [(0.1748, 0.23, 0.1104)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (1.8618613861386137, -0.12504854368932045, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_17"
+    {
+        color3f[] primvars:displayColor = [(0.1824, 0.24, 0.1152)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-1.4027722772277227, -2.225864077669903, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_18"
+    {
+        color3f[] primvars:displayColor = [(0.19, 0.25, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (0.4845940594059407, 0.8253203883495149, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_19"
+    {
+        color3f[] primvars:displayColor = [(0.1976, 0.26, 0.1248)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (2.371960396039604, -1.275495145631068, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_20"
+    {
+        color3f[] primvars:displayColor = [(0.1672, 0.22, 0.1056)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-0.8926732673267325, 1.7756893203883493, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_21"
+    {
+        color3f[] primvars:displayColor = [(0.1748, 0.23, 0.1104)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (0.9946930693069306, -0.3251262135922331, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_22"
+    {
+        color3f[] primvars:displayColor = [(0.1824, 0.24, 0.1152)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-2.2699405940594057, -2.4259417475728156, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_23"
+    {
+        color3f[] primvars:displayColor = [(0.19, 0.25, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-0.3825742574257426, 0.625242718446602, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_24"
+    {
+        color3f[] primvars:displayColor = [(0.1976, 0.26, 0.1248)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (1.504792079207921, -1.475572815533981, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_25"
+    {
+        color3f[] primvars:displayColor = [(0.1672, 0.22, 0.1056)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-1.7598415841584156, 1.575611650485437, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_26"
+    {
+        color3f[] primvars:displayColor = [(0.1748, 0.23, 0.1104)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (0.12752475247524764, -0.5252038834951458, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_27"
+    {
+        color3f[] primvars:displayColor = [(0.1824, 0.24, 0.1152)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (2.014891089108911, 2.525980582524272, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_28"
+    {
+        color3f[] primvars:displayColor = [(0.19, 0.25, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-1.2497425742574257, 0.425165048543689, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_29"
+    {
+        color3f[] primvars:displayColor = [(0.1976, 0.26, 0.1248)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (0.6376237623762379, -1.6756504854368932, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_30"
+    {
+        color3f[] primvars:displayColor = [(0.1672, 0.22, 0.1056)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (2.524990099009901, 1.375533980582524, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_31"
+    {
+        color3f[] primvars:displayColor = [(0.1748, 0.23, 0.1104)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-0.7396435643564356, -0.7252815533980581, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_32"
+    {
+        color3f[] primvars:displayColor = [(0.1824, 0.24, 0.1152)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (1.1477227722772276, 2.325902912621359, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_33"
+    {
+        color3f[] primvars:displayColor = [(0.19, 0.25, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-2.1169108910891086, 0.22508737864077663, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_34"
+    {
+        color3f[] primvars:displayColor = [(0.1976, 0.26, 0.1248)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-0.22954455445544542, -1.8757281553398057, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_35"
+    {
+        color3f[] primvars:displayColor = [(0.1672, 0.22, 0.1056)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (1.6578217821782177, 1.1754563106796116, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_36"
+    {
+        color3f[] primvars:displayColor = [(0.1748, 0.23, 0.1104)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-1.606811881188119, -0.9253592233009708, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_37"
+    {
+        color3f[] primvars:displayColor = [(0.1824, 0.24, 0.1152)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (0.2805544554455451, 2.1258252427184465, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_38"
+    {
+        color3f[] primvars:displayColor = [(0.19, 0.25, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (2.167920792079208, 0.025009708737863966, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_39"
+    {
+        color3f[] primvars:displayColor = [(0.1976, 0.26, 0.1248)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-1.0967128712871286, -2.0758058252427185, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_40"
+    {
+        color3f[] primvars:displayColor = [(0.1672, 0.22, 0.1056)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (0.790653465346535, 0.9753786407766993, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_41"
+    {
+        color3f[] primvars:displayColor = [(0.1748, 0.23, 0.1104)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-2.473980198019802, -1.1254368932038834, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_42"
+    {
+        color3f[] primvars:displayColor = [(0.1824, 0.24, 0.1152)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-0.5866138613861385, 1.9257475728155338, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_43"
+    {
+        color3f[] primvars:displayColor = [(0.19, 0.25, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (1.3007524752475248, -0.17506796116504839, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_44"
+    {
+        color3f[] primvars:displayColor = [(0.1976, 0.26, 0.1248)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-1.9638811881188118, -2.275883495145631, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_45"
+    {
+        color3f[] primvars:displayColor = [(0.1672, 0.22, 0.1056)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-0.07651485148514858, 0.7753009708737864, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_46"
+    {
+        color3f[] primvars:displayColor = [(0.1748, 0.23, 0.1104)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (1.8108514851485147, -1.3255145631067962, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_47"
+    {
+        color3f[] primvars:displayColor = [(0.1824, 0.24, 0.1152)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-1.4537821782178217, 1.7256699029126215, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_48"
+    {
+        color3f[] primvars:displayColor = [(0.19, 0.25, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (0.43358415841584164, -0.37514563106796134, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_49"
+    {
+        color3f[] primvars:displayColor = [(0.1976, 0.26, 0.1248)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (2.320950495049505, -2.4759611650485436, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_50"
+    {
+        color3f[] primvars:displayColor = [(0.1672, 0.22, 0.1056)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-0.9436831683168315, 0.5752233009708734, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_51"
+    {
+        color3f[] primvars:displayColor = [(0.1748, 0.23, 0.1104)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (0.9436831683168322, -1.5255922330097087, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_52"
+    {
+        color3f[] primvars:displayColor = [(0.1824, 0.24, 0.1152)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-2.320950495049505, 1.5255922330097085, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_53"
+    {
+        color3f[] primvars:displayColor = [(0.19, 0.25, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-0.43358415841584164, -0.5752233009708737, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_54"
+    {
+        color3f[] primvars:displayColor = [(0.1976, 0.26, 0.1248)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (1.453782178217822, 2.4759611650485436, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_grain_55"
+    {
+        color3f[] primvars:displayColor = [(0.1672, 0.22, 0.1056)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.021, 0.0154, 0.0084)
+        double3 xformOp:translate = (-1.8108514851485147, 0.37514563106796106, 0.0084)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_0"
+    {
+        color3f[] primvars:displayColor = [(0.075, 0.1, 0.13)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (-2.52, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_1"
+    {
+        color3f[] primvars:displayColor = [(0.87, 0.86, 0.7)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (-2.1839999999999997, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_2"
+    {
+        color3f[] primvars:displayColor = [(0.075, 0.1, 0.13)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (-1.8479999999999999, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_3"
+    {
+        color3f[] primvars:displayColor = [(0.87, 0.86, 0.7)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (-1.512, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_4"
+    {
+        color3f[] primvars:displayColor = [(0.075, 0.1, 0.13)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (-1.176, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_5"
+    {
+        color3f[] primvars:displayColor = [(0.87, 0.86, 0.7)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (-0.8400000000000001, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_6"
+    {
+        color3f[] primvars:displayColor = [(0.075, 0.1, 0.13)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (-0.5040000000000001, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_7"
+    {
+        color3f[] primvars:displayColor = [(0.87, 0.86, 0.7)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (-0.16800000000000015, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_8"
+    {
+        color3f[] primvars:displayColor = [(0.075, 0.1, 0.13)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (0.16799999999999982, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_9"
+    {
+        color3f[] primvars:displayColor = [(0.87, 0.86, 0.7)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (0.5040000000000001, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_10"
+    {
+        color3f[] primvars:displayColor = [(0.075, 0.1, 0.13)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (0.8399999999999997, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_11"
+    {
+        color3f[] primvars:displayColor = [(0.87, 0.86, 0.7)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (1.1759999999999995, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_12"
+    {
+        color3f[] primvars:displayColor = [(0.075, 0.1, 0.13)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (1.5119999999999998, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_13"
+    {
+        color3f[] primvars:displayColor = [(0.87, 0.86, 0.7)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (1.8479999999999999, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_14"
+    {
+        color3f[] primvars:displayColor = [(0.075, 0.1, 0.13)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (2.1839999999999997, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cube "habitat_optic_flow_panel_15"
+    {
+        color3f[] primvars:displayColor = [(0.87, 0.86, 0.7)]
+        float[] primvars:displayOpacity = [1]
+        double size = 2
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.084, 0.0168, 0.728)
+        double3 xformOp:translate = (2.519999999999999, 2.7411999999999996, 1.232)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_light_beacon"
+    {
+        color3f[] primvars:displayColor = [(0.99, 0.86, 0.52)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.105, 0.105, 0.105)
+        double3 xformOp:translate = (2.044, 2.044, 2.464)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_perch_0" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token axis = "Z"
+        double height = 0.952
+        color3f[] primvars:displayColor = [(0.31, 0.22, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 0.025199999999999997
+        quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (1.176, 0.616, 0.33599999999999997)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_perch_1" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token axis = "Z"
+        double height = 0.9520000000000001
+        color3f[] primvars:displayColor = [(0.31, 0.22, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 0.025199999999999997
+        quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (-0.98, 0.784, 0.6719999999999999)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_perch_2" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token axis = "Z"
+        double height = 0.952
+        color3f[] primvars:displayColor = [(0.31, 0.22, 0.12)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 0.025199999999999997
+        quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.7, -1.176, 0.504)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_food_0" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        color3f[] primvars:displayColor = [(0.66, 0.32, 0.1)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.0168, 0.0168, 0.0252)
+        double3 xformOp:translate = (0.5599999999999999, -0.33599999999999997, 0.025199999999999997)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_food_1" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        color3f[] primvars:displayColor = [(0.66, 0.32, 0.1)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.0168, 0.0168, 0.0252)
+        double3 xformOp:translate = (0.63, -0.33599999999999997, 0.025199999999999997)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_food_2" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        color3f[] primvars:displayColor = [(0.66, 0.32, 0.1)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.0168, 0.0168, 0.0252)
+        double3 xformOp:translate = (0.7, -0.33599999999999997, 0.025199999999999997)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_food_3" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        color3f[] primvars:displayColor = [(0.66, 0.32, 0.1)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.0168, 0.0168, 0.0252)
+        double3 xformOp:translate = (0.77, -0.33599999999999997, 0.025199999999999997)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_food_4" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        color3f[] primvars:displayColor = [(0.66, 0.32, 0.1)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.0168, 0.0168, 0.0252)
+        double3 xformOp:translate = (0.8400000000000001, -0.33599999999999997, 0.025199999999999997)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_food_5" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        color3f[] primvars:displayColor = [(0.66, 0.32, 0.1)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.0168, 0.0168, 0.0252)
+        double3 xformOp:translate = (0.9099999999999999, -0.33599999999999997, 0.025199999999999997)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_food_6" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        color3f[] primvars:displayColor = [(0.66, 0.32, 0.1)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.0168, 0.0168, 0.0252)
+        double3 xformOp:translate = (0.98, -0.33599999999999997, 0.025199999999999997)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Sphere "habitat_food_7" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        color3f[] primvars:displayColor = [(0.66, 0.32, 0.1)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 1
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (0.0168, 0.0168, 0.0252)
+        double3 xformOp:translate = (1.0499999999999998, -0.33599999999999997, 0.025199999999999997)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cylinder "habitat_water_bowl" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        uniform token axis = "Z"
+        double height = 0.0448
+        color3f[] primvars:displayColor = [(0.2, 0.49, 0.65)]
+        float[] primvars:displayOpacity = [1]
+        double radius = 0.16799999999999998
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (-0.84, -0.7, 0.0224)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def SphereLight "cue_light_beacon"
+    {
+        color3f inputs:color = (0.9, 0.85, 0.62)
+        float inputs:intensity = 400
+        float inputs:radius = 0.025
+        double3 xformOp:translate = (2.044, 2.044, 2.8)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}
+

@@ -139,6 +139,9 @@ public final class Gateway {
         return new Reply(step,spikes);
     }
     static final class BoundedBody implements HttpResponse.BodySubscriber<byte[]> {
+        private final int limit;
+        BoundedBody() { this(MAX_RESPONSE); }
+        BoundedBody(int limit) { if(limit<1||limit>8*1024*1024)throw new IllegalArgumentException("response bound");this.limit=limit; }
         private final CompletableFuture<byte[]> result=new CompletableFuture<>();
         private final ByteArrayOutputStream bytes=new ByteArrayOutputStream();
         private Flow.Subscription subscription;
@@ -146,7 +149,7 @@ public final class Gateway {
         public void onSubscribe(Flow.Subscription s) { subscription=s; s.request(1); }
         public void onNext(List<ByteBuffer> buffers) {
             for(var buffer:buffers) {
-                if(buffer.remaining()>MAX_RESPONSE-bytes.size()) {
+                if(buffer.remaining()>limit-bytes.size()) {
                     subscription.cancel(); result.completeExceptionally(new IllegalArgumentException("Response too large")); return;
                 }
                 byte[] block=new byte[buffer.remaining()]; buffer.get(block); bytes.writeBytes(block);

@@ -156,6 +156,15 @@ def generate(directory):
             entity={'format_version':'1.21.0','minecraft:entity':{'description':dict(identifier='aarnn:'+name,is_spawnable=False,is_summonable=True,is_experimental=False,properties=properties),
                 'components':{'minecraft:physics':dict(has_collision=False,has_gravity=False),'minecraft:collision_box':dict(width=1,height=1),'minecraft:persistent':{},'minecraft:pushable':dict(is_pushable=False,is_pushable_by_piston=False),'minecraft:health':dict(value=100,max=100),'minecraft:nameable':dict(always_show=not habitat,allow_name_tag_renaming=False)}}}
             for variant in ('offline','server'):write(variant+'/entities/'+name+'.json',entity)
+    # One inert render proxy shared by every native body; its transform is an
+    # authoritative pose, never another physics body or neural controller.
+    physics_properties={f'aarnn:s{axis}':dict(type='float',range=[.00001,100.],default=1.,client_sync=True) for axis in 'xyz'}
+    physics_properties.update({f'aarnn:r{axis}':dict(type='float',range=[-180.,180.],default=0.,client_sync=True) for axis in 'xyz'})
+    for variant in ('offline','server'):
+        write(variant+'/entities/physics_proxy.json',{'format_version':'1.21.0','minecraft:entity':dict(description=dict(identifier='aarnn:physics_proxy',is_spawnable=False,is_summonable=True,properties=physics_properties),components={'minecraft:physics':dict(has_gravity=False,has_collision=False),'minecraft:collision_box':dict(width=0.,height=0.),'minecraft:pushable':dict(is_pushable=False,is_pushable_by_piston=False),'minecraft:persistent':{}})})
+    write('resource/models/entity/physics_proxy.geo.json',{'format_version':'1.12.0','minecraft:geometry':[dict(description=dict(identifier='geometry.aarnn.physics_proxy',texture_width=64,texture_height=64,visible_bounds_width=100,visible_bounds_height=100),bones=[dict(name='root',pivot=[0,0,0],cubes=[dict(origin=[-8,-8,-8],size=[16,16,16],uv={face:dict(uv=[63,63],uv_size=[1,1]) for face in ('north','south','east','west','up','down')})])])]})
+    write('resource/entity/physics_proxy.entity.json',{'format_version':'1.10.0','minecraft:client_entity':dict(description=dict(identifier='aarnn:physics_proxy',materials={'default':'entity_alphatest'},textures={'default':'textures/aarnn/palette'},geometry={'default':'geometry.aarnn.physics_proxy'},animations={'pose':'animation.aarnn.physics_proxy'},scripts={'animate':['pose']},render_controllers=['controller.render.aarnn_habitat']))})
+    write('resource/animations/physics_proxy.animation.json',{'format_version':'1.8.0','animations':{'animation.aarnn.physics_proxy':dict(loop=True,bones={'root':dict(rotation=[f"query.property('aarnn:r{axis}')" for axis in 'xyz'],scale=[f"query.property('aarnn:s{axis}')" for axis in 'xyz'])})}})
     write('resource/render_controllers/aarnn.render_controllers.json',{'format_version':'1.8.0','render_controllers':{
         'controller.render.aarnn_habitat':dict(geometry='Geometry.default',materials=[{'*':'Material.default'}],textures=['Texture.default']),
         'controller.render.aarnn_robot':dict(arrays={'geometries':{'Array.body':['Geometry.default','Geometry.anatomy']}},geometry="Array.body[query.property('aarnn:anatomy')]",materials=[{'*':'Material.default'}],textures=['Texture.default'])}})
@@ -166,10 +175,10 @@ def generate(directory):
             modules=[dict(type='data',uuid=IDS['data'],version=VERSION),dict(type='script',language='javascript',entry='scripts/main.js',uuid=IDS['script'],version=VERSION)],dependencies=deps))
         write(variant+'/scripts/content.generated.js','// Generated from sim/content/compiled.generated.json\nexport const content = '+encoded(data)+';\n')
         write(variant+'/scripts/reference.generated.js','// Generated verbatim from web_ui/webgl-world.js; no separate sensory implementation.\n'+(ROOT/'web_ui/webgl-world.js').read_text()+'\nexport const reference = globalThis.NmWorld;\n')
-        for name in ('runtime.js','session.js','nao-chat.js'):write(variant+'/scripts/'+name,(SOURCE/'scripts'/name).read_text())
+        for name in ('runtime.js','session.js','nao-chat.js','physics-session.js','physics-runtime.js'):write(variant+'/scripts/'+name,(SOURCE/'scripts'/name).read_text())
         write(variant+'/scripts/main.js',(SOURCE/'scripts'/('server.js' if variant=='server' else 'offline.js')).read_text())
     write('server-config/permissions.json',dict(allowed_modules=['@minecraft/server','@minecraft/server-admin','@minecraft/server-net']))
-    write('server-config/variables.json',dict(AARNN_ALLOW_SANDBOX_INFERENCE=False,AARNN_CONTENT_DIGEST=data['digest']))
+    write('server-config/variables.json',dict(AARNN_ALLOW_SANDBOX_INFERENCE=False,AARNN_ALLOW_PHYSICS_SERVICE=False,AARNN_CONTENT_DIGEST=data['digest']))
     write('world_behavior_packs.json',[dict(pack_id=IDS['behaviour'],version=VERSION)])
     write('world_resource_packs.json',[dict(pack_id=IDS['resource'],version=VERSION)])
     write('bedrock-content.json',dict(content_digest=data['digest'],pack_ids=IDS,api_version='2.9.0',minimum_engine=[1,26,30],profiles=[p['id'] for p in data['profiles']],habitat_objects=sum(len(h['objects']) for h in data['habitats']),neural_runtime='external Rust only'))

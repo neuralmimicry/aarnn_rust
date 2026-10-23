@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "model_version": "lec-mechanics-v1",
+  "coordinates": "right-handed X-forward Y-left Z-up",
+  "units": ["m", "kg", "s", "rad", "N", "N.m"],
+  "timestep_s": 0.002,
+  "seed": 481516,
+  "surrogate_assumptions": {
+    "status": "engineering_assumption_not_OEM_measurement",
+    "mass_distribution": "primitive geometry inertia; mass divided explicitly between chassis and links",
+    "friction": [0.8, 0.01, 0.001],
+    "motor_effort_Nm": 2.0,
+    "joint_damping_Nms": 0.05,
+    "joint_range_rad": [-1.5, 1.5],
+    "missing_envelope_m": [0.3, 0.3, 0.25],
+    "missing_mass_kg": 2.5,
+    "noise": "ideal noiseless measurements; not calibrated hardware",
+    "stale_output_s": 0.1,
+    "actuator_encoding": "antagonist binary spikes; causal exponential rate filter; silence removes effort",
+    "closed_loop_replay": "physics and transducer snapshots are versioned; remote brain must be checkpointed separately"
+  },
+  "crow": {
+    "species": "Corvus corone", "mass_kg": 0.51,
+    "length_m": 0.47, "wingspan_m": 0.98,
+    "initial_energy_J": 20000, "max_mechanical_power_W": 25,
+    "aero_version": "quasisteady-panels-v1",
+    "air_density_kg_m3": 1.225,
+    "lift_slope_per_rad": 4.5, "stall_rad": 0.35,
+    "profile_drag": 0.08, "induced_drag": 0.15,
+    "status": "selected biological envelope; original reduced mechanics and uncalibrated aero coefficients"
+  }
+}

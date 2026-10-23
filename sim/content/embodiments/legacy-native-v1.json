@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "version": "legacy-native-projections-v1",
+  "scope": "MuJoCo simulation engineering adapters for preserved networks; no calibrated biological, task or cross-engine transfer assertion",
+  "sources": [
+    "include/device_mapper.hpp",
+    "include/simulated_motor_response.hpp",
+    "webots_world/controllers/nao_nn_controller_uds/nao_nn_controller_uds.cpp",
+    "webots_world/protos/HexapodRobot.proto",
+    "webots_world/protos/DrosophilaBancRobot.proto",
+    "webots_world/protos/DrosophilaFafbRobot.proto",
+    "webots_world/protos/ZebrafishRobot.proto",
+    "webots_world/configs/config_<profile>_webots.io_alignment.json"
+  ],
+  "binding": "ordered physical names mapped explicitly to preserved ordered neural IDs; distinct BANC/FAFB snapshots and bindings; no resizing or rewriting",
+  "clock": "2ms source steps; startup name/layout negotiation uses the bounded launcher readiness budget; steady-state 5s transport fault and 100ms source-age actuation expiry unchanged",
+  "motor": {
+    "filter_tau_s": 0.02,
+    "encoding": "bounded signed weighted spike accumulation, no oscillator; a spike history sets a target about the joint midpoint, and empty initial output has no active servo drive",
+    "silence": "filters decay, old source responses expire; reset/disconnect inhibits output",
+    "position_gains": "hexapod kp=.5 kv=.025; flies kp=.01 kv=.0005; NAO kp=1 kv=.05; fish kp=.002 kv=.0001. Native force limits are never scaled up",
+    "range_provenance": "Webots named servo ranges/torques for hexapod and fly; fish paired tail/fin surrogate ranges derive from declared source channels where present; NAO remains original primitive revision-unspecified surrogate",
+    "velocity_limits": "Active drive is inhibited above the declared speed when its position error would accelerate further; braking and passive impact velocity remain physical. NAO/unspecified virtual fin velocities assume4rad/s."
+  },
+  "senses": {
+    "joint": "(q+3.14)/6.28, matching mapper heuristic",
+    "inertial": "body proper acceleration [-20,20] m/s2 and gyro[-10,10] rad/s; flies/fish map native XYZ to legacy X,Z,-Y; hexapod/NAO use native Z-up axes. Exact mounted-frame/cross-engine calibration remains open.",
+    "contacts": "actual named native body contacts including substrate; NAO FSRs use actual contact constraint forces in foot-body axes, [-100,100]N",
+    "range": "mounted native rays, 1-distance/reach; hexapod sonar interpolates original [0,1000],[.4,620],[.8,280],[1.2,120] lookup",
+    "optics": "one native material-luminance ray per receptor using camera mounts/frustum, not rendered RGB-camera equivalence; log gain9, threshold.08, baseline blend.35, leak45ms, refractory12ms, hysteresis.02, reset scale.25",
+    "fish": "eye luminance/absolute gradient; lateral/flow channels use measured local relative water speed with zero background flow; pressure uses actual depth/pitch. These replace the old proximity placeholders and require retraining/calibration for task transfer",
+    "chemical": "olfactory/chemical names remain ideal proximity proxies; no measured chemistry"
+  },
+  "hexapod": {
+    "projection": "34/18 with six named legs, three servos each; native surrogate geometry retained, exact range/torque from source",
+    "output_map": "one named output per servo; no programmed twitch or gait in AARNN mode"
+  },
+  "drosophila": {
+    "projection": "418/48 separately mapped to each dataset's imported IDs; both original snapshots unchanged",
+    "motor_map": "proposed six legs in lf/lm/lr/rf/rm/rr order, each eight outputs forming four antagonistic joint pairs. All48 outputs contribute. Wings additionally use legacy seed pairs (3,17)/(11,29) with coefficients .62/-.38. This is a versioned new engineering readout, not measured innervation or Webots trajectory parity",
+    "flight": "shared quasi-steady panel force at each actual articulated wing COM, area .0025m2 each, density1.225kg/m3; no aggregate spike lift or oscillator; measured insect flight remains open"
+  },
+  "nao": {
+    "projection": "250/40 exact names from preserved snapshot; head, limb and phalanx channels distinct",
+    "geometry": "original articulated primitive surrogate; no OEM CAD imported",
+    "ranges": "head yaw +/-2.08, head pitch[-.67,.51], phalanges[0,1], other joints+/-1.2rad are explicit surrogate assumptions; exact OEM revision/servo calibration open"
+  },
+  "zebrafish": {
+    "projection": "32/32; eight paired tail muscles, four pectoral outputs, four paired fin groups, jaw, two opercula and trunk co-contraction",
+    "water": "surface Z=.4m bottom Z=0; rho1000kg/m3, assumed displaced volume=body_mass/rho per link; Cd1 quadratic translational drag at COM with area=volume^(2/3); 12mm linear submergence envelope",
+    "stiffness": "named trunk stiffness output enables neutral tail position compliance and multiplies gains by1..5; force limits stay fixed",
+    "limits": "uniform neutral density, drag coefficient, submergence and fin geometry are explicit engineering assumptions. No validated larval fluid mechanics, swimming skill or rotational hydrodynamic calibration"
+  },
+  "open_gates": [
+    "learned/held-out tasks",
+    "biological calibration",
+    "cross-engine trajectories",
+    "OEM servo/geometry equivalence",
+    "production governed output/fencing",
+    "rendered camera parity",
+    "fluid/aero and velocity-limit calibration"
+  ]
+}

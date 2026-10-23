@@ -1,0 +1,11 @@
+# Python 3.14 reference/generation only. Native Rust runtime uses the external SDK.
+PyOpenGL==3.1.10
+absl-py==2.5.1
+etils==1.14.0
+fsspec==2026.9.0
+glfw==2.11.0
+mujoco==3.17.0
+numpy==2.5.4
+typing_extensions==4.16.0
+websockets==17.3
+zipp==4.1.2

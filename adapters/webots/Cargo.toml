@@ -1,0 +1,21 @@
+[package]
+name = "aarnn-webots"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+default = []
+native = ["dep:signal-hook"]
+
+[dependencies]
+aarnn-embodiment = { path = "../../crates/aarnn-embodiment" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+sha2 = "0.10"
+signal-hook = { version = "0.3", optional = true }
+
+[[bin]]
+name = "aarnn-webots"
+path = "src/main.rs"
+required-features = ["native"]

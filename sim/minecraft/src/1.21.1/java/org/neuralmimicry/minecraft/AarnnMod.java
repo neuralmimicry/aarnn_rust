@@ -31,6 +31,7 @@ public final class AarnnMod implements ModInitializer {
         CommandRegistrationCallback.EVENT.register((dispatcher,registry,environment)-> {
             naoChat.register(dispatcher);
             var root=Commands.literal("aarnn").requires(s->s.hasPermission(2));
+            root.then(Commands.literal("physics").then(Commands.literal("attach").executes(c->{PhysicsViewer.start(c.getSource().getServer());return 1;})).then(Commands.literal("stop").executes(c->{PhysicsViewer.stop(c.getSource().getServer());return 1;})));
             root.then(Commands.literal("world").executes(c->run(c.getSource(),"world",null)));
             root.then(Commands.literal("stop").executes(c->run(c.getSource(),"stop",null)));
             root.then(Commands.literal("status").executes(c->run(c.getSource(),"status",null)));
@@ -46,12 +47,14 @@ public final class AarnnMod implements ModInitializer {
             if(entity instanceof SceneEntity scene) scene.stop("disarmed on unload");
         });
         ServerLifecycleEvents.SERVER_STOPPING.register(server-> {
+            PhysicsViewer.stop(server);
             naoChat.close(server);
             pending.removeIf(command->command.source().getServer()==server);
             var level=server.getLevel(LabWorld.KEY);
             if(level!=null) LabWorld.scenes(level).forEach(e->e.stop("server stopping"));
         });
         ServerTickEvents.END_SERVER_TICK.register(server->{
+            PhysicsViewer.tick(server);
             naoChat.tick(server);
             var commands=new java.util.ArrayList<Deferred>();
             var iterator=pending.iterator();
@@ -65,6 +68,7 @@ public final class AarnnMod implements ModInitializer {
             for(var command:commands)run(command.source(),command.action(),command.profile());
         });
         ServerLifecycleEvents.SERVER_STARTED.register(server-> {
+            PhysicsViewer.start(server);
             try { AdapterConfig.read(FabricLoader.getInstance().getConfigDir().resolve("aarnn.json")); }
             catch(Exception error) { org.slf4j.LoggerFactory.getLogger("aarnn").error("AARNN config invalid; inference remains disarmed"); }
         });
@@ -80,7 +84,7 @@ public final class AarnnMod implements ModInitializer {
             }
             switch(action) {
                 case "world" -> { LabWorld.build(level); source.sendSuccess(()->Component.literal("AARNN lab ready: six profiles. /aarnn visit celegans"),false); }
-                case "stop" -> LabWorld.scenes(level).forEach(e->e.stop("disarmed by operator"));
+                case "stop" -> { PhysicsViewer.stop(source.getServer()); LabWorld.scenes(level).forEach(e->e.stop("disarmed by operator")); }
                 case "status" -> {
                     source.sendSuccess(()->Component.literal("Content "+Content.DATA.digest()+" · reference sandbox"),false);
                     for(var e:LabWorld.scenes(level)) if(!e.habitatEntity())

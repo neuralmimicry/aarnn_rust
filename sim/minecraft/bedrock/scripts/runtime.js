@@ -110,7 +110,7 @@ export function start(io) {
   }
   /** @param {import('@minecraft/server').ScriptEventCommandMessageAfterEvent} event */
   function command(event) {
-    if(!event.id.startsWith('aarnn:'))return;
+    if(!event.id.startsWith('aarnn:')||event.id.startsWith('aarnn:physics_'))return;
     const player=event.sourceEntity;
     if(event.sourceType!==ScriptEventSource.Server && !(player instanceof Player && player.commandPermissionLevel>=CommandPermissionLevel.GameDirectors))return;
     const reply=text=>{console.warn('AARNN '+text);if(player instanceof Player)player.sendMessage('AARNN '+text);};

@@ -12,7 +12,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 import sim_content
-from robot_profiles import PROFILES
+from robot_profiles import LEGACY_TYPES, PROFILES
 from run_nao_combo_webots import create_nao_runtime_world
 
 ROOT = sim_content.ROOT
@@ -51,7 +51,10 @@ class ContentParity(unittest.TestCase):
 
     def test_profiles_preserve_channel_identity_and_biology_landmarks(self):
         profiles=self.catalogue['profiles']
-        self.assertEqual({p['id'] for p in profiles},set(PROFILES))
+        # This catalogue is the preserved six-profile visual representation.
+        # Native expansion records have separate physics/IO freshness checks.
+        self.assertEqual({p['id'] for p in profiles},set(LEGACY_TYPES))
+        self.assertTrue(set(LEGACY_TYPES).issubset(PROFILES))
         for p in profiles:
             ref=PROFILES[p['id']]
             self.assertEqual((p['sensory'],p['output']),(ref.sensory,ref.output))

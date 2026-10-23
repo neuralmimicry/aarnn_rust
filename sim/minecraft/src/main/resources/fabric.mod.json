@@ -7,13 +7,18 @@
   "environment": "*",
   "license": "MIT",
   "entrypoints": {
-    "main": ["org.neuralmimicry.minecraft.AarnnMod"],
-    "client": ["org.neuralmimicry.minecraft.AarnnClient"]
+    "main": [
+      "org.neuralmimicry.minecraft.AarnnMod"
+    ],
+    "client": [
+      "org.neuralmimicry.minecraft.AarnnClient"
+    ]
   },
   "depends": {
     "fabricloader": ">=${loader_version}",
     "minecraft": "${minecraft_version}",
     "java": ">=${java_release}",
     "fabric-api": "*"
-  }
+  },
+  "accessWidener": "${physics_access_widener}"
 }

@@ -4,6 +4,11 @@
 # Convenience wrapper around run_sim.sh that passes --sim unity automatically.
 # All other arguments are forwarded unchanged.
 #
+# Expansion profiles use native rigid graphs and the shared Rust AER ABI:
+#   scripts/run_unity_sim.sh --robots ugot_mecanum=1 --headless --steps 100 --output target/qa/unity-new
+# Reference brains require an explicit --reference-bindings map. Unity requires
+# NM_UNITY_EDITOR; Unreal uses UE_ENGINE. Old six-profile routes stay available.
+#
 # Usage:
 #   ./run_unity_sim.sh [--robots <spec>] [--tcp-host <host>] [--tcp-base-port <n>] [--no-build]
 #

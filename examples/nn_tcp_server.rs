@@ -16,7 +16,8 @@
 //! - Raw float packet (anything else):
 //!     [f32 LE t_ms] + [S × f32 LE sensory values]  →  [O × f32 LE outputs]
 //!
-//! Multiple clients can connect simultaneously; each connection gets its own Runner clone.
+//! Compatibility clients share the already-loaded Runner; they do not clone neural state.
+//! The opt-in strict embodiment reference contract permits one active producer.
 //! A shared Arc<Mutex<Runner>> is the authoritative model; each client thread locks it only
 //! for the step() call, so clients serialize on the neural simulation but not on I/O.
 //!
@@ -30,6 +31,8 @@
 
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
+#[cfg(all(feature = "ui", feature = "robot_io"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -398,6 +401,31 @@ fn build_runner(
     runner
 }
 
+// An opt-in simulation reference contract pins an already-sized model. It is
+// deliberately distinct from production peripheral/actuator authorisation.
+#[cfg(all(feature = "ui", feature = "robot_io"))]
+#[derive(Debug, serde::Deserialize)]
+struct ReferenceContract {
+    brain_id: String,
+    brain_generation: u64,
+    model_digest: String,
+    io_digest: String,
+    s_names: Vec<String>,
+    o_names: Vec<String>,
+}
+
+#[cfg(all(feature = "ui", feature = "robot_io"))]
+impl ReferenceContract {
+    fn matches(&self, handshake: &HandshakeFrame, sensory: usize, output: usize) -> bool {
+        self.s_names.len() == sensory
+            && self.o_names.len() == output
+            && handshake.s_names == self.s_names
+            && handshake.o_names == self.o_names
+            && handshake.sensory == Some(sensory)
+            && handshake.output == Some(output)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TCP framing helpers
 // ---------------------------------------------------------------------------
@@ -441,6 +469,12 @@ fn read_frame(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     // Read the remaining 3 bytes of the length field.
     read_exact_tcp(stream, &mut len_buf[1..])?;
     let payload_len = u32::from_le_bytes(len_buf) as usize;
+    if payload_len == 0 || payload_len > 4 * 1024 * 1024 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "frame length outside reference budget",
+        ));
+    }
     let mut payload = vec![0u8; payload_len];
     read_exact_tcp(stream, &mut payload)?;
     Ok(payload)
@@ -482,6 +516,26 @@ fn handle_client(
         .unwrap_or_else(|_| "unknown".to_string());
     eprintln!("[nn_tcp_server] client connected: {}", peer);
 
+    let contract = match std::env::var("NM_AER_REFERENCE_CONTRACT") {
+        Ok(path) => match std::fs::read_to_string(path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<ReferenceContract>(&raw).ok())
+        {
+            Some(contract)
+                if contract.s_names.len() == initial_s && contract.o_names.len() == initial_o =>
+            {
+                Some(contract)
+            }
+            _ => {
+                eprintln!(
+                    "[nn_tcp_server] invalid or mismatched reference contract; connection denied"
+                );
+                return;
+            }
+        },
+        Err(_) => None,
+    };
+
     // Each connection keeps its own I/O mapping. The neural state lives in the
     // already-loaded shared runner and is locked only while resizing or stepping.
     let mut io_mapping = build_mapping(initial_s, initial_o);
@@ -499,6 +553,13 @@ fn handle_client(
                 return;
             }
         };
+        if contract.is_some()
+            && (runner.net.num_sensory_neurons != initial_s
+                || runner.net.num_output_neurons != initial_o)
+        {
+            eprintln!("[nn_tcp_server] strict model shape mismatch; resizing denied");
+            return;
+        }
         if runner.net.num_sensory_neurons != io_mapping.sensory_size {
             runner.resize_sensory(io_mapping.sensory_size);
         }
@@ -540,6 +601,13 @@ fn handle_client(
         if payload[0] == b'{' {
             match serde_json::from_slice::<HandshakeFrame>(&payload) {
                 Ok(handshake) => {
+                    if contract
+                        .as_ref()
+                        .is_some_and(|pinned| !pinned.matches(&handshake, initial_s, initial_o))
+                    {
+                        eprintln!("[nn_tcp_server] pinned IO mismatch; handshake denied");
+                        break;
+                    }
                     if let Some(handshake_dt_ms) = handshake
                         .dt_ms
                         .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1000.0)
@@ -630,10 +698,17 @@ fn handle_client(
                         );
                     }
 
-                    let hint = format!(
-                        "{{\"expected_s\":{},\"expected_o\":{}}}",
-                        io_mapping.sensory_size, io_mapping.output_size
-                    );
+                    let mut hint = serde_json::json!({
+                        "expected_s": io_mapping.sensory_size, "expected_o": io_mapping.output_size
+                    });
+                    if let Some(pinned) = contract.as_ref() {
+                        hint["brain_id"] = serde_json::json!(pinned.brain_id);
+                        hint["brain_generation"] = serde_json::json!(pinned.brain_generation);
+                        hint["model_digest"] = serde_json::json!(pinned.model_digest);
+                        hint["io_digest"] = serde_json::json!(pinned.io_digest);
+                        hint["protocol"] = serde_json::json!("AER1-reference");
+                    }
+                    let hint = hint.to_string();
                     if let Err(err) = write_frame(&mut stream, hint.as_bytes()) {
                         eprintln!("[nn_tcp_server] handshake reply error to {}: {}", peer, err);
                         break;
@@ -803,8 +878,8 @@ fn main() -> io::Result<()> {
     let last_inputs = Arc::new(Mutex::new(vec![0f32; initial_s]));
     let last_outputs = Arc::new(Mutex::new(vec![0f32; initial_o]));
 
-    // Shared authoritative Runner (each connection also gets its own local Runner; this
-    // is kept for future cross-client synchronisation hooks).
+    // One already-loaded authoritative reference Runner; each handler keeps only
+    // its own IO mapping and briefly locks this state while stepping.
     let shared_runner = Arc::new(Mutex::new(build_runner(
         &startup_cfg,
         startup_snapshot_json.as_deref(),
@@ -829,10 +904,20 @@ fn main() -> io::Result<()> {
     let accept_quantizer = quantizer;
     let accept_aer_s = server_args.aer_sensory_base;
     let accept_aer_o = server_args.aer_output_base;
+    let strict_single_peer = std::env::var_os("NM_AER_REFERENCE_CONTRACT").is_some();
+    let active_peer = Arc::new(AtomicBool::new(false));
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             match stream {
                 Ok(tcp_stream) => {
+                    if strict_single_peer && active_peer.swap(true, Ordering::AcqRel) {
+                        eprintln!(
+                            "[nn_tcp_server] strict reference brain already has an active producer"
+                        );
+                        drop(tcp_stream);
+                        continue;
+                    }
+                    let peer_guard = Arc::clone(&active_peer);
                     let runner_clone = Arc::clone(&accept_runner);
                     let inputs_clone = Arc::clone(&accept_inputs);
                     let outputs_clone = Arc::clone(&accept_outputs);
@@ -840,6 +925,13 @@ fn main() -> io::Result<()> {
                     let snap_clone = accept_snapshot.clone();
                     let q_clone = accept_quantizer.clone();
                     std::thread::spawn(move || {
+                        struct PeerGuard(Arc<AtomicBool>);
+                        impl Drop for PeerGuard {
+                            fn drop(&mut self) {
+                                self.0.store(false, Ordering::Release);
+                            }
+                        }
+                        let _guard = PeerGuard(peer_guard);
                         handle_client(
                             tcp_stream,
                             runner_clone,
@@ -909,4 +1001,34 @@ fn main() {
         "Run with:  cargo run --release --features ui,robot_io --example nn_tcp_server -- \
          --tcp 127.0.0.1:7890 --sensory 25 --output 11"
     );
+}
+
+#[cfg(all(test, feature = "ui", feature = "robot_io"))]
+mod reference_contract_tests {
+    use super::*;
+
+    #[test]
+    fn pinned_names_and_dimensions_reject_equal_size_reordering() {
+        let contract = ReferenceContract {
+            brain_id: "simulation-only".into(),
+            brain_generation: 1,
+            model_digest: "model-v1".into(),
+            io_digest: "io-v1".into(),
+            s_names: vec!["left".into(), "right".into()],
+            o_names: vec!["wheel_positive".into(), "wheel_negative".into()],
+        };
+        let mut handshake = HandshakeFrame {
+            s_names: contract.s_names.clone(),
+            o_names: contract.o_names.clone(),
+            sensory: Some(2),
+            output: Some(2),
+            ..Default::default()
+        };
+        assert!(contract.matches(&handshake, 2, 2));
+        handshake.s_names.swap(0, 1);
+        assert!(!contract.matches(&handshake, 2, 2));
+        handshake.s_names.swap(0, 1);
+        handshake.output = Some(3);
+        assert!(!contract.matches(&handshake, 2, 2));
+    }
 }

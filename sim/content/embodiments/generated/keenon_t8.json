@@ -1,0 +1,6248 @@
+{
+  "schema_version": 1,
+  "digest_encoding": "embodiment-binary-v1",
+  "compiler": "embodiment-v1",
+  "profile_id": "keenon_t8",
+  "variant_id": "original-v1",
+  "fidelity": "functional-surrogate",
+  "exact_replica": "pending OEM variant and calibration",
+  "controller_transfer": "untrained",
+  "source": "scripts/embodiment_archetypes.py:build",
+  "source_digest": "2f4cd1909a47cd031ec8b5e099c1bb8737248320f6dd6c70fab87d8ff166f163",
+  "policy_digest": "35a2dbc6477ae9308c4f5eae4d09ccffc2f7aadce2cb54ce29018d63e43b9e2f",
+  "io": {
+    "schema_version": 1,
+    "digest_encoding": "embodiment-binary-v1",
+    "mapping_version": "keenon_t8-io-v1",
+    "sensors": [
+      {
+        "name": "wheel_rear_right_angle",
+        "kind": "angle",
+        "joint": "wheel_rear_right",
+        "units": "rad",
+        "range": [
+          -3.141592653589793,
+          3.141592653589793
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      },
+      {
+        "name": "wheel_rear_right_angular_velocity",
+        "kind": "angular_velocity",
+        "joint": "wheel_rear_right",
+        "units": "rad/s",
+        "range": [
+          -40,
+          40
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      },
+      {
+        "name": "wheel_rear_left_angle",
+        "kind": "angle",
+        "joint": "wheel_rear_left",
+        "units": "rad",
+        "range": [
+          -3.141592653589793,
+          3.141592653589793
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      },
+      {
+        "name": "wheel_rear_left_angular_velocity",
+        "kind": "angular_velocity",
+        "joint": "wheel_rear_left",
+        "units": "rad/s",
+        "range": [
+          -40,
+          40
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      },
+      {
+        "name": "wheel_front_right_angle",
+        "kind": "angle",
+        "joint": "wheel_front_right",
+        "units": "rad",
+        "range": [
+          -3.141592653589793,
+          3.141592653589793
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      },
+      {
+        "name": "wheel_front_right_angular_velocity",
+        "kind": "angular_velocity",
+        "joint": "wheel_front_right",
+        "units": "rad/s",
+        "range": [
+          -40,
+          40
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      },
+      {
+        "name": "wheel_front_left_angle",
+        "kind": "angle",
+        "joint": "wheel_front_left",
+        "units": "rad",
+        "range": [
+          -3.141592653589793,
+          3.141592653589793
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      },
+      {
+        "name": "wheel_front_left_angular_velocity",
+        "kind": "angular_velocity",
+        "joint": "wheel_front_left",
+        "units": "rad/s",
+        "range": [
+          -40,
+          40
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      },
+      {
+        "name": "proximity_0",
+        "kind": "range_ray",
+        "units": "m",
+        "range": [
+          0,
+          3
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "angle_rad": 0.0
+      },
+      {
+        "name": "proximity_1",
+        "kind": "range_ray",
+        "units": "m",
+        "range": [
+          0,
+          3
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "angle_rad": 0.7853981633974483
+      },
+      {
+        "name": "proximity_2",
+        "kind": "range_ray",
+        "units": "m",
+        "range": [
+          0,
+          3
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "angle_rad": 1.5707963267948966
+      },
+      {
+        "name": "proximity_3",
+        "kind": "range_ray",
+        "units": "m",
+        "range": [
+          0,
+          3
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "angle_rad": 2.356194490192345
+      },
+      {
+        "name": "proximity_4",
+        "kind": "range_ray",
+        "units": "m",
+        "range": [
+          0,
+          3
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "angle_rad": 3.141592653589793
+      },
+      {
+        "name": "proximity_5",
+        "kind": "range_ray",
+        "units": "m",
+        "range": [
+          0,
+          3
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "angle_rad": 3.9269908169872414
+      },
+      {
+        "name": "proximity_6",
+        "kind": "range_ray",
+        "units": "m",
+        "range": [
+          0,
+          3
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "angle_rad": 4.71238898038469
+      },
+      {
+        "name": "proximity_7",
+        "kind": "range_ray",
+        "units": "m",
+        "range": [
+          0,
+          3
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "angle_rad": 5.497787143782138
+      },
+      {
+        "name": "body_gyro_x",
+        "kind": "body_gyro",
+        "axis": 0,
+        "units": "rad/s",
+        "range": [
+          -40,
+          40
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      },
+      {
+        "name": "body_gyro_y",
+        "kind": "body_gyro",
+        "axis": 1,
+        "units": "rad/s",
+        "range": [
+          -40,
+          40
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      },
+      {
+        "name": "body_gyro_z",
+        "kind": "body_gyro",
+        "axis": 2,
+        "units": "rad/s",
+        "range": [
+          -40,
+          40
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      }
+    ],
+    "output_names": [
+      "wheel_rear_right_positive",
+      "wheel_rear_right_negative",
+      "wheel_rear_left_positive",
+      "wheel_rear_left_negative",
+      "wheel_front_right_positive",
+      "wheel_front_right_negative",
+      "wheel_front_left_positive",
+      "wheel_front_left_negative"
+    ],
+    "sensory_base": 4096,
+    "output_base": 16384,
+    "dt_us": 2000,
+    "transducer": {
+      "version": "antagonist-rate-v1",
+      "tau_s": 0.02,
+      "stale_s": 0.1,
+      "neutral": "zero effort; passive dynamics continue"
+    },
+    "digest": "23d77c7603f4ee8f9c32130a78518d2237d792215df409c126674a2d04ad1192"
+  },
+  "actuators": [
+    {
+      "name": "wheel_rear_right",
+      "joint": "wheel_rear_right",
+      "control_range": [
+        -1.0,
+        1.0
+      ],
+      "effort_range": [
+        0.0,
+        0.0
+      ],
+      "gear": [
+        1.36,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "neutral": 0,
+      "fault": "zero-active-effort",
+      "encoding": "antagonist-rate-v1"
+    },
+    {
+      "name": "wheel_rear_left",
+      "joint": "wheel_rear_left",
+      "control_range": [
+        -1.0,
+        1.0
+      ],
+      "effort_range": [
+        0.0,
+        0.0
+      ],
+      "gear": [
+        1.36,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "neutral": 0,
+      "fault": "zero-active-effort",
+      "encoding": "antagonist-rate-v1"
+    },
+    {
+      "name": "wheel_front_right",
+      "joint": "wheel_front_right",
+      "control_range": [
+        -1.0,
+        1.0
+      ],
+      "effort_range": [
+        0.0,
+        0.0
+      ],
+      "gear": [
+        1.36,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "neutral": 0,
+      "fault": "zero-active-effort",
+      "encoding": "antagonist-rate-v1"
+    },
+    {
+      "name": "wheel_front_left",
+      "joint": "wheel_front_left",
+      "control_range": [
+        -1.0,
+        1.0
+      ],
+      "effort_range": [
+        0.0,
+        0.0
+      ],
+      "gear": [
+        1.36,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "neutral": 0,
+      "fault": "zero-active-effort",
+      "encoding": "antagonist-rate-v1"
+    }
+  ],
+  "native_mjcf_sha256": "710c067697e9a914a30fba949e096cba611d4ddbf56b6fd4c61ffb627f981d68",
+  "source_licence": "repository-original",
+  "assumptions": "sim/content/embodiments/policy.json",
+  "total_mass_kg": 34.5,
+  "scene": {
+    "version": "native-habitats-v1",
+    "habitat_id": "room",
+    "title": "Embodied learning room",
+    "half_extent_m": 3.0,
+    "catalogue_digest": "4d0d506e80f146acf04e34ee781f67ab465c6d1f336b73c799bc3e3904a6b2d8",
+    "substrate": [
+      0.44,
+      0.46,
+      0.49
+    ],
+    "cues": [
+      "reachable coloured objects",
+      "navigation markers",
+      "low steps",
+      "doorway and furniture",
+      "stereo vision and foot pressure"
+    ],
+    "objects": [
+      {
+        "id": "rim_0",
+        "shape": "box",
+        "position": [
+          0.75,
+          3.0,
+          1.2000000000000002
+        ],
+        "size": [
+          6.0,
+          0.07500000000000001,
+          2.4000000000000004
+        ],
+        "colour": [
+          0.42,
+          0.5,
+          0.47
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "rim_1",
+        "shape": "box",
+        "position": [
+          0.75,
+          -3.0,
+          0.10500000000000001
+        ],
+        "size": [
+          6.0,
+          0.07500000000000001,
+          0.21000000000000002
+        ],
+        "colour": [
+          0.42,
+          0.5,
+          0.47
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "rim_2",
+        "shape": "box",
+        "position": [
+          3.75,
+          0.0,
+          1.2000000000000002
+        ],
+        "size": [
+          0.07500000000000001,
+          6.0,
+          2.4000000000000004
+        ],
+        "colour": [
+          0.42,
+          0.5,
+          0.47
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "rim_3",
+        "shape": "box",
+        "position": [
+          -3.75,
+          0.0,
+          1.2000000000000002
+        ],
+        "size": [
+          0.07500000000000001,
+          6.0,
+          2.4000000000000004
+        ],
+        "colour": [
+          0.42,
+          0.5,
+          0.47
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_00",
+        "shape": "sphere",
+        "position": [
+          -2.7600000000000002,
+          -2.7600000000000002,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.3872,
+          0.4048,
+          0.43119999999999997
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_01",
+        "shape": "sphere",
+        "position": [
+          -0.7378217821782178,
+          0.5091262135922331,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4048,
+          0.4232,
+          0.45080000000000003
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_02",
+        "shape": "sphere",
+        "position": [
+          1.2843564356435646,
+          -1.7417475728155343,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4224,
+          0.4416,
+          0.4704
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_03",
+        "shape": "sphere",
+        "position": [
+          -2.2134653465346537,
+          1.5273786407766994,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.44,
+          0.46,
+          0.49
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_04",
+        "shape": "sphere",
+        "position": [
+          -0.19128712871287112,
+          -0.7234951456310681,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4576,
+          0.47840000000000005,
+          0.5096
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_05",
+        "shape": "sphere",
+        "position": [
+          1.8308910891089107,
+          2.5456310679611653,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.3872,
+          0.4048,
+          0.43119999999999997
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_06",
+        "shape": "sphere",
+        "position": [
+          -1.666930693069307,
+          0.29475728155339775,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4048,
+          0.4232,
+          0.45080000000000003
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_07",
+        "shape": "sphere",
+        "position": [
+          0.35524752475247523,
+          -1.956116504854369,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4224,
+          0.4416,
+          0.4704
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_08",
+        "shape": "sphere",
+        "position": [
+          2.3774257425742578,
+          1.313009708737864,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.44,
+          0.46,
+          0.49
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_09",
+        "shape": "sphere",
+        "position": [
+          -1.1203960396039605,
+          -0.9378640776699028,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4576,
+          0.47840000000000005,
+          0.5096
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_10",
+        "shape": "sphere",
+        "position": [
+          0.9017821782178223,
+          2.33126213592233,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.3872,
+          0.4048,
+          0.43119999999999997
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_11",
+        "shape": "sphere",
+        "position": [
+          -2.596039603960396,
+          0.08038834951456308,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4048,
+          0.4232,
+          0.45080000000000003
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_12",
+        "shape": "sphere",
+        "position": [
+          -0.5738613861386137,
+          -2.170485436893204,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4224,
+          0.4416,
+          0.4704
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_13",
+        "shape": "sphere",
+        "position": [
+          1.4483168316831687,
+          1.0986407766990292,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.44,
+          0.46,
+          0.49
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_14",
+        "shape": "sphere",
+        "position": [
+          -2.0495049504950495,
+          -1.152233009708738,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4576,
+          0.47840000000000005,
+          0.5096
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_15",
+        "shape": "sphere",
+        "position": [
+          -0.02732673267326735,
+          2.1168932038834956,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.3872,
+          0.4048,
+          0.43119999999999997
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_16",
+        "shape": "sphere",
+        "position": [
+          1.9948514851485148,
+          -0.13398058252427192,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4048,
+          0.4232,
+          0.45080000000000003
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_17",
+        "shape": "sphere",
+        "position": [
+          -1.502970297029703,
+          -2.384854368932039,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4224,
+          0.4416,
+          0.4704
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_18",
+        "shape": "sphere",
+        "position": [
+          0.5192079207920793,
+          0.8842718446601946,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.44,
+          0.46,
+          0.49
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_19",
+        "shape": "sphere",
+        "position": [
+          2.5413861386138614,
+          -1.366601941747573,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4576,
+          0.47840000000000005,
+          0.5096
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_20",
+        "shape": "sphere",
+        "position": [
+          -0.9564356435643563,
+          1.9025242718446602,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.3872,
+          0.4048,
+          0.43119999999999997
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_21",
+        "shape": "sphere",
+        "position": [
+          1.0657425742574258,
+          -0.3483495145631069,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4048,
+          0.4232,
+          0.45080000000000003
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_22",
+        "shape": "sphere",
+        "position": [
+          -2.4320792079207925,
+          -2.599223300970874,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4224,
+          0.4416,
+          0.4704
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_23",
+        "shape": "sphere",
+        "position": [
+          -0.40990099009900993,
+          0.6699029126213593,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.44,
+          0.46,
+          0.49
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_24",
+        "shape": "sphere",
+        "position": [
+          1.6122772277227728,
+          -1.580970873786408,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4576,
+          0.47840000000000005,
+          0.5096
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_25",
+        "shape": "sphere",
+        "position": [
+          -1.8855445544554454,
+          1.6881553398058253,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.3872,
+          0.4048,
+          0.43119999999999997
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_26",
+        "shape": "sphere",
+        "position": [
+          0.13663366336633676,
+          -0.5627184466019419,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4048,
+          0.4232,
+          0.45080000000000003
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_27",
+        "shape": "sphere",
+        "position": [
+          2.158811881188119,
+          2.7064077669902917,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4224,
+          0.4416,
+          0.4704
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_28",
+        "shape": "sphere",
+        "position": [
+          -1.339009900990099,
+          0.4555339805825239,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.44,
+          0.46,
+          0.49
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_29",
+        "shape": "sphere",
+        "position": [
+          0.6831683168316834,
+          -1.7953398058252428,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4576,
+          0.47840000000000005,
+          0.5096
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_30",
+        "shape": "sphere",
+        "position": [
+          2.7053465346534655,
+          1.47378640776699,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.3872,
+          0.4048,
+          0.43119999999999997
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_31",
+        "shape": "sphere",
+        "position": [
+          -0.7924752475247525,
+          -0.7770873786407766,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4048,
+          0.4232,
+          0.45080000000000003
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_32",
+        "shape": "sphere",
+        "position": [
+          1.22970297029703,
+          2.4920388349514564,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4224,
+          0.4416,
+          0.4704
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_33",
+        "shape": "sphere",
+        "position": [
+          -2.2681188118811884,
+          0.24116504854368925,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.44,
+          0.46,
+          0.49
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_34",
+        "shape": "sphere",
+        "position": [
+          -0.24594059405940583,
+          -2.0097087378640777,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4576,
+          0.47840000000000005,
+          0.5096
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_35",
+        "shape": "sphere",
+        "position": [
+          1.776237623762376,
+          1.2594174757281555,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.3872,
+          0.4048,
+          0.43119999999999997
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_36",
+        "shape": "sphere",
+        "position": [
+          -1.7215841584158418,
+          -0.9914563106796116,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4048,
+          0.4232,
+          0.45080000000000003
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_37",
+        "shape": "sphere",
+        "position": [
+          0.3005940594059412,
+          2.2776699029126215,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4224,
+          0.4416,
+          0.4704
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_38",
+        "shape": "sphere",
+        "position": [
+          2.322772277227723,
+          0.02679611650485425,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.44,
+          0.46,
+          0.49
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_39",
+        "shape": "sphere",
+        "position": [
+          -1.1750495049504952,
+          -2.224077669902913,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4576,
+          0.47840000000000005,
+          0.5096
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_40",
+        "shape": "sphere",
+        "position": [
+          0.8471287128712875,
+          1.0450485436893207,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.3872,
+          0.4048,
+          0.43119999999999997
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_41",
+        "shape": "sphere",
+        "position": [
+          -2.650693069306931,
+          -1.2058252427184466,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4048,
+          0.4232,
+          0.45080000000000003
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_42",
+        "shape": "sphere",
+        "position": [
+          -0.6285148514851484,
+          2.063300970873786,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4224,
+          0.4416,
+          0.4704
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_43",
+        "shape": "sphere",
+        "position": [
+          1.393663366336634,
+          -0.18757281553398042,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.44,
+          0.46,
+          0.49
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_44",
+        "shape": "sphere",
+        "position": [
+          -2.1041584158415843,
+          -2.438446601941748,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4576,
+          0.47840000000000005,
+          0.5096
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_45",
+        "shape": "sphere",
+        "position": [
+          -0.08198019801980205,
+          0.8306796116504854,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.3872,
+          0.4048,
+          0.43119999999999997
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_46",
+        "shape": "sphere",
+        "position": [
+          1.9401980198019801,
+          -1.4201941747572815,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4048,
+          0.4232,
+          0.45080000000000003
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_47",
+        "shape": "sphere",
+        "position": [
+          -1.5576237623762377,
+          1.8489320388349517,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4224,
+          0.4416,
+          0.4704
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_48",
+        "shape": "sphere",
+        "position": [
+          0.46455445544554463,
+          -0.40194174757281576,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.44,
+          0.46,
+          0.49
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_49",
+        "shape": "sphere",
+        "position": [
+          2.4867326732673267,
+          -2.652815533980583,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4576,
+          0.47840000000000005,
+          0.5096
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_50",
+        "shape": "sphere",
+        "position": [
+          -1.011089108910891,
+          0.6163106796116501,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.3872,
+          0.4048,
+          0.43119999999999997
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_51",
+        "shape": "sphere",
+        "position": [
+          1.0110891089108915,
+          -1.6345631067961166,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4048,
+          0.4232,
+          0.45080000000000003
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_52",
+        "shape": "sphere",
+        "position": [
+          -2.486732673267327,
+          1.6345631067961164,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4224,
+          0.4416,
+          0.4704
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_53",
+        "shape": "sphere",
+        "position": [
+          -0.46455445544554463,
+          -0.6163106796116504,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.44,
+          0.46,
+          0.49
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_54",
+        "shape": "sphere",
+        "position": [
+          1.5576237623762381,
+          2.6528155339805823,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.4576,
+          0.47840000000000005,
+          0.5096
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "grain_55",
+        "shape": "sphere",
+        "position": [
+          -1.9401980198019801,
+          0.4019417475728154,
+          0.009000000000000001
+        ],
+        "size": [
+          0.045,
+          0.033,
+          0.018000000000000002
+        ],
+        "colour": [
+          0.3872,
+          0.4048,
+          0.43119999999999997
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "stone",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "table_top",
+        "shape": "box",
+        "position": [
+          2.4899999999999998,
+          1.53,
+          0.48
+        ],
+        "size": [
+          1.5,
+          1.6500000000000001,
+          0.12
+        ],
+        "colour": [
+          0.61,
+          0.4,
+          0.24
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "table_leg_0.38_0.3",
+        "shape": "box",
+        "position": [
+          1.8900000000000001,
+          0.8999999999999999,
+          0.22499999999999998
+        ],
+        "size": [
+          0.10500000000000001,
+          0.10500000000000001,
+          0.44999999999999996
+        ],
+        "colour": [
+          0.24,
+          0.25,
+          0.28
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "table_leg_0.38_0.72",
+        "shape": "box",
+        "position": [
+          1.8900000000000001,
+          2.16,
+          0.22499999999999998
+        ],
+        "size": [
+          0.10500000000000001,
+          0.10500000000000001,
+          0.44999999999999996
+        ],
+        "colour": [
+          0.24,
+          0.25,
+          0.28
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "table_leg_0.78_0.3",
+        "shape": "box",
+        "position": [
+          3.09,
+          0.8999999999999999,
+          0.22499999999999998
+        ],
+        "size": [
+          0.10500000000000001,
+          0.10500000000000001,
+          0.44999999999999996
+        ],
+        "colour": [
+          0.24,
+          0.25,
+          0.28
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "table_leg_0.78_0.72",
+        "shape": "box",
+        "position": [
+          3.09,
+          2.16,
+          0.22499999999999998
+        ],
+        "size": [
+          0.10500000000000001,
+          0.10500000000000001,
+          0.44999999999999996
+        ],
+        "colour": [
+          0.24,
+          0.25,
+          0.28
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "reachable_object_0",
+        "shape": "sphere",
+        "position": [
+          2.04,
+          1.5,
+          0.624
+        ],
+        "size": [
+          0.165,
+          0.165,
+          0.165
+        ],
+        "colour": [
+          0.85,
+          0.16,
+          0.12
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "reachable_object_1",
+        "shape": "sphere",
+        "position": [
+          2.46,
+          1.5,
+          0.624
+        ],
+        "size": [
+          0.165,
+          0.165,
+          0.165
+        ],
+        "colour": [
+          0.16,
+          0.44,
+          0.8
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "reachable_object_2",
+        "shape": "sphere",
+        "position": [
+          2.88,
+          1.5,
+          0.624
+        ],
+        "size": [
+          0.165,
+          0.165,
+          0.165
+        ],
+        "colour": [
+          0.85,
+          0.68,
+          0.12
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "low_step_0",
+        "shape": "box",
+        "position": [
+          -2.64,
+          1.56,
+          0.05399999999999999
+        ],
+        "size": [
+          0.44999999999999996,
+          1.2000000000000002,
+          0.10799999999999998
+        ],
+        "colour": [
+          0.37,
+          0.45,
+          0.53
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "low_step_1",
+        "shape": "box",
+        "position": [
+          -2.19,
+          1.56,
+          0.10799999999999998
+        ],
+        "size": [
+          0.44999999999999996,
+          1.2000000000000002,
+          0.21599999999999997
+        ],
+        "colour": [
+          0.37,
+          0.45,
+          0.53
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "low_step_2",
+        "shape": "box",
+        "position": [
+          -1.7400000000000002,
+          1.56,
+          0.16199999999999998
+        ],
+        "size": [
+          0.44999999999999996,
+          1.2000000000000002,
+          0.32399999999999995
+        ],
+        "colour": [
+          0.37,
+          0.45,
+          0.53
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "door_post_-0.38",
+        "shape": "box",
+        "position": [
+          -1.8900000000000001,
+          2.58,
+          0.8999999999999999
+        ],
+        "size": [
+          0.15000000000000002,
+          0.21000000000000002,
+          1.7999999999999998
+        ],
+        "colour": [
+          0.27,
+          0.35,
+          0.43
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "door_post_0.38",
+        "shape": "box",
+        "position": [
+          1.8900000000000001,
+          2.58,
+          0.8999999999999999
+        ],
+        "size": [
+          0.15000000000000002,
+          0.21000000000000002,
+          1.7999999999999998
+        ],
+        "colour": [
+          0.27,
+          0.35,
+          0.43
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "door_lintel",
+        "shape": "box",
+        "position": [
+          0.75,
+          2.58,
+          1.8599999999999999
+        ],
+        "size": [
+          2.43,
+          0.21000000000000002,
+          0.18
+        ],
+        "colour": [
+          0.27,
+          0.35,
+          0.43
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "target_ball",
+        "shape": "sphere",
+        "position": [
+          2.31,
+          -1.29,
+          0.22499999999999998
+        ],
+        "size": [
+          0.44999999999999996,
+          0.44999999999999996,
+          0.44999999999999996
+        ],
+        "colour": [
+          0.85,
+          0.24,
+          0.16
+        ],
+        "yaw": 0,
+        "collision": true,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_0",
+        "shape": "box",
+        "position": [
+          -2.7,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_1",
+        "shape": "box",
+        "position": [
+          -2.34,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_2",
+        "shape": "box",
+        "position": [
+          -1.98,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_3",
+        "shape": "box",
+        "position": [
+          -1.62,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_4",
+        "shape": "box",
+        "position": [
+          -1.2600000000000002,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_5",
+        "shape": "box",
+        "position": [
+          -0.9000000000000001,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_6",
+        "shape": "box",
+        "position": [
+          -0.5400000000000001,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_7",
+        "shape": "box",
+        "position": [
+          -0.18000000000000016,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_8",
+        "shape": "box",
+        "position": [
+          0.17999999999999983,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_9",
+        "shape": "box",
+        "position": [
+          0.5400000000000001,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_10",
+        "shape": "box",
+        "position": [
+          0.8999999999999998,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_11",
+        "shape": "box",
+        "position": [
+          1.2599999999999993,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_12",
+        "shape": "box",
+        "position": [
+          1.6199999999999997,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_13",
+        "shape": "box",
+        "position": [
+          1.98,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_14",
+        "shape": "box",
+        "position": [
+          2.34,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.075,
+          0.1,
+          0.13
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "optic_flow_panel_15",
+        "shape": "box",
+        "position": [
+          2.6999999999999993,
+          2.937,
+          1.3200000000000003
+        ],
+        "size": [
+          0.18,
+          0.036000000000000004,
+          1.56
+        ],
+        "colour": [
+          0.87,
+          0.86,
+          0.7
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "organic",
+        "cue": "",
+        "radius": 0.0,
+        "strength": 0,
+        "anchor": "root",
+        "internal": false
+      },
+      {
+        "id": "light_beacon",
+        "shape": "sphere",
+        "position": [
+          2.19,
+          2.19,
+          2.64
+        ],
+        "size": [
+          0.22499999999999998,
+          0.22499999999999998,
+          0.22499999999999998
+        ],
+        "colour": [
+          0.99,
+          0.86,
+          0.52
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "emissive",
+        "cue": "light",
+        "radius": 5.4,
+        "strength": 1,
+        "anchor": "root",
+        "internal": false
+      }
+    ],
+    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
+  },
+  "scene_sources_sha256": "069c61ec98a416e5f5e95f67d33376ebbee22acab25e807a3a437a7c7f6da924",
+  "anatomy_sources_sha256": "99d64c74a569f856bab8839e8df2ae3c45eb1bf18bbc79e677fcf0301356111d",
+  "neural_sources_sha256": "ef1ae7875a7b4426ed37b8b815868929cb105df00974f3c82319f42f3813bd75",
+  "bodies": [
+    {
+      "name": "chassis",
+      "parent": 0,
+      "position": [
+        0.0,
+        0.0,
+        0.055920000000000004
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "world_position": [
+        0.0,
+        0.0,
+        0.055920000000000004
+      ],
+      "world_quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mass_kg": 31.279999999999998,
+      "com_m": [
+        -0.022891304347826085,
+        0.0,
+        0.17745809782608693
+      ],
+      "inertia_orientation_wxyz": [
+        0.7044938426751148,
+        -0.060732410069510794,
+        -0.060732410069510794,
+        0.7044938426751148
+      ],
+      "diagonal_inertia_kgm2": [
+        2.3515497060951027,
+        2.205308398422521,
+        0.5999400233205817
+      ]
+    },
+    {
+      "name": "wheel_rear_right_link",
+      "parent": 1,
+      "position": [
+        -0.15444000000000002,
+        -0.16512,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "world_position": [
+        -0.15444000000000002,
+        -0.16512,
+        0.055920000000000004
+      ],
+      "world_quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mass_kg": 0.68,
+      "com_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "inertia_orientation_wxyz": [
+        0.7071067811865476,
+        0.7071067811865476,
+        0.0,
+        0.0
+      ],
+      "diagonal_inertia_kgm2": [
+        0.0004561767235584001,
+        0.0004561767235584001,
+        0.0008472821760000003
+      ]
+    },
+    {
+      "name": "wheel_rear_left_link",
+      "parent": 1,
+      "position": [
+        -0.15444000000000002,
+        0.16512,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "world_position": [
+        -0.15444000000000002,
+        0.16512,
+        0.055920000000000004
+      ],
+      "world_quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mass_kg": 0.68,
+      "com_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "inertia_orientation_wxyz": [
+        0.7071067811865476,
+        0.7071067811865476,
+        0.0,
+        0.0
+      ],
+      "diagonal_inertia_kgm2": [
+        0.0004561767235584001,
+        0.0004561767235584001,
+        0.0008472821760000003
+      ]
+    },
+    {
+      "name": "wheel_front_right_link",
+      "parent": 1,
+      "position": [
+        0.15444000000000002,
+        -0.16512,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "world_position": [
+        0.15444000000000002,
+        -0.16512,
+        0.055920000000000004
+      ],
+      "world_quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mass_kg": 0.68,
+      "com_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "inertia_orientation_wxyz": [
+        0.7071067811865476,
+        0.7071067811865476,
+        0.0,
+        0.0
+      ],
+      "diagonal_inertia_kgm2": [
+        0.0004561767235584001,
+        0.0004561767235584001,
+        0.0008472821760000003
+      ]
+    },
+    {
+      "name": "wheel_front_left_link",
+      "parent": 1,
+      "position": [
+        0.15444000000000002,
+        0.16512,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "world_position": [
+        0.15444000000000002,
+        0.16512,
+        0.055920000000000004
+      ],
+      "world_quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mass_kg": 0.68,
+      "com_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "inertia_orientation_wxyz": [
+        0.7071067811865476,
+        0.7071067811865476,
+        0.0,
+        0.0
+      ],
+      "diagonal_inertia_kgm2": [
+        0.0004561767235584001,
+        0.0004561767235584001,
+        0.0008472821760000003
+      ]
+    },
+    {
+      "name": "payload",
+      "parent": 0,
+      "position": [
+        0.0,
+        0.0,
+        0.36767
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "world_position": [
+        0.0,
+        0.0,
+        0.36767
+      ],
+      "world_quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mass_kg": 0.5,
+      "com_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "inertia_orientation_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "diagonal_inertia_kgm2": [
+        0.0002541666666666667,
+        0.0002541666666666667,
+        0.0003
+      ]
+    }
+  ],
+  "joints": [
+    {
+      "name": "root",
+      "body": 1,
+      "type": 0,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "range": [
+        0.0,
+        0.0
+      ],
+      "limited": false
+    },
+    {
+      "name": "wheel_rear_right",
+      "body": 2,
+      "type": 3,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "range": [
+        0.0,
+        0.0
+      ],
+      "limited": false
+    },
+    {
+      "name": "wheel_rear_left",
+      "body": 3,
+      "type": 3,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "range": [
+        0.0,
+        0.0
+      ],
+      "limited": false
+    },
+    {
+      "name": "wheel_front_right",
+      "body": 4,
+      "type": 3,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "range": [
+        0.0,
+        0.0
+      ],
+      "limited": false
+    },
+    {
+      "name": "wheel_front_left",
+      "body": 5,
+      "type": 3,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "range": [
+        0.0,
+        0.0
+      ],
+      "limited": false
+    },
+    {
+      "name": "payload_free",
+      "body": 6,
+      "type": 0,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "range": [
+        0.0,
+        0.0
+      ],
+      "limited": false
+    }
+  ],
+  "geoms": [
+    {
+      "name": "ground",
+      "body": 0,
+      "type": 0,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        10.0,
+        10.0,
+        0.1
+      ],
+      "rgba": [
+        0.44,
+        0.46,
+        0.49,
+        1
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_rim_0",
+      "body": 0,
+      "type": 6,
+      "position": [
+        0.75,
+        3.0,
+        1.2000000000000002
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        3.0,
+        0.037500000000000006,
+        1.2000000000000002
+      ],
+      "rgba": [
+        0.41999998688697815,
+        0.5,
+        0.4699999988079071,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_rim_1",
+      "body": 0,
+      "type": 6,
+      "position": [
+        0.75,
+        -3.0,
+        0.10500000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        3.0,
+        0.037500000000000006,
+        0.10500000000000001
+      ],
+      "rgba": [
+        0.41999998688697815,
+        0.5,
+        0.4699999988079071,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_rim_2",
+      "body": 0,
+      "type": 6,
+      "position": [
+        3.75,
+        0.0,
+        1.2000000000000002
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.037500000000000006,
+        3.0,
+        1.2000000000000002
+      ],
+      "rgba": [
+        0.41999998688697815,
+        0.5,
+        0.4699999988079071,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_rim_3",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -3.75,
+        0.0,
+        1.2000000000000002
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.037500000000000006,
+        3.0,
+        1.2000000000000002
+      ],
+      "rgba": [
+        0.41999998688697815,
+        0.5,
+        0.4699999988079071,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_00",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -2.7600000000000002,
+        -2.7600000000000002,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.3871999979019165,
+        0.4047999978065491,
+        0.4311999976634979,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_01",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -0.7378217821782178,
+        0.5091262135922331,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4047999978065491,
+        0.42320001125335693,
+        0.45080000162124634,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_02",
+      "body": 0,
+      "type": 4,
+      "position": [
+        1.2843564356435646,
+        -1.7417475728155343,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.42239999771118164,
+        0.4415999948978424,
+        0.47040000557899475,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_03",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -2.2134653465346537,
+        1.5273786407766994,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4399999976158142,
+        0.46000000834465027,
+        0.49000000953674316,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_04",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -0.19128712871287112,
+        -0.7234951456310681,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4575999975204468,
+        0.47839999198913574,
+        0.5095999836921692,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_05",
+      "body": 0,
+      "type": 4,
+      "position": [
+        1.8308910891089107,
+        2.5456310679611653,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.3871999979019165,
+        0.4047999978065491,
+        0.4311999976634979,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_06",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -1.666930693069307,
+        0.29475728155339775,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4047999978065491,
+        0.42320001125335693,
+        0.45080000162124634,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_07",
+      "body": 0,
+      "type": 4,
+      "position": [
+        0.35524752475247523,
+        -1.956116504854369,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.42239999771118164,
+        0.4415999948978424,
+        0.47040000557899475,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_08",
+      "body": 0,
+      "type": 4,
+      "position": [
+        2.3774257425742578,
+        1.313009708737864,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4399999976158142,
+        0.46000000834465027,
+        0.49000000953674316,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_09",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -1.1203960396039605,
+        -0.9378640776699028,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4575999975204468,
+        0.47839999198913574,
+        0.5095999836921692,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_10",
+      "body": 0,
+      "type": 4,
+      "position": [
+        0.9017821782178223,
+        2.33126213592233,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.3871999979019165,
+        0.4047999978065491,
+        0.4311999976634979,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_11",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -2.596039603960396,
+        0.08038834951456308,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4047999978065491,
+        0.42320001125335693,
+        0.45080000162124634,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_12",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -0.5738613861386137,
+        -2.170485436893204,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.42239999771118164,
+        0.4415999948978424,
+        0.47040000557899475,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_13",
+      "body": 0,
+      "type": 4,
+      "position": [
+        1.4483168316831687,
+        1.0986407766990292,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4399999976158142,
+        0.46000000834465027,
+        0.49000000953674316,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_14",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -2.0495049504950495,
+        -1.152233009708738,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4575999975204468,
+        0.47839999198913574,
+        0.5095999836921692,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_15",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -0.02732673267326735,
+        2.1168932038834956,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.3871999979019165,
+        0.4047999978065491,
+        0.4311999976634979,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_16",
+      "body": 0,
+      "type": 4,
+      "position": [
+        1.9948514851485148,
+        -0.13398058252427192,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4047999978065491,
+        0.42320001125335693,
+        0.45080000162124634,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_17",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -1.502970297029703,
+        -2.384854368932039,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.42239999771118164,
+        0.4415999948978424,
+        0.47040000557899475,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_18",
+      "body": 0,
+      "type": 4,
+      "position": [
+        0.5192079207920793,
+        0.8842718446601946,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4399999976158142,
+        0.46000000834465027,
+        0.49000000953674316,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_19",
+      "body": 0,
+      "type": 4,
+      "position": [
+        2.5413861386138614,
+        -1.366601941747573,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4575999975204468,
+        0.47839999198913574,
+        0.5095999836921692,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_20",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -0.9564356435643563,
+        1.9025242718446602,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.3871999979019165,
+        0.4047999978065491,
+        0.4311999976634979,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_21",
+      "body": 0,
+      "type": 4,
+      "position": [
+        1.0657425742574258,
+        -0.3483495145631069,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4047999978065491,
+        0.42320001125335693,
+        0.45080000162124634,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_22",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -2.4320792079207925,
+        -2.599223300970874,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.42239999771118164,
+        0.4415999948978424,
+        0.47040000557899475,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_23",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -0.40990099009900993,
+        0.6699029126213593,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4399999976158142,
+        0.46000000834465027,
+        0.49000000953674316,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_24",
+      "body": 0,
+      "type": 4,
+      "position": [
+        1.6122772277227728,
+        -1.580970873786408,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4575999975204468,
+        0.47839999198913574,
+        0.5095999836921692,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_25",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -1.8855445544554454,
+        1.6881553398058253,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.3871999979019165,
+        0.4047999978065491,
+        0.4311999976634979,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_26",
+      "body": 0,
+      "type": 4,
+      "position": [
+        0.13663366336633676,
+        -0.5627184466019419,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4047999978065491,
+        0.42320001125335693,
+        0.45080000162124634,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_27",
+      "body": 0,
+      "type": 4,
+      "position": [
+        2.158811881188119,
+        2.7064077669902917,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.42239999771118164,
+        0.4415999948978424,
+        0.47040000557899475,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_28",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -1.339009900990099,
+        0.4555339805825239,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4399999976158142,
+        0.46000000834465027,
+        0.49000000953674316,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_29",
+      "body": 0,
+      "type": 4,
+      "position": [
+        0.6831683168316834,
+        -1.7953398058252428,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4575999975204468,
+        0.47839999198913574,
+        0.5095999836921692,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_30",
+      "body": 0,
+      "type": 4,
+      "position": [
+        2.7053465346534655,
+        1.47378640776699,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.3871999979019165,
+        0.4047999978065491,
+        0.4311999976634979,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_31",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -0.7924752475247525,
+        -0.7770873786407766,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4047999978065491,
+        0.42320001125335693,
+        0.45080000162124634,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_32",
+      "body": 0,
+      "type": 4,
+      "position": [
+        1.22970297029703,
+        2.4920388349514564,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.42239999771118164,
+        0.4415999948978424,
+        0.47040000557899475,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_33",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -2.2681188118811884,
+        0.24116504854368925,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4399999976158142,
+        0.46000000834465027,
+        0.49000000953674316,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_34",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -0.24594059405940583,
+        -2.0097087378640777,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4575999975204468,
+        0.47839999198913574,
+        0.5095999836921692,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_35",
+      "body": 0,
+      "type": 4,
+      "position": [
+        1.776237623762376,
+        1.2594174757281555,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.3871999979019165,
+        0.4047999978065491,
+        0.4311999976634979,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_36",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -1.7215841584158418,
+        -0.9914563106796116,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4047999978065491,
+        0.42320001125335693,
+        0.45080000162124634,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_37",
+      "body": 0,
+      "type": 4,
+      "position": [
+        0.3005940594059412,
+        2.2776699029126215,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.42239999771118164,
+        0.4415999948978424,
+        0.47040000557899475,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_38",
+      "body": 0,
+      "type": 4,
+      "position": [
+        2.322772277227723,
+        0.02679611650485425,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4399999976158142,
+        0.46000000834465027,
+        0.49000000953674316,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_39",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -1.1750495049504952,
+        -2.224077669902913,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4575999975204468,
+        0.47839999198913574,
+        0.5095999836921692,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_40",
+      "body": 0,
+      "type": 4,
+      "position": [
+        0.8471287128712875,
+        1.0450485436893207,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.3871999979019165,
+        0.4047999978065491,
+        0.4311999976634979,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_41",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -2.650693069306931,
+        -1.2058252427184466,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4047999978065491,
+        0.42320001125335693,
+        0.45080000162124634,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_42",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -0.6285148514851484,
+        2.063300970873786,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.42239999771118164,
+        0.4415999948978424,
+        0.47040000557899475,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_43",
+      "body": 0,
+      "type": 4,
+      "position": [
+        1.393663366336634,
+        -0.18757281553398042,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4399999976158142,
+        0.46000000834465027,
+        0.49000000953674316,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_44",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -2.1041584158415843,
+        -2.438446601941748,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4575999975204468,
+        0.47839999198913574,
+        0.5095999836921692,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_45",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -0.08198019801980205,
+        0.8306796116504854,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.3871999979019165,
+        0.4047999978065491,
+        0.4311999976634979,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_46",
+      "body": 0,
+      "type": 4,
+      "position": [
+        1.9401980198019801,
+        -1.4201941747572815,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4047999978065491,
+        0.42320001125335693,
+        0.45080000162124634,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_47",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -1.5576237623762377,
+        1.8489320388349517,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.42239999771118164,
+        0.4415999948978424,
+        0.47040000557899475,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_48",
+      "body": 0,
+      "type": 4,
+      "position": [
+        0.46455445544554463,
+        -0.40194174757281576,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4399999976158142,
+        0.46000000834465027,
+        0.49000000953674316,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_49",
+      "body": 0,
+      "type": 4,
+      "position": [
+        2.4867326732673267,
+        -2.652815533980583,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4575999975204468,
+        0.47839999198913574,
+        0.5095999836921692,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_50",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -1.011089108910891,
+        0.6163106796116501,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.3871999979019165,
+        0.4047999978065491,
+        0.4311999976634979,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_51",
+      "body": 0,
+      "type": 4,
+      "position": [
+        1.0110891089108915,
+        -1.6345631067961166,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4047999978065491,
+        0.42320001125335693,
+        0.45080000162124634,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_52",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -2.486732673267327,
+        1.6345631067961164,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.42239999771118164,
+        0.4415999948978424,
+        0.47040000557899475,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_53",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -0.46455445544554463,
+        -0.6163106796116504,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4399999976158142,
+        0.46000000834465027,
+        0.49000000953674316,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_54",
+      "body": 0,
+      "type": 4,
+      "position": [
+        1.5576237623762381,
+        2.6528155339805823,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.4575999975204468,
+        0.47839999198913574,
+        0.5095999836921692,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_grain_55",
+      "body": 0,
+      "type": 4,
+      "position": [
+        -1.9401980198019801,
+        0.4019417475728154,
+        0.009000000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0225,
+        0.0165,
+        0.009000000000000001
+      ],
+      "rgba": [
+        0.3871999979019165,
+        0.4047999978065491,
+        0.4311999976634979,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_table_top",
+      "body": 0,
+      "type": 6,
+      "position": [
+        2.4899999999999998,
+        1.53,
+        0.48
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.75,
+        0.8250000000000001,
+        0.06
+      ],
+      "rgba": [
+        0.6100000143051147,
+        0.4000000059604645,
+        0.23999999463558197,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_table_leg_0.38_0.3",
+      "body": 0,
+      "type": 6,
+      "position": [
+        1.8900000000000001,
+        0.8999999999999999,
+        0.22499999999999998
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.052500000000000005,
+        0.052500000000000005,
+        0.22499999999999998
+      ],
+      "rgba": [
+        0.23999999463558197,
+        0.25,
+        0.2800000011920929,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_table_leg_0.38_0.72",
+      "body": 0,
+      "type": 6,
+      "position": [
+        1.8900000000000001,
+        2.16,
+        0.22499999999999998
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.052500000000000005,
+        0.052500000000000005,
+        0.22499999999999998
+      ],
+      "rgba": [
+        0.23999999463558197,
+        0.25,
+        0.2800000011920929,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_table_leg_0.78_0.3",
+      "body": 0,
+      "type": 6,
+      "position": [
+        3.09,
+        0.8999999999999999,
+        0.22499999999999998
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.052500000000000005,
+        0.052500000000000005,
+        0.22499999999999998
+      ],
+      "rgba": [
+        0.23999999463558197,
+        0.25,
+        0.2800000011920929,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_table_leg_0.78_0.72",
+      "body": 0,
+      "type": 6,
+      "position": [
+        3.09,
+        2.16,
+        0.22499999999999998
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.052500000000000005,
+        0.052500000000000005,
+        0.22499999999999998
+      ],
+      "rgba": [
+        0.23999999463558197,
+        0.25,
+        0.2800000011920929,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_reachable_object_0",
+      "body": 0,
+      "type": 4,
+      "position": [
+        2.04,
+        1.5,
+        0.624
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0825,
+        0.0825,
+        0.0825
+      ],
+      "rgba": [
+        0.8500000238418579,
+        0.1599999964237213,
+        0.11999999731779099,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_reachable_object_1",
+      "body": 0,
+      "type": 4,
+      "position": [
+        2.46,
+        1.5,
+        0.624
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0825,
+        0.0825,
+        0.0825
+      ],
+      "rgba": [
+        0.1599999964237213,
+        0.4399999976158142,
+        0.800000011920929,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_reachable_object_2",
+      "body": 0,
+      "type": 4,
+      "position": [
+        2.88,
+        1.5,
+        0.624
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0825,
+        0.0825,
+        0.0825
+      ],
+      "rgba": [
+        0.8500000238418579,
+        0.6800000071525574,
+        0.11999999731779099,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_low_step_0",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -2.64,
+        1.56,
+        0.05399999999999999
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.22499999999999998,
+        0.6000000000000001,
+        0.05399999999999999
+      ],
+      "rgba": [
+        0.3700000047683716,
+        0.44999998807907104,
+        0.5299999713897705,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_low_step_1",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -2.19,
+        1.56,
+        0.10799999999999998
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.22499999999999998,
+        0.6000000000000001,
+        0.10799999999999998
+      ],
+      "rgba": [
+        0.3700000047683716,
+        0.44999998807907104,
+        0.5299999713897705,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_low_step_2",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -1.7400000000000002,
+        1.56,
+        0.16199999999999998
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.22499999999999998,
+        0.6000000000000001,
+        0.16199999999999998
+      ],
+      "rgba": [
+        0.3700000047683716,
+        0.44999998807907104,
+        0.5299999713897705,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_door_post_-0.38",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -1.8900000000000001,
+        2.58,
+        0.8999999999999999
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.07500000000000001,
+        0.10500000000000001,
+        0.8999999999999999
+      ],
+      "rgba": [
+        0.27000001072883606,
+        0.3499999940395355,
+        0.4300000071525574,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_door_post_0.38",
+      "body": 0,
+      "type": 6,
+      "position": [
+        1.8900000000000001,
+        2.58,
+        0.8999999999999999
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.07500000000000001,
+        0.10500000000000001,
+        0.8999999999999999
+      ],
+      "rgba": [
+        0.27000001072883606,
+        0.3499999940395355,
+        0.4300000071525574,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_door_lintel",
+      "body": 0,
+      "type": 6,
+      "position": [
+        0.75,
+        2.58,
+        1.8599999999999999
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        1.215,
+        0.10500000000000001,
+        0.09
+      ],
+      "rgba": [
+        0.27000001072883606,
+        0.3499999940395355,
+        0.4300000071525574,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_target_ball",
+      "body": 0,
+      "type": 4,
+      "position": [
+        2.31,
+        -1.29,
+        0.22499999999999998
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.22499999999999998,
+        0.22499999999999998,
+        0.22499999999999998
+      ],
+      "rgba": [
+        0.8500000238418579,
+        0.23999999463558197,
+        0.1599999964237213,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_0",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -2.7,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.07500000298023224,
+        0.10000000149011612,
+        0.12999999523162842,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_1",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -2.34,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.8700000047683716,
+        0.8600000143051147,
+        0.699999988079071,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_2",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -1.98,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.07500000298023224,
+        0.10000000149011612,
+        0.12999999523162842,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_3",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -1.62,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.8700000047683716,
+        0.8600000143051147,
+        0.699999988079071,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_4",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -1.2600000000000002,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.07500000298023224,
+        0.10000000149011612,
+        0.12999999523162842,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_5",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -0.9000000000000001,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.8700000047683716,
+        0.8600000143051147,
+        0.699999988079071,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_6",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -0.5400000000000001,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.07500000298023224,
+        0.10000000149011612,
+        0.12999999523162842,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_7",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -0.18000000000000016,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.8700000047683716,
+        0.8600000143051147,
+        0.699999988079071,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_8",
+      "body": 0,
+      "type": 6,
+      "position": [
+        0.17999999999999983,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.07500000298023224,
+        0.10000000149011612,
+        0.12999999523162842,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_9",
+      "body": 0,
+      "type": 6,
+      "position": [
+        0.5400000000000001,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.8700000047683716,
+        0.8600000143051147,
+        0.699999988079071,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_10",
+      "body": 0,
+      "type": 6,
+      "position": [
+        0.8999999999999998,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.07500000298023224,
+        0.10000000149011612,
+        0.12999999523162842,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_11",
+      "body": 0,
+      "type": 6,
+      "position": [
+        1.2599999999999993,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.8700000047683716,
+        0.8600000143051147,
+        0.699999988079071,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_12",
+      "body": 0,
+      "type": 6,
+      "position": [
+        1.6199999999999997,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.07500000298023224,
+        0.10000000149011612,
+        0.12999999523162842,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_13",
+      "body": 0,
+      "type": 6,
+      "position": [
+        1.98,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.8700000047683716,
+        0.8600000143051147,
+        0.699999988079071,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_14",
+      "body": 0,
+      "type": 6,
+      "position": [
+        2.34,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.07500000298023224,
+        0.10000000149011612,
+        0.12999999523162842,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_optic_flow_panel_15",
+      "body": 0,
+      "type": 6,
+      "position": [
+        2.6999999999999993,
+        2.937,
+        1.3200000000000003
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09,
+        0.018000000000000002,
+        0.78
+      ],
+      "rgba": [
+        0.8700000047683716,
+        0.8600000143051147,
+        0.699999988079071,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_light_beacon",
+      "body": 0,
+      "type": 4,
+      "position": [
+        2.19,
+        2.19,
+        2.64
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.11249999999999999,
+        0.11249999999999999,
+        0.11249999999999999
+      ],
+      "rgba": [
+        0.9900000095367432,
+        0.8600000143051147,
+        0.5199999809265137,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "base_collision",
+      "body": 1,
+      "type": 6,
+      "position": [
+        0.0,
+        0.0,
+        0.06666
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.19656,
+        0.16128,
+        0.083325
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.3499999940395355,
+        0.5,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "mast",
+      "body": 1,
+      "type": 6,
+      "position": [
+        -0.1404,
+        0.0,
+        0.5555
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.032760000000000004,
+        0.026880000000000005,
+        0.4444
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.3499999940395355,
+        0.5,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "tray_0",
+      "body": 1,
+      "type": 6,
+      "position": [
+        0.0,
+        0.0,
+        0.27775
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.18252000000000002,
+        0.15360000000000001,
+        0.008
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.3499999940395355,
+        0.5,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "tray_1",
+      "body": 1,
+      "type": 6,
+      "position": [
+        0.0,
+        0.0,
+        0.638825
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.18252000000000002,
+        0.15360000000000001,
+        0.008
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.3499999940395355,
+        0.5,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "tray_2",
+      "body": 1,
+      "type": 6,
+      "position": [
+        0.0,
+        0.0,
+        0.9999
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.18252000000000002,
+        0.15360000000000001,
+        0.008
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.3499999940395355,
+        0.5,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "wheel_rear_right_collision",
+      "body": 2,
+      "type": 5,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.7071067811865476,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.049920000000000006,
+        0.011980800000000002,
+        0.0
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.3499999940395355,
+        0.5,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "wheel_rear_left_collision",
+      "body": 3,
+      "type": 5,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.7071067811865476,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.049920000000000006,
+        0.011980800000000002,
+        0.0
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.3499999940395355,
+        0.5,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "wheel_front_right_collision",
+      "body": 4,
+      "type": 5,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.7071067811865476,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.049920000000000006,
+        0.011980800000000002,
+        0.0
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.3499999940395355,
+        0.5,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "wheel_front_left_collision",
+      "body": 5,
+      "type": 5,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.7071067811865476,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.049920000000000006,
+        0.011980800000000002,
+        0.0
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.3499999940395355,
+        0.5,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "payload_contact",
+      "body": 6,
+      "type": 6,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.03,
+        0.03,
+        0.025
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.3499999940395355,
+        0.5,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    }
+  ],
+  "constraints": [],
+  "digest": "d0bb58b5e4737d95456a49b6341c6117898ce0c33a9276a9efca3c013abeadc1"
+}

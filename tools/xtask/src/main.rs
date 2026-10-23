@@ -390,6 +390,67 @@ fn qa_suite(root: &Path, suite: &str) -> bool {
                     &["scripts/qa/run_minecraft.py", "--lane", lane],
                 )
         }
+        "lec-crow"
+        | "lec-crow-mujoco"
+        | "lec-crow-mujoco-managed"
+        | "lec-crow-mujoco-viewer"
+        | "lec-crow-mujoco-population"
+        | "lec-crow-habitats"
+        | "lec-crow-legacy-neural"
+        | "lec-crow-neural"
+        | "lec-crow-usd"
+        | "lec-crow-rust"
+        | "lec-crow-rust-service"
+        | "lec-crow-webots"
+        | "lec-crow-webots-neural"
+        | "lec-crow-rust-neural"
+        | "lec-crow-shared"
+        | "lec-crow-unreal"
+        | "lec-crow-unreal-neural"
+        | "lec-crow-unity"
+        | "lec-crow-launchers"
+        | "lec-crow-minecraft-service"
+        | "lec-crow-fleet"
+        | "lec-crow-unreal-passive"
+        | "lec-crow-unreal-render"
+        | "lec-crow-unreal-lifecycle"
+        | "lec-crow-capabilities"
+        | "lec-crow-npc" => {
+            let lane = match suite {
+                "lec-crow-npc" => "npc",
+                "lec-crow-fleet" => "fleet",
+                "lec-crow-unreal-passive" => "unreal-passive",
+                "lec-crow-unreal-render" => "unreal-render",
+                "lec-crow-unreal-lifecycle" => "unreal-lifecycle",
+                "lec-crow-capabilities" => "capabilities",
+                "lec-crow-launchers" => "launchers",
+                "lec-crow-minecraft-service" => "minecraft-service",
+                "lec-crow-shared" => "shared",
+                "lec-crow-unreal" => "unreal",
+                "lec-crow-unreal-neural" => "unreal-neural",
+                "lec-crow-unity" => "unity",
+                "lec-crow-mujoco" => "mujoco",
+                "lec-crow-mujoco-managed" => "mujoco-managed",
+                "lec-crow-mujoco-viewer" => "mujoco-viewer",
+                "lec-crow-mujoco-population" => "mujoco-population",
+                "lec-crow-habitats" => "habitats",
+                "lec-crow-legacy-neural" => "legacy-neural",
+                "lec-crow-neural" => "neural",
+                "lec-crow-usd" => "usd",
+                "lec-crow-rust" => "rust",
+                "lec-crow-rust-service" => "rust-service",
+                "lec-crow-webots" => "webots",
+                "lec-crow-webots-neural" => "webots-neural",
+                "lec-crow-rust-neural" => "rust-neural",
+                _ => "contract",
+            };
+            scenario_manifest_is_complete(root, "LEC-EXPANSION-001")
+                && run(
+                    root,
+                    "python3",
+                    &["scripts/qa/run_embodiments.py", "--lane", lane],
+                )
+        }
         "simulator-content" | "simulator-content-browser" | "simulator-content-webots" => {
             let lane = match suite {
                 "simulator-content-browser" => "browser",

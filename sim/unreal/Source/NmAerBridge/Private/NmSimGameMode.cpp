@@ -1,6 +1,7 @@
 // Copyright NeuralMimicry. All Rights Reserved.
 
 #include "NmSimGameMode.h"
+#include "NmEmbodimentWorld.h"
 #include "NmSharedContent.h"
 
 #include "NmRobotBase.h"
@@ -309,6 +310,20 @@ void ANmSimGameMode::BeginPlay()
         return;
     }
 
+    const FString NativeScene = FPlatformMisc::GetEnvironmentVariable(TEXT("NM_EMBODIMENT_SCENE"));
+    if (!NativeScene.IsEmpty())
+    {
+        auto* Authority = World->SpawnActor<ANmEmbodimentWorld>();
+        if (!Authority || !Authority->Configure(NativeScene)) { FPlatformMisc::RequestExitWithStatus(false, 1); return; }
+        FVector Origin, Extent;
+        Authority->GetActorBounds(false, Origin, Extent);
+        SceneCenter = Origin;
+        SceneFocus = FMath::Max(Extent.Size(), 80.);
+        MinCameraDistance = 120.;
+        GetWorldTimerManager().SetTimer(FrameTimerHandle, this, &ANmSimGameMode::FrameCamera, 0.002f, true);
+        return;
+    }
+
     FString Spec = FPlatformMisc::GetEnvironmentVariable(TEXT("NM_UE_ROBOTS"));
     if (Spec.IsEmpty())
     {
@@ -489,8 +504,10 @@ void ANmSimGameMode::FrameCamera()
     }
 
     const float Dist = FMath::Max(SceneFocus * 1.8f, MinCameraDistance);
-    const FVector CamLoc =
-        SceneCenter + FVector(-Dist * 0.75f, 0.f, Dist * 0.6f);
+    const bool bNativeScene = !FPlatformMisc::GetEnvironmentVariable(TEXT("NM_EMBODIMENT_SCENE")).IsEmpty();
+    const FVector CamLoc = SceneCenter + (bNativeScene
+        ? FVector(-Dist * 0.75f, 0.f, Dist * 1.3f)
+        : FVector(-Dist * 0.75f, 0.f, Dist * 0.6f));
     const FRotator LookAt = (SceneCenter - CamLoc).Rotation();
 
     P->SetActorLocationAndRotation(CamLoc, LookAt);
