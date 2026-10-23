@@ -1,0 +1,53 @@
+{
+  "researched_on": "2026-10-23",
+  "representative_actual_queries": [
+    "KEENON robot URDF CAD T8 T9 T10 W3 S100 C30 C40",
+    "UGOT UBTECH URDF CAD SDK GitHub",
+    "\"UGOT\" \"URDF\"",
+    "\"Keenon\" \"URDF\"",
+    "\"Dinerbot T8\" \"3d model\"",
+    "\"Dinerbot T9\" \"urdf\" OR \"cad\" OR \"3d model\"",
+    "\"Dinerbot T10\" \"urdf\" OR \"cad\" OR \"3d model\"",
+    "\"Butlerbot W3\" \"urdf\" OR \"cad\" OR \"3d model\"",
+    "\"Kleenbot C30\" \"CAD\" OR \"3D model\" OR \"URDF\"",
+    "\"Kleenbot C40\" \"CAD\" OR \"3D model\" OR \"URDF\"",
+    "\"Keenon S100\" \"CAD\" OR \"3D model\" OR \"URDF\"",
+    "\"UGOT\" \"STL\" OR \"STEP\" OR \"3D model\" robot",
+    "\"Botinkit Omni\" \"URDF\" OR \"STEP\" OR \"design files\"",
+    "\"Xbot S\" \"CAD\" OR \"URDF\" OR \"3D model\"",
+    "\"XBOT-IC60\" \"CAD\" OR \"URDF\" OR \"3d\"",
+    "\"COFE+\" \"CAD\" OR \"URDF\" OR \"STEP\" robot",
+    "Galbot G1 robot URDF github CAD simulation model",
+    "\"DINERBOT T11\" \"URDF\" OR \"CAD\" OR \"3D model\"",
+    "\"COFE+\" \"Smart Bar\" robot design",
+    "carrion crow Corvus corone wingspan weight BTO RSPB",
+    "crow bird articulated model mujoco github",
+    "crow 3d model downloadable CC BY sketchfab",
+    "\"crow\" \"MuJoCo\" github bird",
+    "\"bird\" \"flapping\" \"simulator\" github aerodynamics",
+    "site:mujoco.readthedocs.io latest Python passive viewer mj_step sensors control",
+    "site:docs.isaacsim.omniverse.nvidia.com latest urdf importer articulation physics headless requirements"
+  ],
+  "rejected_or_limited_leads": [
+    {
+      "source": "generic_keenon_GitHub_websites",
+      "reason": "Marketing websites and operations integrations are not robot mechanical descriptions."
+    },
+    {
+      "source": "unlicensed_KEENON_ROS_integration",
+      "reason": "A public integration repository had no identified licence and was not a complete matching mechanical model. Its archives and credentials were not imported."
+    },
+    {
+      "source": "BIRD_SIM",
+      "reason": "No licence identified; not crow-specific. Do not copy."
+    },
+    {
+      "source": "crow_BlendSwap_7340",
+      "reason": "CC0 visual asset, but sign-in required for bytes. An optional visual lead, not a biomechanical source."
+    },
+    {
+      "source": "XBOT_current_Lite_C3_I3",
+      "reason": "Current maker product names do not prove equivalence to LEC S Pro or IC60."
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "protocol": "legacy_AER1_not_AARNN_AER_1",
+  "fixtures": [
+    {
+      "name": "one_input_spike_at_1000us",
+      "events": [
+        [
+          1000,
+          4096,
+          1
+        ]
+      ],
+      "payload_hex": "41455231e80300000000000000802001",
+      "tcp_frame_hex": "1000000041455231e80300000000000000802001"
+    },
+    {
+      "name": "no_spikes_at_1000us",
+      "events": [],
+      "payload_hex": "41455231e803000000000000",
+      "tcp_frame_hex": "0c00000041455231e803000000000000"
+    }
+  ],
+  "notes": [
+    "Golden fixtures are protocol examples, not recorded neural output.",
+    "Zero-value event is not a negative motor command.",
+    "Never send an empty zero-length TCP frame for an idle simulator step."
+  ]
+}

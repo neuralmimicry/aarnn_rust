@@ -1,0 +1,149 @@
+{
+  "researched_on": "2026-10-23",
+  "sitemap": "https://www.lecrobotics.ai/sitemap.xml",
+  "sitemap_page_count": 26,
+  "pages": [
+    {
+      "url": "https://www.lecrobotics.ai",
+      "retrieval": "success",
+      "text_sha256": "a238f30b447ca3433aceafb10af27c5dfa9c66ef4c5044bb528d03882e7ebb54"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/contact-us",
+      "retrieval": "success",
+      "text_sha256": "25f4ebb220cbc5df9c529d0f6d05f4f6ae45800627a4fe4fe40a314eb9f0c0f0"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/about-us",
+      "retrieval": "success",
+      "text_sha256": "eb112e44f7efa556edc320b8e827d0f4e861ddc2306541e3cf8c5bbf1c5648ec"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/service",
+      "retrieval": "success",
+      "text_sha256": "1f383d628d9e3538d2961fb9d19166c707d8246ab2e7f68b35dccb0c485ee599"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/download-center",
+      "retrieval": "success",
+      "text_sha256": "98af1d97d6a13dc5344acba95bdf1945d06fdc8a3b7c52237646db52fa61e318"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/download-center-v2",
+      "retrieval": "success",
+      "text_sha256": "c56cb1fdd1c66faf6d98e5f2fa4499088cd1517e8b87923317d7d0e5b5c5c799"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/blogs",
+      "retrieval": "success",
+      "text_sha256": "fda31f6acda9f977ab31f28704d3b4d540245e2984c8adf3f1cc4ac5ab7e20e9"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/privacy-cookies",
+      "retrieval": "success",
+      "text_sha256": "4aab7fd8455e68e9f505a476632ec586647fdd176f4e5fdb013fdc3edf8cb3ae"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/terms",
+      "retrieval": "success",
+      "text_sha256": "99aa5c0b4052c37f1d9d87ecf93ea6bbb2f82632a92b1d094adce7ba6d9ceada"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/assets/scan",
+      "retrieval": "success",
+      "text_sha256": "374940ded08161e801d3651f11f280ef7e7dde83b3142ae63525b150651d1f56"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/rentals",
+      "retrieval": "success",
+      "text_sha256": "0639f8fff0fb82578a3d3d2b7e119ccd9342f64e6de7cc6673f32d0f9d11c7fc"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/products/botinkit-omni-cooking-robot",
+      "retrieval": "success",
+      "text_sha256": "703dfc70d5552b52e41da7ade608ac4c975909720205ebab703c041103d7cfa4"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/products/butlerbot-w3",
+      "retrieval": "success",
+      "text_sha256": "ac180fe0fedcda7c4d2eb9fe1f27915b754e79b14ca8b4830ca16a15fc5dcf79"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/products/cofe-plus-robot-cafe",
+      "retrieval": "success",
+      "text_sha256": "0b68152bda45f8235ea78bbaf3dcd3d9f7cb7dd807f2684b68a67dec96fbb1bb"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/products/courier-s100",
+      "retrieval": "success",
+      "text_sha256": "9256a4b0d77fcec206e16752a5d4309893fa1d86e8b619ccb22668e7b587dcbb"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/products/dinerbot-t10",
+      "retrieval": "success",
+      "text_sha256": "a6d1939d3c8adb80757f791d04faf44be495661ec34b037e59632c2dff6d0f12"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/products/dinerbot-t8",
+      "retrieval": "success",
+      "text_sha256": "2eba129666f54a3ebddd342336a13d05752cba9030f5a38f93d8d40e4166485f"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/products/dinerbot-t9",
+      "retrieval": "success",
+      "text_sha256": "2b3e48bf83baa21970c41316d4f17c2374e0fa1c4dd5a167afd7907395394942"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/products/kleenbot-c30",
+      "retrieval": "success",
+      "text_sha256": "47b890940cc6072b976ebcd7ed4f5d7dda6ff771765d6095841898fab768abc5"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/products/kleenbot-c40",
+      "retrieval": "success",
+      "text_sha256": "4102459a8265ce35476fab3d1a95494acc834cd0989ca640575a64be7f6fb375"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/products/ugot",
+      "retrieval": "success",
+      "text_sha256": "997c86237e50ed09febc094c287771e5ebabfaae6e2395319eacdc728ef4b82f"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/products/xbot-ic",
+      "retrieval": "success",
+      "text_sha256": "deb0316ab0957d5929ed2677f71bcb0e0637de7f2657fa547c7dbc8d28dcfbd5"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/products/xbot-s-pro",
+      "retrieval": "success",
+      "text_sha256": "b783e712e7ab1373a055d2eec5737f4620c24494f696cf0680f9f6a2028d02af"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/blog-posts/care-homes-dont-have-a-staffing-problem-they-have-a-task-allocation-problem",
+      "retrieval": "success",
+      "text_sha256": "406000ff63484b1826ee1da3875d5b2de4a13652530b8cf7ac073d9563f49dd0"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/blog-posts/lec-robotics-brings-autonomous-coffee-to-ucl",
+      "retrieval": "success",
+      "text_sha256": "ad6b0080c5eac82b93624648afdf4a6bd7900136c273b6d576fd59c467021d89"
+    },
+    {
+      "url": "https://www.lecrobotics.ai/blog-posts/the-ps20m-catering-bid-isnt-being-won-on-the-menu-its-being-won-on-the-coffee-station",
+      "retrieval": "success",
+      "text_sha256": "064fb60443359c136fcd53d83e9cec8626293d713de39d97a684fecafa89c495"
+    }
+  ],
+  "additional_link_checks": [
+    {
+      "url": "https://www.lecrobotics.ai/news",
+      "status": "404"
+    }
+  ],
+  "notes": [
+    "Crawled every URL in the public sitemap, including both download-centre pages, product pages, rental page, service/about pages and blog posts.",
+    "Brochure URLs extracted from the page HTML and the download centre. Internal analysis used their specifications; PDF bytes are not redistributed.",
+    "Searches combined exact model names with CAD, URDF, STEP, STL, MJCF, USD, simulation and 3D model, with official sites, GitHub repository search and author-hosted asset pages.",
+    "No authenticated vendor portal, payment flow or robot was accessed."
+  ]
+}

@@ -1,0 +1,3590 @@
+{
+  "schema_version": 1,
+  "rows": [
+    {
+      "robot_id": "keenon_t8",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t8",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t8",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t8",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t8",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t8",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t8",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t8",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t9",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t9",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t9",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t9",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t9",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t9",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t9",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t9",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t10",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t10",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t10",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t10",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t10",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t10",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t10",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t10",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t11",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t11",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t11",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t11",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t11",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t11",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t11",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_t11",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_w3",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_w3",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_w3",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_w3",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_w3",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_w3",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_w3",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_w3",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_s100",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_s100",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_s100",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_s100",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_s100",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_s100",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_s100",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_s100",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c30",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c30",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c30",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c30",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c30",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c30",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c30",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c30",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c40",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c40",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c40",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c40",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c40",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c40",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c40",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "keenon_c40",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "botinkit_omni",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "botinkit_omni",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "botinkit_omni",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "botinkit_omni",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "botinkit_omni",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "botinkit_omni",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "botinkit_omni",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "botinkit_omni",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_robot_cafe",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_robot_cafe",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_robot_cafe",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_robot_cafe",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_robot_cafe",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_robot_cafe",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_robot_cafe",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_robot_cafe",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_smart_bar",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_smart_bar",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_smart_bar",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_smart_bar",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_smart_bar",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_smart_bar",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_smart_bar",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "cofe_smart_bar",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_s_pro",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_s_pro",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_s_pro",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_s_pro",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_s_pro",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_s_pro",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_s_pro",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_s_pro",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_ic60",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_ic60",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_ic60",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_ic60",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_ic60",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_ic60",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_ic60",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "xbot_ic60",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_mecanum",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_mecanum",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_mecanum",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_mecanum",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_mecanum",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_mecanum",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_mecanum",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_mecanum",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_quadruped",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_quadruped",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_quadruped",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_quadruped",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_quadruped",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_quadruped",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_quadruped",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_quadruped",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_spider",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_spider",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_spider",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_spider",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_spider",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_spider",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_spider",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_spider",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_balance",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_balance",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_balance",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_balance",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_balance",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_balance",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_balance",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_balance",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_wheelleg",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_wheelleg",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_wheelleg",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_wheelleg",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_wheelleg",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_wheelleg",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_wheelleg",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_wheelleg",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_engineer",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_engineer",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_engineer",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_engineer",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_engineer",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_engineer",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_engineer",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_engineer",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_transform",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_transform",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_transform",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_transform",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_transform",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_transform",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_transform",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "ugot_transform",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "galbot_g1_golf",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "galbot_g1_golf",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "galbot_g1_golf",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "galbot_g1_golf",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "galbot_g1_golf",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "galbot_g1_golf",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "galbot_g1_golf",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "galbot_g1_golf",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "crow_corvus_corone",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "crow_corvus_corone",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "crow_corvus_corone",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "crow_corvus_corone",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "crow_corvus_corone",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "crow_corvus_corone",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "crow_corvus_corone",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "crow_corvus_corone",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "celegans",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "celegans",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "celegans",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "celegans",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "celegans",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "celegans",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "celegans",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "celegans",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_banc",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_banc",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_banc",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_banc",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_banc",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_banc",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_banc",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_banc",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_fafb",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_fafb",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_fafb",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_fafb",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_fafb",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_fafb",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_fafb",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "drosophila_fafb",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "hexapod",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "hexapod",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "hexapod",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "hexapod",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "hexapod",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "hexapod",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "hexapod",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "hexapod",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "nao",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "nao",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "nao",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "nao",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "nao",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "nao",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "nao",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "nao",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "zebrafish",
+      "target": "webots",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "zebrafish",
+      "target": "unity",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "zebrafish",
+      "target": "unreal",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "zebrafish",
+      "target": "webgl",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "zebrafish",
+      "target": "minecraft_java",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "zebrafish",
+      "target": "minecraft_bedrock",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "authoritative_physics_service_with_frontend",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "zebrafish",
+      "target": "mujoco",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    },
+    {
+      "robot_id": "zebrafish",
+      "target": "isaacsim",
+      "status": "not_run",
+      "reason": "Instruction and source-asset delivery only; target expansion and simulator execution remain to be performed locally. Existing-source historical results are not rerun evidence.",
+      "required_fidelity": "native_articulated_physics",
+      "gates": [
+        "asset_provenance",
+        "model_import",
+        "ordered_io",
+        "mechanical_dynamics",
+        "aer_round_trip",
+        "closed_loop_neural_task",
+        "disconnect_and_isolation"
+      ]
+    }
+  ],
+  "gate_note": "No row is a passing simulator result. Missing runtimes are blocked/not_run, never silently skipped."
+}
