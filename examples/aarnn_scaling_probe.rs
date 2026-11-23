@@ -180,7 +180,11 @@ fn main() -> Result<(), String> {
         }
         for i in chosen {
             let jitter = 0.5 + rng.f64();
-            rec[(j, i)] = if inhibitory[i] { -a.w_inh * jitter } else { a.w_exc * jitter };
+            rec[(j, i)] = if inhibitory[i] {
+                -a.w_inh * jitter
+            } else {
+                a.w_exc * jitter
+            };
         }
     }
     if a.module_size > 0 {
@@ -216,7 +220,9 @@ fn main() -> Result<(), String> {
             p
         })
         .collect();
-    let mut order: Vec<usize> = (0..a.patterns).flat_map(|p| std::iter::repeat_n(p, a.repeats)).collect();
+    let mut order: Vec<usize> = (0..a.patterns)
+        .flat_map(|p| std::iter::repeat_n(p, a.repeats))
+        .collect();
     rng.shuffle(&mut order);
 
     let step = |runner: &mut Runner, values: &[f64], phase: &mut [f64], rng: &mut fastrand::Rng| {
@@ -231,7 +237,10 @@ fn main() -> Result<(), String> {
             }
         }
         let _ = runner.step_sync(1.0, Some(&frame));
-        runner.last_spk_h[0].iter().map(|x| (*x != 0) as u32).collect::<Vec<u32>>()
+        runner.last_spk_h[0]
+            .iter()
+            .map(|x| (*x != 0) as u32)
+            .collect::<Vec<u32>>()
     };
 
     let started = std::time::Instant::now();
@@ -239,14 +248,22 @@ fn main() -> Result<(), String> {
     let silent = vec![0.0f64; s];
     let mut total_spikes = 0u64;
     for _ in 0..500 {
-        total_spikes += step(&mut runner, &silent, &mut phase, &mut rng).iter().sum::<u32>() as u64;
+        total_spikes += step(&mut runner, &silent, &mut phase, &mut rng)
+            .iter()
+            .sum::<u32>() as u64;
     }
     let mut records = Vec::with_capacity(order.len());
     let mut stim_spikes = 0u64;
     for &p in &order {
         let values: Vec<f64> = patterns[p]
             .iter()
-            .map(|&o| if o ^ (rng.f64() < a.flip) { a.drive } else { 0.0 })
+            .map(|&o| {
+                if o ^ (rng.f64() < a.flip) {
+                    a.drive
+                } else {
+                    0.0
+                }
+            })
             .collect();
         for x in phase.iter_mut() {
             *x = rng.f64();
@@ -254,7 +271,10 @@ fn main() -> Result<(), String> {
         let mut evoked = vec![0u32; n];
         let mut memory = vec![0u32; n];
         for _ in 0..a.stim_ms {
-            for (c, x) in evoked.iter_mut().zip(step(&mut runner, &values, &mut phase, &mut rng)) {
+            for (c, x) in evoked
+                .iter_mut()
+                .zip(step(&mut runner, &values, &mut phase, &mut rng))
+            {
                 *c += x;
             }
         }
@@ -285,10 +305,12 @@ fn main() -> Result<(), String> {
         "records": records,
     });
     std::fs::write(&a.out, out.to_string()).map_err(|e| e.to_string())?;
-    println!("N={n} seed={} stim rate {stim_hz:.1} Hz wall {wall:.1} s -> {}", a.seed, a.out);
+    println!(
+        "N={n} seed={} stim rate {stim_hz:.1} Hz wall {wall:.1} s -> {}",
+        a.seed, a.out
+    );
     Ok(())
 }
-
 
 /// Recursive modular wiring: groups of `module_size` cells wired inside
 /// (all-to-all, or each pair with probability `within_p`) (Dale: a cell's outgoing synapses share its sign); every pair of
@@ -297,8 +319,13 @@ fn main() -> Result<(), String> {
 /// of collections is joined the same way through their first groups.
 fn modular_wiring(a: &Args, n: usize, inhibitory: &[bool]) -> ndarray::Array2<f64> {
     let g = a.module_size.max(2);
-    let b = if a.branching == 0 { g } else { a.branching.max(2) };
-    let mut r = fastrand::Rng::with_seed(a.seed.wrapping_mul(7_777_777) ^ (n as u64) << 8 ^ g as u64);
+    let b = if a.branching == 0 {
+        g
+    } else {
+        a.branching.max(2)
+    };
+    let mut r =
+        fastrand::Rng::with_seed(a.seed.wrapping_mul(7_777_777) ^ (n as u64) << 8 ^ g as u64);
     let mut rec = ndarray::Array2::<f64>::zeros((n, n));
     let module = |c: usize| c / g;
     for j in 0..n {
@@ -311,7 +338,11 @@ fn modular_wiring(a: &Args, n: usize, inhibitory: &[bool]) -> ndarray::Array2<f6
                     continue;
                 }
                 let jitter = 0.5 + r.f64();
-                rec[(j, i)] = if inhibitory[i] { -a.w_inh * jitter } else { a.w_exc * jitter };
+                rec[(j, i)] = if inhibitory[i] {
+                    -a.w_inh * jitter
+                } else {
+                    a.w_exc * jitter
+                };
             }
         }
     }

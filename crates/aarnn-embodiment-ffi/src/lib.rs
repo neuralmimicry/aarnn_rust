@@ -711,7 +711,11 @@ pub unsafe extern "C" fn nm_reference_hydro(
     output_capacity: u32,
 ) -> i32 {
     guarded(|| {
-        if inputs.is_null() || outputs.is_null() || row_count > 256 || output_capacity != row_count * 6 {
+        if inputs.is_null()
+            || outputs.is_null()
+            || row_count > 256
+            || output_capacity != row_count * 6
+        {
             return Err("invalid hydrodynamic batch".into());
         }
         let state = session(handle)?;
@@ -876,12 +880,16 @@ mod tests {
     #[test]
     fn hydro_batch_is_neutral_dissipative_and_requires_water() {
         unsafe {
-            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sim/content/embodiments/generated");
+            let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../sim/content/embodiments/generated");
             let open = |name: &str| {
                 let p = root.join(name);
                 let p = p.to_str().unwrap().as_bytes();
                 let mut h = 0;
-                assert_eq!(nm_reference_open(p.as_ptr(), p.len() as u32, std::ptr::null(), 0, &mut h), 0);
+                assert_eq!(
+                    nm_reference_open(p.as_ptr(), p.len() as u32, std::ptr::null(), 0, &mut h),
+                    0
+                );
                 h
             };
             let fish = open("zebrafish.xml");
@@ -894,7 +902,10 @@ mod tests {
             }
             drag[15..21].copy_from_slice(&[0., 0.1, 0., 0., 0., 2.]);
             let mut out = [0.; 12];
-            assert_eq!(nm_reference_hydro(fish, rows.as_ptr(), 2, out.as_mut_ptr(), 12), 0);
+            assert_eq!(
+                nm_reference_hydro(fish, rows.as_ptr(), 2, out.as_mut_ptr(), 12),
+                0
+            );
             assert!((out[2] - 0.002 * 9.81).abs() < 1e-12);
             assert!(out[7] < 0. && out[11] < 0.);
             assert!(nm_reference_hydro(fish, rows.as_ptr(), 2, out.as_mut_ptr(), 6) < 0);

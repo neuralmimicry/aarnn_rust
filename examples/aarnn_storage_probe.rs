@@ -253,7 +253,10 @@ fn step(runner: &mut Runner, drive: &[f64], phase: &mut [f64]) -> Vec<u8> {
         }
     }
     let _ = runner.step_sync(1.0, Some(&frame));
-    runner.last_spk_h[0].iter().map(|x| (*x != 0) as u8).collect()
+    runner.last_spk_h[0]
+        .iter()
+        .map(|x| (*x != 0) as u8)
+        .collect()
 }
 
 fn main() -> Result<(), String> {
@@ -299,10 +302,19 @@ fn main() -> Result<(), String> {
         x ^= x >> 33;
         (x as f64 / u64::MAX as f64) < wp
     };
-    let w_assoc = if g > 0 && wp > 0.0 { a.w_assoc / wp } else { a.w_assoc };
+    let w_assoc = if g > 0 && wp > 0.0 {
+        a.w_assoc / wp
+    } else {
+        a.w_assoc
+    };
     let (w_ei, w_ie) = if a.pool_ref > 0 && n_i > 0 {
-        let ref_i = (a.pool_ref as f64 * a.interneurons / (1.0 - a.interneurons)).round().max(1.0);
-        (a.w_ei * a.pool_ref as f64 / n as f64, a.w_ie * ref_i / n_i as f64)
+        let ref_i = (a.pool_ref as f64 * a.interneurons / (1.0 - a.interneurons))
+            .round()
+            .max(1.0);
+        (
+            a.w_ei * a.pool_ref as f64 / n as f64,
+            a.w_ie * ref_i / n_i as f64,
+        )
     } else {
         (a.w_ei, a.w_ie)
     };
@@ -335,7 +347,17 @@ fn main() -> Result<(), String> {
             set.sort_unstable();
             patterns.push(set);
         }
-        store(&mut runner, n, n_i, &patterns, w_assoc, a.w_inhib, w_ei, w_ie, &allowed);
+        store(
+            &mut runner,
+            n,
+            n_i,
+            &patterns,
+            w_assoc,
+            a.w_inhib,
+            w_ei,
+            w_ie,
+            &allowed,
+        );
         // Test a random sample of the stored experiences.
         let mut idx: Vec<usize> = (0..patterns.len()).collect();
         rng.shuffle(&mut idx);
@@ -370,7 +392,11 @@ fn main() -> Result<(), String> {
             let mut fired = vec![0u32; n + n_i];
             // Cue for `cue_ms`, then keep reading (input off) until
             // `read_to_ms` (0 = end of the cue).
-            let read_to = if a.read_to_ms > 0 { a.read_to_ms } else { a.cue_ms };
+            let read_to = if a.read_to_ms > 0 {
+                a.read_to_ms
+            } else {
+                a.cue_ms
+            };
             for t in 0..read_to.max(a.cue_ms) {
                 let d = if t < a.cue_ms { &drive } else { &silent };
                 let spk = step(&mut runner, d, &mut phase);
@@ -386,16 +412,45 @@ fn main() -> Result<(), String> {
             if std::env::var("STORAGE_DEBUG").is_ok() {
                 let cf: Vec<u32> = cued.iter().map(|c| fired[*c]).collect();
                 let uf: Vec<u32> = uncued.iter().map(|c| fired[*c]).collect();
-                let other = (0..n).filter(|c| !pat.contains(c)).map(|c| fired[c]).max().unwrap_or(0);
-                let other_pat: Vec<(usize, f64)> = patterns.iter().enumerate().filter(|(qi, _)| *qi != k)
-                    .map(|(qi, q)| (qi, q.iter().map(|c| fired[*c] as f64).sum::<f64>() / q.len() as f64)).collect();
+                let other = (0..n)
+                    .filter(|c| !pat.contains(c))
+                    .map(|c| fired[c])
+                    .max()
+                    .unwrap_or(0);
+                let other_pat: Vec<(usize, f64)> = patterns
+                    .iter()
+                    .enumerate()
+                    .filter(|(qi, _)| *qi != k)
+                    .map(|(qi, q)| {
+                        (
+                            qi,
+                            q.iter().map(|c| fired[*c] as f64).sum::<f64>() / q.len() as f64,
+                        )
+                    })
+                    .collect();
                 let tot: u32 = fired.iter().sum();
-                let spur: Vec<(usize, u32)> = (0..n).filter(|c| !pat.contains(c) && fired[*c] >= a.min_spikes).map(|c| (c, fired[c])).collect();
-                eprintln!("P={} test={} cued_ids {:?} cued {:?} uncued {:?} spurious {:?} patterns {:?}", patterns.len(), k, cued, cf, uf, spur, patterns);
+                let spur: Vec<(usize, u32)> = (0..n)
+                    .filter(|c| !pat.contains(c) && fired[*c] >= a.min_spikes)
+                    .map(|c| (c, fired[c]))
+                    .collect();
+                eprintln!(
+                    "P={} test={} cued_ids {:?} cued {:?} uncued {:?} spurious {:?} patterns {:?}",
+                    patterns.len(),
+                    k,
+                    cued,
+                    cf,
+                    uf,
+                    spur,
+                    patterns
+                );
             }
             let hit = uncued.iter().filter(|c| on(**c)).count();
             let spurious = (0..n).filter(|c| !pat.contains(c) && on(*c)).count();
-            let rec = if uncued.is_empty() { 1.0 } else { hit as f64 / uncued.len() as f64 };
+            let rec = if uncued.is_empty() {
+                1.0
+            } else {
+                hit as f64 / uncued.len() as f64
+            };
             recall_sum += rec;
             spurious_sum += spurious as f64;
             // Best-match retrieval: score every stored experience by the mean
@@ -440,11 +495,17 @@ fn main() -> Result<(), String> {
                 break;
             }
         }
-        p = if p < 20 { p + 1 } else { ((p as f64) * 1.1).ceil() as usize };
+        p = if p < 20 {
+            p + 1
+        } else {
+            ((p as f64) * 1.1).ceil() as usize
+        };
     }
     // Information held at capacity: each stored experience picks M of N cells.
     let log2_choose = |n: usize, k: usize| -> f64 {
-        (0..k).map(|i| ((n - i) as f64).log2() - ((i + 1) as f64).log2()).sum()
+        (0..k)
+            .map(|i| ((n - i) as f64).log2() - ((i + 1) as f64).log2())
+            .sum()
     };
     let bits = capacity as f64 * log2_choose(n, m);
     let wall = started.elapsed().as_secs_f64();
@@ -459,7 +520,9 @@ fn main() -> Result<(), String> {
         "possible_synapses": n * (n - 1), "loads": loads, "wall_s": wall,
     });
     std::fs::write(&a.out, out.to_string()).map_err(|e| e.to_string())?;
-    println!("N={n} M={m} capacity {capacity} experiences, {bits:.0} bits ({:.2}/neuron), wall {wall:.1}s",
-             bits / n as f64);
+    println!(
+        "N={n} M={m} capacity {capacity} experiences, {bits:.0} bits ({:.2}/neuron), wall {wall:.1}s",
+        bits / n as f64
+    );
     Ok(())
 }

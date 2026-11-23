@@ -199,7 +199,9 @@ pub fn apply_weight_delta(current_weight: f64, delta: f64, w_min: f64, w_max: f6
         let magnitude = current_weight.abs();
         let hi_eff = hi.max(magnitude);
         let lo_eff = lo.max(SILENT_SYNAPSE_FLOOR).min(hi_eff);
-        return (magnitude + delta).clamp(lo_eff, hi_eff).copysign(current_weight);
+        return (magnitude + delta)
+            .clamp(lo_eff, hi_eff)
+            .copysign(current_weight);
     }
     // Explicitly signed bounds: the rule may move a synapse across zero.
     (current_weight + delta).clamp(lo.min(current_weight), hi.max(current_weight))
@@ -523,7 +525,11 @@ impl RateHomeostat {
         if *age >= warmup_ms {
             for (s, r) in sets.iter_mut().zip(rates.iter()) {
                 if *s < 0.0 {
-                    *s = if target_hz > 0.0 { target_hz } else { r.max(MIN_SET_POINT_HZ) };
+                    *s = if target_hz > 0.0 {
+                        target_hz
+                    } else {
+                        r.max(MIN_SET_POINT_HZ)
+                    };
                 }
             }
         }
@@ -574,9 +580,15 @@ mod tests {
         // Magnitude bounds apply to inhibitory synapses too; depression
         // silences a synapse but keeps it (and its sign).
         assert_eq!(apply_weight_delta(-0.95, 0.2, 0.0, 1.0), -1.0);
-        assert_eq!(apply_weight_delta(-0.05, -0.2, 0.0, 1.0), -SILENT_SYNAPSE_FLOOR);
+        assert_eq!(
+            apply_weight_delta(-0.05, -0.2, 0.0, 1.0),
+            -SILENT_SYNAPSE_FLOOR
+        );
         assert_eq!(apply_weight_delta(0.95, 0.2, 0.0, 1.0), 1.0);
-        assert_eq!(apply_weight_delta(0.05, -0.2, 0.0, 1.0), SILENT_SYNAPSE_FLOOR);
+        assert_eq!(
+            apply_weight_delta(0.05, -0.2, 0.0, 1.0),
+            SILENT_SYNAPSE_FLOOR
+        );
         // A silenced inhibitory synapse stays inhibitory when it recovers.
         let silent = apply_weight_delta(-0.05, -0.2, 0.0, 1.0);
         assert!(apply_weight_delta(silent, 0.1, 0.0, 1.0) < 0.0);
@@ -617,11 +629,9 @@ mod tests {
     fn homeostatic_scaling_opposes_the_rate_error_and_keeps_structure() {
         // Row 0 fires above its set point (error -1), row 1 below (+0.5),
         // row 2 at its set point.
-        let mut mat = Array2::from_shape_vec(
-            (3, 3),
-            vec![0.4, -0.2, 0.0, 0.4, -0.2, 0.0, 0.4, -0.2, 0.0],
-        )
-        .unwrap();
+        let mut mat =
+            Array2::from_shape_vec((3, 3), vec![0.4, -0.2, 0.0, 0.4, -0.2, 0.0, 0.4, -0.2, 0.0])
+                .unwrap();
         homeostatic_scale_rows(&mut mat, &[-1.0, 0.5, 0.0], 0.1, 1.0);
         // Over-active: excitation down, inhibition up.
         assert!(mat[(0, 0)] < 0.4 && mat[(0, 0)] > 0.0);
