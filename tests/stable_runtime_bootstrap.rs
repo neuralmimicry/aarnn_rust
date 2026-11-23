@@ -1,4 +1,8 @@
 #![cfg(feature = "stable_executor_live")]
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 
 use aarnn_rust::authoritative_shard::FIXED_POINT_SCALE;
 use aarnn_rust::config::{LIFParams, NetworkConfig, STDPParams};

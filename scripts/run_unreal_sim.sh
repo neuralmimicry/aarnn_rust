@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 # run_unreal_sim.sh — AARNN TCP brain-server launcher for Unreal Engine
 #
 # Convenience wrapper around run_sim.sh that passes --sim unreal automatically.

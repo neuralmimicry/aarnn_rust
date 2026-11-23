@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Regression checks for reusable mutual-TLS credentials in local launchers."""
 
 from __future__ import annotations

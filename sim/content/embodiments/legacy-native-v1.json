@@ -18,7 +18,7 @@
     "filter_tau_s": 0.02,
     "encoding": "bounded signed weighted spike accumulation, no oscillator; a spike history sets a target about the joint midpoint, and empty initial output has no active servo drive",
     "silence": "filters decay, old source responses expire; reset/disconnect inhibits output",
-    "position_gains": "hexapod kp=.5 kv=.025; flies kp=.01 kv=.0005; NAO kp=1 kv=.05; fish kp=.002 kv=.0001. Native force limits are never scaled up",
+    "position_gains": "hexapod kp=.5 kv=.025; flies kp=.03 kv=.0015 (v2; v1 .01 sagged under body weight); NAO kp=1 kv=.05; fish kp=.002 kv=.0001. Native force limits are never scaled up",
     "range_provenance": "Webots named servo ranges/torques for hexapod and fly; fish paired tail/fin surrogate ranges derive from declared source channels where present; NAO remains original primitive revision-unspecified surrogate",
     "velocity_limits": "Active drive is inhibited above the declared speed when its position error would accelerate further; braking and passive impact velocity remain physical. NAO/unspecified virtual fin velocities assume4rad/s."
   },

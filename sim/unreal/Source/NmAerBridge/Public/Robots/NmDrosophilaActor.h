@@ -1,4 +1,7 @@
-// Copyright NeuralMimicry. All Rights Reserved.
+// SPDX-FileCopyrightText: NEURALMIMICRY LTD
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -94,6 +97,13 @@ public:
     virtual void ApplyActuators(const TArray<float>& Actuators) override;
     virtual void GetSensorNames(TArray<FString>& OutNames) const override;
     virtual void GetActuatorNames(TArray<FString>& OutNames) const override;
+
+protected:
+    virtual void ResetGradedDecode() override { GradedJoints.Reset(); }
+
+private:
+    // Graded (pulse-density) brain: leg/wing joint i reads channel i.
+    NmOutputDecode::FGradedJoints GradedJoints = NmOutputDecode::FGradedJoints::Identity(NumLegJoints + 4);
 };
 
 // ---------------------------------------------------------------------------

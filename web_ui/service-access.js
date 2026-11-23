@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 (() => {
   const SERVICE_ACCESS_NONE = "none";
   const SERVICE_ACCESS_REQUEST = "request";

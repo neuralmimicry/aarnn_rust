@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // QA-only native NPC/bubble observer. Never included in distributed packs.
 import { world, system, ScriptEventSource } from '@minecraft/server';
 let active=false, reported=false;

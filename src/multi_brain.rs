@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Independent-brain admission and deterministic fair dispatch.
 
 use crate::deterministic::{BrainId, LogicalTag, ShardId};

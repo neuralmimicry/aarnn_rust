@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Explicit managed adapter for the stable-ID durable executor.
 //!
 //! `ManagedStableExecutor` is the bounded worker-facing seam between a node

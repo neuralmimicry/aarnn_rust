@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use anyhow::Context;
 use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};

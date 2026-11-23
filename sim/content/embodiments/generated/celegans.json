@@ -3,21 +3,21 @@
   "digest_encoding": "embodiment-binary-v1",
   "compiler": "embodiment-v1",
   "profile_id": "celegans",
-  "variant_id": "tapered-cuticle-v2",
+  "variant_id": "tapered-cuticle-v3",
   "fidelity": "functional-surrogate",
   "exact_replica": "pending OEM variant and calibration",
-  "controller_transfer": "celegans-muscle-v2-sim-v1; uncalibrated sensory proxies and mechanics",
+  "controller_transfer": "celegans-muscle-v3-sim-v1; analytic stimulus fields, proprioception and resistive-force substrate; uncalibrated",
   "source": "scripts/embodiment_legacy.py:build",
-  "source_digest": "2f4cd1909a47cd031ec8b5e099c1bb8737248320f6dd6c70fab87d8ff166f163",
+  "source_digest": "a2f0a10b13d7e755b75aca98929838ce2987f528a83c351b97123c5f4089ad5f",
   "policy_digest": "35a2dbc6477ae9308c4f5eae4d09ccffc2f7aadce2cb54ce29018d63e43b9e2f",
   "io": {
     "schema_version": 1,
     "digest_encoding": "embodiment-binary-v1",
-    "mapping_version": "celegans-simulation-proxies-v1",
+    "mapping_version": "celegans-simulation-v2",
     "sensors": [
       {
         "name": "celegans_s_00_vibration_accel.x",
-        "kind": "celegans-inertial-v1",
+        "kind": "celegans-vibration-v2",
         "units": "normalised",
         "range": [
           0,
@@ -29,7 +29,7 @@
       },
       {
         "name": "celegans_s_00_vibration_accel.y",
-        "kind": "celegans-inertial-v1",
+        "kind": "celegans-vibration-v2",
         "units": "normalised",
         "range": [
           0,
@@ -41,7 +41,7 @@
       },
       {
         "name": "celegans_s_00_vibration_accel.z",
-        "kind": "celegans-inertial-v1",
+        "kind": "celegans-vibration-v2",
         "units": "normalised",
         "range": [
           0,
@@ -53,7 +53,7 @@
       },
       {
         "name": "celegans_s_03_vibration_gyro.x",
-        "kind": "celegans-inertial-v1",
+        "kind": "celegans-rotation-v2",
         "units": "normalised",
         "range": [
           0,
@@ -65,7 +65,7 @@
       },
       {
         "name": "celegans_s_03_vibration_gyro.y",
-        "kind": "celegans-inertial-v1",
+        "kind": "celegans-rotation-v2",
         "units": "normalised",
         "range": [
           0,
@@ -77,7 +77,7 @@
       },
       {
         "name": "celegans_s_03_vibration_gyro.z",
-        "kind": "celegans-inertial-v1",
+        "kind": "celegans-rotation-v2",
         "units": "normalised",
         "range": [
           0,
@@ -113,7 +113,7 @@
       },
       {
         "name": "celegans_s_08_light_left",
-        "kind": "celegans-irradiance-v1",
+        "kind": "celegans-field-v2",
         "units": "normalised",
         "range": [
           0,
@@ -121,17 +121,17 @@
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
+        "mode": "light",
         "body": "segment_23",
         "position_m": [
-          0.016166666666666635,
-          0.03,
-          0.012
-        ],
-        "axis": 1
+          0.012166666666666659,
+          0.012,
+          0.008
+        ]
       },
       {
         "name": "celegans_s_09_light_right",
-        "kind": "celegans-irradiance-v1",
+        "kind": "celegans-field-v2",
         "units": "normalised",
         "range": [
           0,
@@ -139,17 +139,17 @@
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
+        "mode": "light",
         "body": "segment_23",
         "position_m": [
-          0.016166666666666635,
-          -0.03,
-          0.012
-        ],
-        "axis": 1
+          0.012166666666666659,
+          -0.012,
+          0.008
+        ]
       },
       {
         "name": "celegans_s_10_heat_left",
-        "kind": "celegans-irradiance-v1",
+        "kind": "celegans-field-v2",
         "units": "normalised",
         "range": [
           0,
@@ -157,17 +157,17 @@
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
-        "body": "segment_19",
+        "mode": "temperature",
+        "body": "segment_23",
         "position_m": [
-          -0.004166666666666652,
-          0.04,
-          0.016
-        ],
-        "axis": 0
+          0.004166666666666652,
+          0.012,
+          0.008
+        ]
       },
       {
         "name": "celegans_s_11_heat_right",
-        "kind": "celegans-irradiance-v1",
+        "kind": "celegans-field-v2",
         "units": "normalised",
         "range": [
           0,
@@ -175,179 +175,179 @@
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
-        "body": "segment_19",
+        "mode": "temperature",
+        "body": "segment_23",
         "position_m": [
-          -0.004166666666666652,
-          -0.04,
-          0.016
-        ],
-        "axis": 0
+          0.004166666666666652,
+          -0.012,
+          0.008
+        ]
       },
       {
         "name": "celegans_s_12_taste_front_center",
-        "kind": "celegans-range-v1",
+        "kind": "celegans-field-v2",
         "units": "normalised",
         "range": [
           0,
-          0.26
+          1
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
+        "mode": "attractant_soluble",
         "body": "segment_23",
         "position_m": [
-          0.026166666666666644,
+          0.024166666666666642,
           0,
           0
-        ],
-        "angle_rad": 0
+        ]
       },
       {
         "name": "celegans_s_13_taste_front_left",
-        "kind": "celegans-range-v1",
+        "kind": "celegans-field-v2",
         "units": "normalised",
         "range": [
           0,
-          0.23
+          1
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
+        "mode": "repellent_soluble",
         "body": "segment_23",
         "position_m": [
-          0.012166666666666659,
-          0.03,
+          0.016166666666666635,
+          0.008,
           0
-        ],
-        "angle_rad": 0.36
+        ]
       },
       {
         "name": "celegans_s_14_taste_front_right",
-        "kind": "celegans-range-v1",
+        "kind": "celegans-field-v2",
         "units": "normalised",
         "range": [
           0,
-          0.23
+          1
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
+        "mode": "repellent_soluble",
         "body": "segment_23",
         "position_m": [
-          0.012166666666666659,
-          -0.03,
+          0.016166666666666635,
+          -0.008,
           0
-        ],
-        "angle_rad": -0.36
+        ]
       },
       {
         "name": "celegans_s_15_chem_left",
-        "kind": "celegans-range-v1",
+        "kind": "celegans-field-v2",
         "units": "normalised",
         "range": [
           0,
-          0.38
+          1
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
-        "body": "segment_16",
+        "mode": "attractant_volatile",
+        "body": "segment_23",
         "position_m": [
-          0.003333333333333327,
-          0.046,
+          0.01416666666666666,
+          0.01,
           0
-        ],
-        "angle_rad": 1.2
+        ]
       },
       {
         "name": "celegans_s_16_chem_right",
-        "kind": "celegans-range-v1",
+        "kind": "celegans-field-v2",
         "units": "normalised",
         "range": [
           0,
-          0.38
+          1
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
-        "body": "segment_16",
+        "mode": "attractant_volatile",
+        "body": "segment_23",
         "position_m": [
-          0.003333333333333327,
-          -0.046,
+          0.01416666666666666,
+          -0.01,
           0
-        ],
-        "angle_rad": -1.2
+        ]
       },
       {
         "name": "celegans_s_17_chem_rear_left",
-        "kind": "celegans-range-v1",
+        "kind": "celegans-field-v2",
         "units": "normalised",
         "range": [
           0,
-          0.36
+          1
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
-        "body": "segment_07",
+        "mode": "repellent_soluble",
+        "body": "segment_01",
         "position_m": [
-          -0.003166666666666665,
-          0.03,
+          -0.004166666666666652,
+          0.006,
           0
-        ],
-        "angle_rad": 2.46
+        ]
       },
       {
         "name": "celegans_s_18_chem_rear_right",
-        "kind": "celegans-range-v1",
+        "kind": "celegans-field-v2",
         "units": "normalised",
         "range": [
           0,
-          0.36
+          1
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
-        "body": "segment_07",
+        "mode": "repellent_soluble",
+        "body": "segment_01",
         "position_m": [
-          -0.003166666666666665,
-          -0.03,
+          -0.004166666666666652,
+          -0.006,
           0
-        ],
-        "angle_rad": -2.46
+        ]
       },
       {
         "name": "celegans_s_19_flow_front",
-        "kind": "celegans-range-v1",
+        "kind": "celegans-field-v2",
         "units": "normalised",
         "range": [
           0,
-          0.92
+          1
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
-        "body": "segment_21",
+        "mode": "oxygen",
+        "body": "segment_23",
         "position_m": [
-          -0.001500000000000029,
+          0.01416666666666666,
           0,
-          0
-        ],
-        "angle_rad": 0
+          0.004
+        ]
       },
       {
         "name": "celegans_s_20_flow_rear",
-        "kind": "celegans-range-v1",
+        "kind": "celegans-field-v2",
         "units": "normalised",
         "range": [
           0,
-          0.92
+          1
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
-        "body": "segment_03",
+        "mode": "oxygen",
+        "body": "segment_00",
         "position_m": [
-          0.0015000000000000013,
+          0.007000000000000006,
           0,
-          0
-        ],
-        "angle_rad": 3.14159
+          0.004
+        ]
       },
       {
         "name": "celegans_s_21_far_front_left",
-        "kind": "celegans-range-v1",
+        "kind": "celegans-range-v2",
         "units": "normalised",
         "range": [
           0,
@@ -365,7 +365,7 @@
       },
       {
         "name": "celegans_s_22_far_front_right",
-        "kind": "celegans-range-v1",
+        "kind": "celegans-range-v2",
         "units": "normalised",
         "range": [
           0,
@@ -383,7 +383,7 @@
       },
       {
         "name": "celegans_s_23_far_rear",
-        "kind": "celegans-range-v1",
+        "kind": "celegans-range-v2",
         "units": "normalised",
         "range": [
           0,
@@ -398,6 +398,318 @@
           0
         ],
         "angle_rad": 3.14159
+      },
+      {
+        "name": "celegans_s_24_bend_dorsal01",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 1,
+        "mode": "dorsal"
+      },
+      {
+        "name": "celegans_s_25_bend_ventral01",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 1,
+        "mode": "ventral"
+      },
+      {
+        "name": "celegans_s_26_bend_dorsal02",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 2,
+        "mode": "dorsal"
+      },
+      {
+        "name": "celegans_s_27_bend_ventral02",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 2,
+        "mode": "ventral"
+      },
+      {
+        "name": "celegans_s_28_bend_dorsal03",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 3,
+        "mode": "dorsal"
+      },
+      {
+        "name": "celegans_s_29_bend_ventral03",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 3,
+        "mode": "ventral"
+      },
+      {
+        "name": "celegans_s_30_bend_dorsal04",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 4,
+        "mode": "dorsal"
+      },
+      {
+        "name": "celegans_s_31_bend_ventral04",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 4,
+        "mode": "ventral"
+      },
+      {
+        "name": "celegans_s_32_bend_dorsal05",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 5,
+        "mode": "dorsal"
+      },
+      {
+        "name": "celegans_s_33_bend_ventral05",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 5,
+        "mode": "ventral"
+      },
+      {
+        "name": "celegans_s_34_bend_dorsal06",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 6,
+        "mode": "dorsal"
+      },
+      {
+        "name": "celegans_s_35_bend_ventral06",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 6,
+        "mode": "ventral"
+      },
+      {
+        "name": "celegans_s_36_bend_dorsal07",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 7,
+        "mode": "dorsal"
+      },
+      {
+        "name": "celegans_s_37_bend_ventral07",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 7,
+        "mode": "ventral"
+      },
+      {
+        "name": "celegans_s_38_bend_dorsal08",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 8,
+        "mode": "dorsal"
+      },
+      {
+        "name": "celegans_s_39_bend_ventral08",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 8,
+        "mode": "ventral"
+      },
+      {
+        "name": "celegans_s_40_bend_dorsal09",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 9,
+        "mode": "dorsal"
+      },
+      {
+        "name": "celegans_s_41_bend_ventral09",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 9,
+        "mode": "ventral"
+      },
+      {
+        "name": "celegans_s_42_bend_dorsal10",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 10,
+        "mode": "dorsal"
+      },
+      {
+        "name": "celegans_s_43_bend_ventral10",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 10,
+        "mode": "ventral"
+      },
+      {
+        "name": "celegans_s_44_bend_dorsal11",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 11,
+        "mode": "dorsal"
+      },
+      {
+        "name": "celegans_s_45_bend_ventral11",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 11,
+        "mode": "ventral"
+      },
+      {
+        "name": "celegans_s_46_bend_dorsal12",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 12,
+        "mode": "dorsal"
+      },
+      {
+        "name": "celegans_s_47_bend_ventral12",
+        "kind": "celegans-bend-v1",
+        "units": "rad",
+        "range": [
+          0,
+          0.25
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "axis": 12,
+        "mode": "ventral"
       }
     ],
     "output_names": [
@@ -502,15 +814,16 @@
     "output_base": 16384,
     "dt_us": 2000,
     "transducer": {
-      "version": "celegans-muscle-v2-sim-v1",
+      "version": "celegans-muscle-v3-sim-v1",
       "muscle_tau_s": 0.055,
       "spine_tau_s": 0.08,
-      "neural_gain": 3,
+      "twitch_fraction": 0.3,
+      "row_order": "row 01 = head (segment_23)",
       "stale_s": 0.1,
       "neutral": "zero active effort; no twitch fallback",
-      "calibration": "original functional surrogate; not measured biology or Webots physics parity"
+      "calibration": "functional surrogate; twitch summation, head-to-tail rows; not measured muscle physiology"
     },
-    "digest": "07baf3479ae1d5d5cce4bbecde7b970f29ac6cfe96a0177748def6f310784c0c"
+    "digest": "6e34cd92e33c31062202dadd3aff8095e0319c61db6a297c90fc686d56094361"
   },
   "actuators": [
     {
@@ -521,8 +834,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -534,7 +847,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_03",
@@ -544,8 +857,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -557,7 +870,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_04",
@@ -567,8 +880,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -580,7 +893,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_05",
@@ -590,8 +903,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -603,7 +916,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_06",
@@ -613,8 +926,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -626,7 +939,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_07",
@@ -636,8 +949,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -649,7 +962,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_08",
@@ -659,8 +972,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -672,7 +985,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_09",
@@ -682,8 +995,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -695,7 +1008,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_10",
@@ -705,8 +1018,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -718,7 +1031,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_11",
@@ -728,8 +1041,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -741,7 +1054,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_12",
@@ -751,8 +1064,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -764,7 +1077,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_13",
@@ -774,8 +1087,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -787,7 +1100,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_14",
@@ -797,8 +1110,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -810,7 +1123,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_15",
@@ -820,8 +1133,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -833,7 +1146,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_16",
@@ -843,8 +1156,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -856,7 +1169,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_17",
@@ -866,8 +1179,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -879,7 +1192,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_18",
@@ -889,8 +1202,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -902,7 +1215,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_19",
@@ -912,8 +1225,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -925,7 +1238,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_20",
@@ -935,8 +1248,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -948,7 +1261,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_21",
@@ -958,8 +1271,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -971,7 +1284,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_22",
@@ -981,8 +1294,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -994,7 +1307,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_23",
@@ -1004,8 +1317,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -1017,7 +1330,7 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     },
     {
       "name": "celegans_spine_24",
@@ -1027,8 +1340,8 @@
         0.38
       ],
       "effort_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
       "gear": [
         1.0,
@@ -1040,15 +1353,15 @@
       ],
       "neutral": 0,
       "fault": "zero-active-effort",
-      "encoding": "celegans-muscle-v2-sim-v1"
+      "encoding": "celegans-muscle-v3-sim-v1"
     }
   ],
-  "native_mjcf_sha256": "e2bd927d48b8e55e653cd0d928277bc87165213e4d44c1765ea6626e11f157b3",
+  "native_mjcf_sha256": "f37cc7d2460f8cdc0c4afd7f7950fd3c549e62a31bf2d3504ba7d86c0d3dbdfa",
   "source_licence": "repository-original",
   "assumptions": "sim/content/embodiments/policy.json",
   "total_mass_kg": 0.16319999999999998,
   "scene": {
-    "version": "native-habitats-v1",
+    "version": "celegans-habitat-v3",
     "habitat_id": "agar",
     "title": "Agar microhabitat",
     "half_extent_m": 0.65,
@@ -4658,11 +4971,256 @@
         "internal": false
       }
     ],
-    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
+    "scientific_status": "analytic stimulus fields (normalised [0,1]) derived from the habitat objects; qualitative agar-plate assays, not measured chemistry or temperature",
+    "stimuli": [
+      {
+        "field": "attractant_volatile",
+        "shape": "gaussian",
+        "center": [
+          0.273,
+          0.13
+        ],
+        "radii": [
+          0.20950000000000002,
+          0.17960000000000004
+        ],
+        "strength": 0.8,
+        "source": "bacterial_lawn_0"
+      },
+      {
+        "field": "attractant_soluble",
+        "shape": "ellipse",
+        "center": [
+          0.273,
+          0.13
+        ],
+        "radii": [
+          0.14950000000000002,
+          0.11960000000000003
+        ],
+        "edge": 0.03,
+        "strength": 0.85,
+        "source": "bacterial_lawn_0"
+      },
+      {
+        "field": "oxygen",
+        "shape": "ellipse",
+        "center": [
+          0.273,
+          0.13
+        ],
+        "radii": [
+          0.14950000000000002,
+          0.11960000000000003
+        ],
+        "edge": 0.03,
+        "strength": -0.35,
+        "source": "bacterial_lawn_0"
+      },
+      {
+        "field": "attractant_volatile",
+        "shape": "gaussian",
+        "center": [
+          -0.312,
+          -0.156
+        ],
+        "radii": [
+          0.164,
+          0.1432
+        ],
+        "strength": 0.6,
+        "source": "bacterial_lawn_1"
+      },
+      {
+        "field": "attractant_soluble",
+        "shape": "ellipse",
+        "center": [
+          -0.312,
+          -0.156
+        ],
+        "radii": [
+          0.10400000000000001,
+          0.08320000000000001
+        ],
+        "edge": 0.03,
+        "strength": 0.85,
+        "source": "bacterial_lawn_1"
+      },
+      {
+        "field": "oxygen",
+        "shape": "ellipse",
+        "center": [
+          -0.312,
+          -0.156
+        ],
+        "radii": [
+          0.10400000000000001,
+          0.08320000000000001
+        ],
+        "edge": 0.03,
+        "strength": -0.35,
+        "source": "bacterial_lawn_1"
+      },
+      {
+        "field": "attractant_volatile",
+        "shape": "gaussian",
+        "center": [
+          0.1625,
+          -0.42250000000000004
+        ],
+        "radii": [
+          0.14450000000000002,
+          0.1276
+        ],
+        "strength": 0.5,
+        "source": "bacterial_lawn_2"
+      },
+      {
+        "field": "attractant_soluble",
+        "shape": "ellipse",
+        "center": [
+          0.1625,
+          -0.42250000000000004
+        ],
+        "radii": [
+          0.0845,
+          0.06760000000000001
+        ],
+        "edge": 0.03,
+        "strength": 0.85,
+        "source": "bacterial_lawn_2"
+      },
+      {
+        "field": "oxygen",
+        "shape": "ellipse",
+        "center": [
+          0.1625,
+          -0.42250000000000004
+        ],
+        "radii": [
+          0.0845,
+          0.06760000000000001
+        ],
+        "edge": 0.03,
+        "strength": -0.35,
+        "source": "bacterial_lawn_2"
+      },
+      {
+        "field": "oxygen",
+        "shape": "constant",
+        "strength": 0.6,
+        "source": "ambient air (21 % O2 -> 0.6)"
+      },
+      {
+        "field": "attractant_soluble",
+        "shape": "gaussian",
+        "center": [
+          -0.06,
+          -0.3
+        ],
+        "radii": [
+          0.08,
+          0.08
+        ],
+        "strength": 0.6,
+        "source": "salt_spot"
+      },
+      {
+        "field": "repellent_soluble",
+        "shape": "ring",
+        "center": [
+          0.1625,
+          -0.42250000000000004
+        ],
+        "radius": 0.1295,
+        "width": 0.018,
+        "strength": 1.0,
+        "source": "copper_ring"
+      },
+      {
+        "field": "repellent_soluble",
+        "shape": "gaussian",
+        "center": [
+          -0.4,
+          0.07
+        ],
+        "radii": [
+          0.06,
+          0.06
+        ],
+        "strength": 1.0,
+        "source": "repellent_spot"
+      },
+      {
+        "field": "temperature",
+        "shape": "linear",
+        "offset": 0.5,
+        "gradient": [
+          0.4615384615384615,
+          0.0
+        ],
+        "source": "plate thermal gradient"
+      },
+      {
+        "field": "temperature",
+        "shape": "gaussian",
+        "center": [
+          -0.46799999999999997,
+          0.338
+        ],
+        "radii": [
+          0.1,
+          0.1
+        ],
+        "strength": 0.35,
+        "source": "warm_patch"
+      },
+      {
+        "field": "temperature",
+        "shape": "gaussian",
+        "center": [
+          0.45499999999999996,
+          -0.26
+        ],
+        "radii": [
+          0.1,
+          0.1
+        ],
+        "strength": -0.35,
+        "source": "cool_moist_refuge"
+      },
+      {
+        "field": "light",
+        "shape": "gaussian",
+        "center": [
+          0.4745,
+          0.4745
+        ],
+        "radii": [
+          0.13,
+          0.13
+        ],
+        "strength": 1.0,
+        "source": "light_beacon"
+      }
+    ],
+    "taps": {
+      "period_s": 15.0,
+      "first_s": 7.5,
+      "duration_s": 0.006,
+      "acceleration_mps2": 40.0,
+      "note": "plate tap: vertical whole-body acceleration pulse (touch-receptor tap response)"
+    },
+    "resistive_force": {
+      "tangential_N_s_per_m": 0.01,
+      "normal_N_s_per_m": 0.2,
+      "ratio": 20.0,
+      "note": "resistive force theory for a nematode on agar (Wallace 1968; Berri 2009); calibrated with a programmed travelling wave"
+    }
   },
-  "scene_sources_sha256": "069c61ec98a416e5f5e95f67d33376ebbee22acab25e807a3a437a7c7f6da924",
-  "anatomy_sources_sha256": "99d64c74a569f856bab8839e8df2ae3c45eb1bf18bbc79e677fcf0301356111d",
-  "neural_sources_sha256": "ef1ae7875a7b4426ed37b8b815868929cb105df00974f3c82319f42f3813bd75",
+  "scene_sources_sha256": "a715a28f67ac75c9624deb144618f412dae8688b833c24e07b4ae9e8838d2884",
+  "anatomy_sources_sha256": "76e90c0ee8947775dbfb7ae187162c7c383557a5343383f64af84d2e625f2bd1",
+  "neural_sources_sha256": "491b1c8df3570eda7bb994493ecd7617ca21066362363aaaec542de36deab729",
   "bodies": [
     {
       "name": "segment_00",
@@ -10067,6 +10625,1108 @@
       "mesh_id": -1
     },
     {
+      "name": "habitat_salt_spot",
+      "body": 0,
+      "type": 5,
+      "position": [
+        -0.06,
+        -0.3,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.08,
+        0.0012,
+        0.0
+      ],
+      "rgba": [
+        0.9200000166893005,
+        0.9200000166893005,
+        0.949999988079071,
+        0.550000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_repellent_spot",
+      "body": 0,
+      "type": 5,
+      "position": [
+        -0.4,
+        0.07,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.06,
+        0.0012,
+        0.0
+      ],
+      "rgba": [
+        0.550000011920929,
+        0.2199999988079071,
+        0.6200000047683716,
+        0.550000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_00",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.2910163020075405,
+        -0.41125628049606633,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.7044160264027584,
+        0.06162841671622161,
+        -0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821738,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_01",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.28711139920342804,
+        -0.38911047621572925,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.6830127018922199,
+        0.18301270189221713,
+        -0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821722,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_02",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.27942024209092997,
+        -0.367979195719663,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.6408563820557882,
+        0.29883623873012066,
+        -0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821725,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_03",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.2681765225869962,
+        -0.3485045022727966,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.5792279653395687,
+        0.4055797876726394,
+        -0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.01128666868582175,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_04",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.25372187541915725,
+        -0.3312781245808428,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.5000000000000009,
+        0.4999999999999991,
+        -0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821725,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_05",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.23649549772720344,
+        -0.3168234774130038,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.40557978767263825,
+        0.5792279653395696,
+        -0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821734,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_06",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.21702080428033707,
+        -0.3055797579090701,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.29883623873012066,
+        0.6408563820557882,
+        -0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821725,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_07",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.19588952378427082,
+        -0.297888600796572,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.18301270189221855,
+        0.6830127018922195,
+        -0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821743,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_08",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.17374371950393375,
+        -0.2939836979924596,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.06162841671621988,
+        0.7044160264027586,
+        -0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821736,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_09",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.15125628049606626,
+        -0.2939836979924596,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.06162841671621988,
+        0.7044160264027586,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821736,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_10",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.12911047621572924,
+        -0.297888600796572,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.18301270189221897,
+        0.6830127018922193,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821717,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_11",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.10797919571966298,
+        -0.30557975790907005,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.2988362387301189,
+        0.640856382055789,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821727,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_12",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.0885045022727966,
+        -0.31682347741300376,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.4055797876726392,
+        0.5792279653395689,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821755,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_13",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.07127812458084276,
+        -0.3312781245808428,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.5000000000000003,
+        0.4999999999999995,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821736,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_14",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.05682347741300379,
+        -0.3485045022727966,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.5792279653395689,
+        0.4055797876726394,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821713,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_15",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.04557975790907005,
+        -0.367979195719663,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.6408563820557884,
+        0.2988362387301196,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.01128666868582175,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_16",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.037888600796571976,
+        -0.38911047621572925,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.6830127018922194,
+        0.18301270189221916,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.01128666868582173,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_17",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.03398369799245954,
+        -0.41125628049606633,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.7044160264027586,
+        0.06162841671621988,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821736,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_18",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.033983697992459524,
+        -0.43374371950393376,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.7044160264027586,
+        -0.061628416716219166,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821706,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_19",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.037888600796571956,
+        -0.45588952378427083,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.6830127018922193,
+        -0.18301270189221913,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.01128666868582176,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_20",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.04557975790907003,
+        -0.4770208042803371,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.6408563820557884,
+        -0.2988362387301196,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.01128666868582175,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_21",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.05682347741300375,
+        -0.49649549772720347,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.5792279653395694,
+        -0.40557978767263847,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821703,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_22",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.07127812458084273,
+        -0.5137218754191573,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.49999999999999895,
+        -0.5000000000000011,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821729,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_23",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.08850450227279655,
+        -0.5281765225869962,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.4055797876726391,
+        -0.579227965339569,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.01128666868582171,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_24",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.10797919571966294,
+        -0.53942024209093,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.2988362387301207,
+        -0.6408563820557881,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821788,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_25",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.12911047621572924,
+        -0.547111399203428,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.18301270189221736,
+        -0.6830127018922197,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.01128666868582171,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_26",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.15125628049606626,
+        -0.5510163020075405,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.06162841671622168,
+        -0.7044160264027584,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821724,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_27",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.1737437195039337,
+        -0.5510163020075405,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.061628416716218236,
+        -0.7044160264027588,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821719,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_28",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.19588952378427077,
+        -0.5471113992034281,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.18301270189221977,
+        -0.6830127018922192,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821776,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_29",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.21702080428033704,
+        -0.53942024209093,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.2988362387301202,
+        -0.6408563820557883,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821677,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_30",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.23649549772720338,
+        -0.5281765225869963,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.40557978767263736,
+        -0.5792279653395701,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821757,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_31",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.25372187541915725,
+        -0.5137218754191574,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.4999999999999995,
+        -0.5000000000000004,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821715,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_32",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.2681765225869962,
+        -0.49649549772720347,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.5792279653395699,
+        -0.40557978767263775,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821795,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_33",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.27942024209092997,
+        -0.4770208042803371,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.6408563820557882,
+        -0.29883623873012066,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821725,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_34",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.28711139920342804,
+        -0.45588952378427083,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.6830127018922199,
+        -0.18301270189221713,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.011286668685821722,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "habitat_copper_ring_35",
+      "body": 0,
+      "type": 3,
+      "position": [
+        0.2910163020075405,
+        -0.4337437195039338,
+        0.0012
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.7044160264027584,
+        -0.06162841671622176,
+        0.0
+      ],
+      "half_size_m": [
+        0.009,
+        0.01128666868582171,
+        0.0
+      ],
+      "rgba": [
+        0.7200000286102295,
+        0.44999998807907104,
+        0.20000000298023224,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
       "name": "segment_00_collision",
       "body": 1,
       "type": 3,
@@ -10148,35 +11808,6 @@
         0.5400000214576721,
         0.4300000071525574,
         0.25,
-        1.0
-      ],
-      "collision": false,
-      "mesh_id": -1
-    },
-    {
-      "name": "segment_00_muscle_quadrant_0",
-      "body": 1,
-      "type": 3,
-      "position": [
-        0.0,
-        0.003158240083759377,
-        0.003158240083759377
-      ],
-      "quaternion_wxyz": [
-        0.7071067811865476,
-        0.0,
-        -0.7071067811865475,
-        0.0
-      ],
-      "half_size_m": [
-        0.0012,
-        0.004,
-        0.0
-      ],
-      "rgba": [
-        0.6899999976158142,
-        0.3199999928474426,
-        0.20999999344348907,
         1.0
       ],
       "collision": false,
@@ -15606,6 +17237,35 @@
       "mesh_id": -1
     },
     {
+      "name": "segment_23_muscle_quadrant_2",
+      "body": 24,
+      "type": 3,
+      "position": [
+        0.0,
+        0.0028731882935555965,
+        -0.0028731882935555965
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.0,
+        -0.7071067811865475,
+        0.0
+      ],
+      "half_size_m": [
+        0.0012,
+        0.004,
+        0.0
+      ],
+      "rgba": [
+        0.6899999976158142,
+        0.3199999928474426,
+        0.20999999344348907,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
       "name": "segment_23_muscle_quadrant_3",
       "body": 24,
       "type": 3,
@@ -15665,7 +17325,7 @@
     }
   ],
   "constraints": [],
-  "digest": "7687426ce736983704a1d9b1ae1d36dc57431ffebe9cab075a5ff319444632a6",
+  "digest": "bd9830fe7e7dff95673d8a9e859d0eb1cc685b861d0458a18b0c8819da056bf7",
   "profile_assumptions": "sim/content/embodiments/celegans-simulation-v2.json",
-  "profile_assumptions_sha256": "084cb0eef89ca1316cb118176c0b7c2240d7d2b2f2515c03f16462c59e418380"
+  "profile_assumptions_sha256": "730d10c6055f5f667294df87d1503c38311d62d2a27cc5926baa5c0a7054cb42"
 }

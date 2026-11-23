@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // QA-only observer, copied into an isolated server pack. Never distributed.
 import { world, system, ScriptEventSource } from '@minecraft/server';
 import { content } from './content.generated.js';

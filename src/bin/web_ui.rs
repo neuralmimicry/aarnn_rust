@@ -1,4 +1,8 @@
 #![recursion_limit = "2048"]
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 
 use aarnn_rust::auth_store::{
     FileOidcPendingStore, FileSessionStore, OidcPendingRecord, SessionIdentityRecord, SessionRecord,
@@ -8048,6 +8052,7 @@ async fn build_aer_batch(
             is_backward,
             aer_payload: exchange.aer_payload,
             aer_base: exchange.aer_base,
+            membrane_v: Vec::new(),
         });
     }
 
@@ -8059,6 +8064,7 @@ async fn build_aer_batch(
         is_backward,
         aer_payload,
         aer_base,
+        membrane_v: Vec::new(),
     })
 }
 

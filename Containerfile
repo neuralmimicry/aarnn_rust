@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 # Multi-arch Containerfile for AARNN role-specific workloads.
 # Target Architectures: linux/amd64, linux/arm64
 # Base: Ubuntu 24.04

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 package org.neuralmimicry.minecraft;
 import com.google.gson.Gson;
 import java.nio.file.*;

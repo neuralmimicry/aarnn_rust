@@ -8,7 +8,7 @@
   "exact_replica": "pending OEM variant and calibration",
   "controller_transfer": "legacy-native-projections-v1; native MuJoCo engineering adapter; calibration unvalidated",
   "source": "scripts/embodiment_legacy.py:build",
-  "source_digest": "2f4cd1909a47cd031ec8b5e099c1bb8737248320f6dd6c70fab87d8ff166f163",
+  "source_digest": "a2f0a10b13d7e755b75aca98929838ce2987f528a83c351b97123c5f4089ad5f",
   "policy_digest": "35a2dbc6477ae9308c4f5eae4d09ccffc2f7aadce2cb54ce29018d63e43b9e2f",
   "io": {
     "schema_version": 1,
@@ -460,11 +460,11 @@
           0
         ],
         "direction": [
-          -1.0,
-          1.2246467991473532e-16,
-          0
+          0,
+          0,
+          -1
         ],
-        "angle_rad": 0.08
+        "angle_rad": 0.3
       },
       {
         "name": "dros_s_23_prox_13",
@@ -9228,7 +9228,7 @@
       "neutral": "zero active drive on empty history; no twitch or oscillator",
       "fidelity": "versioned engineering projection; no learned task or biological calibration claim"
     },
-    "digest": "d61c6d74db2cabb8d82cf1043539f9e4084a0cb0016f4e5b782c7ce1c34ac7ee",
+    "digest": "b5887b9ed5b667d74ca87bbbd1bb85cb7dd6b15d818ea57b36306b0b38a5566e",
     "neural_sensory_names": [
       "720575940626979621",
       "720575940628908548",
@@ -10540,82 +10540,12 @@
       ],
       "position_readout": true,
       "velocity_limit": 10.0
-    },
-    {
-      "name": "left_wing_flap",
-      "joint": "left_wing_flap",
-      "control_range": [
-        -0.52,
-        0.52
-      ],
-      "effort_range": [
-        -0.02,
-        0.02
-      ],
-      "gear": [
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0
-      ],
-      "neutral": 0,
-      "fault": "zero-active-effort",
-      "encoding": "legacy-native-projections-v1",
-      "readout": [
-        {
-          "channel": 3,
-          "coefficient": 0.62
-        },
-        {
-          "channel": 17,
-          "coefficient": -0.38
-        }
-      ],
-      "position_readout": true,
-      "velocity_limit": 40.0
-    },
-    {
-      "name": "right_wing_flap",
-      "joint": "right_wing_flap",
-      "control_range": [
-        -0.52,
-        0.52
-      ],
-      "effort_range": [
-        -0.02,
-        0.02
-      ],
-      "gear": [
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0
-      ],
-      "neutral": 0,
-      "fault": "zero-active-effort",
-      "encoding": "legacy-native-projections-v1",
-      "readout": [
-        {
-          "channel": 11,
-          "coefficient": 0.62
-        },
-        {
-          "channel": 29,
-          "coefficient": -0.38
-        }
-      ],
-      "position_readout": true,
-      "velocity_limit": 40.0
     }
   ],
-  "native_mjcf_sha256": "6bc0b40e9a15b261a2d03c05cb7af35e7e49853ffb7378063788830d231a6b6d",
+  "native_mjcf_sha256": "1c791f17db9f71ffc1cea0ecc7fd423e80b42bfad6e767e17c5cbeaca9bb1a1d",
   "source_licence": "repository-original",
   "assumptions": "sim/content/embodiments/policy.json",
-  "total_mass_kg": 0.010399999999999998,
+  "total_mass_kg": 0.010299999999999998,
   "scene": {
     "version": "native-habitats-v1",
     "habitat_id": "orchard",
@@ -10668,12 +10598,12 @@
         "position": [
           0.0,
           -0.55,
-          0.019250000000000003
+          0.22000000000000003
         ],
         "size": [
           1.1,
           0.013750000000000002,
-          0.038500000000000006
+          0.44000000000000006
         ],
         "colour": [
           0.42,
@@ -10682,7 +10612,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -13903,11 +13833,47 @@
         "internal": false
       }
     ],
-    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
+    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model; quasi-steady wing-blade aerodynamics (engineering air model, not CFD)",
+    "aerodynamics": {
+      "model": "quasi-steady-panel-v2",
+      "density_kg_m3": 1.225,
+      "polars": {
+        "insect_wing": {
+          "lift_slope_per_rad": 4.5,
+          "lift_max": 1.5,
+          "drag_zero": 0.08,
+          "drag_induced": 0.15,
+          "drag_stall": 6.0
+        }
+      },
+      "panels": [
+        {
+          "body": "left_wing_blade",
+          "point_m": [
+            0.0,
+            0.041999999999999996,
+            0.0
+          ],
+          "area_m2": 0.0011780972450961724,
+          "polar": "insect_wing"
+        },
+        {
+          "body": "right_wing_blade",
+          "point_m": [
+            0.0,
+            -0.041999999999999996,
+            0.0
+          ],
+          "area_m2": 0.0011780972450961724,
+          "polar": "insect_wing"
+        }
+      ],
+      "note": "quasi-steady wing blades at the stroke and wing-rotation velocity; engineering estimate"
+    }
   },
-  "scene_sources_sha256": "069c61ec98a416e5f5e95f67d33376ebbee22acab25e807a3a437a7c7f6da924",
-  "anatomy_sources_sha256": "99d64c74a569f856bab8839e8df2ae3c45eb1bf18bbc79e677fcf0301356111d",
-  "neural_sources_sha256": "ef1ae7875a7b4426ed37b8b815868929cb105df00974f3c82319f42f3813bd75",
+  "scene_sources_sha256": "a715a28f67ac75c9624deb144618f412dae8688b833c24e07b4ae9e8838d2884",
+  "anatomy_sources_sha256": "76e90c0ee8947775dbfb7ae187162c7c383557a5343383f64af84d2e625f2bd1",
+  "neural_sources_sha256": "491b1c8df3570eda7bb994493ecd7617ca21066362363aaaec542de36deab729",
   "bodies": [
     {
       "name": "thorax",
@@ -14989,8 +14955,8 @@
       "parent": 1,
       "position": [
         0.0,
-        0.025,
-        0.01
+        0.02,
+        0.012
       ],
       "quaternion_wxyz": [
         1.0,
@@ -15000,8 +14966,8 @@
       ],
       "world_position": [
         0.0,
-        0.025,
-        0.09999999999999999
+        0.02,
+        0.102
       ],
       "world_quaternion_wxyz": [
         1.0,
@@ -15009,10 +14975,53 @@
         0.0,
         0.0
       ],
-      "mass_kg": 0.0001,
+      "mass_kg": 1e-05,
       "com_m": [
         0.0,
+        0.003,
+        0.0
+      ],
+      "inertia_orientation_wxyz": [
+        0.7071067811865476,
+        0.7071067811865475,
         0.0,
+        -0.0
+      ],
+      "diagonal_inertia_kgm2": [
+        4.7772727272727275e-11,
+        4.7772727272727275e-11,
+        4.818181818181819e-12
+      ]
+    },
+    {
+      "name": "left_wing_blade",
+      "parent": 26,
+      "position": [
+        0.0,
+        0.006,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "world_position": [
+        0.0,
+        0.026000000000000002,
+        0.102
+      ],
+      "world_quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mass_kg": 4e-05,
+      "com_m": [
+        0.0,
+        0.03,
         0.0
       ],
       "inertia_orientation_wxyz": [
@@ -15022,9 +15031,9 @@
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.2520000000000004e-08,
-        1.2520000000000004e-08,
-        2.5000000000000005e-08
+        7.20128e-09,
+        1.2512800000000003e-09,
+        8.45e-09
       ]
     },
     {
@@ -15032,8 +15041,8 @@
       "parent": 1,
       "position": [
         0.0,
-        -0.025,
-        0.01
+        -0.02,
+        0.012
       ],
       "quaternion_wxyz": [
         1.0,
@@ -15043,8 +15052,8 @@
       ],
       "world_position": [
         0.0,
-        -0.025,
-        0.09999999999999999
+        -0.02,
+        0.102
       ],
       "world_quaternion_wxyz": [
         1.0,
@@ -15052,10 +15061,53 @@
         0.0,
         0.0
       ],
-      "mass_kg": 0.0001,
+      "mass_kg": 1e-05,
       "com_m": [
         0.0,
+        -0.003,
+        0.0
+      ],
+      "inertia_orientation_wxyz": [
+        0.7071067811865476,
+        -0.7071067811865475,
         0.0,
+        0.0
+      ],
+      "diagonal_inertia_kgm2": [
+        4.7772727272727275e-11,
+        4.7772727272727275e-11,
+        4.818181818181819e-12
+      ]
+    },
+    {
+      "name": "right_wing_blade",
+      "parent": 28,
+      "position": [
+        0.0,
+        -0.006,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "world_position": [
+        0.0,
+        -0.026000000000000002,
+        0.102
+      ],
+      "world_quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mass_kg": 4e-05,
+      "com_m": [
+        0.0,
+        -0.03,
         0.0
       ],
       "inertia_orientation_wxyz": [
@@ -15065,9 +15117,9 @@
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.2520000000000004e-08,
-        1.2520000000000004e-08,
-        2.5000000000000005e-08
+        7.20128e-09,
+        1.2512800000000003e-09,
+        8.45e-09
       ]
     }
   ],
@@ -15582,18 +15634,18 @@
         0.0
       ],
       "axis": [
-        1.0,
         0.0,
-        0.0
+        0.0,
+        1.0
       ],
       "range": [
-        -0.52,
-        0.52
+        -1.6,
+        1.6
       ],
       "limited": true
     },
     {
-      "name": "right_wing_flap",
+      "name": "left_wing_pitch",
       "body": 27,
       "type": 3,
       "position": [
@@ -15602,13 +15654,53 @@
         0.0
       ],
       "axis": [
-        1.0,
         0.0,
+        1.0,
         0.0
       ],
       "range": [
-        -0.52,
-        0.52
+        -1.4,
+        1.4
+      ],
+      "limited": true
+    },
+    {
+      "name": "right_wing_flap",
+      "body": 28,
+      "type": 3,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      "range": [
+        -1.6,
+        1.6
+      ],
+      "limited": true
+    },
+    {
+      "name": "right_wing_pitch",
+      "body": 29,
+      "type": 3,
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "range": [
+        -1.4,
+        1.4
       ],
       "limited": true
     }
@@ -15679,7 +15771,7 @@
       "position": [
         0.0,
         -0.55,
-        0.019250000000000003
+        0.22000000000000003
       ],
       "quaternion_wxyz": [
         1.0,
@@ -15690,13 +15782,13 @@
       "half_size_m": [
         0.55,
         0.006875000000000001,
-        0.019250000000000003
+        0.22000000000000003
       ],
       "rgba": [
         0.41999998688697815,
         0.5,
         0.4699999988079071,
-        1.0
+        0.20000000298023224
       ],
       "collision": true,
       "mesh_id": -1
@@ -22227,41 +22319,41 @@
       "mesh_id": -1
     },
     {
-      "name": "left_wing_collision",
+      "name": "left_wing_hub",
       "body": 26,
-      "type": 4,
+      "type": 3,
       "position": [
         0.0,
-        0.0,
+        0.003,
         0.0
       ],
       "quaternion_wxyz": [
-        1.0,
+        0.7071067811865476,
+        0.7071067811865475,
         0.0,
-        0.0,
-        0.0
+        -0.0
       ],
       "half_size_m": [
-        0.025,
-        0.025,
-        0.001
+        0.001,
+        0.003,
+        0.0
       ],
       "rgba": [
-        0.4000000059604645,
         0.44999998807907104,
-        0.30000001192092896,
+        0.3499999940395355,
+        0.20000000298023224,
         1.0
       ],
-      "collision": true,
+      "collision": false,
       "mesh_id": -1
     },
     {
-      "name": "right_wing_collision",
+      "name": "left_wing_membrane",
       "body": 27,
       "type": 4,
       "position": [
         0.0,
-        0.0,
+        0.03,
         0.0
       ],
       "quaternion_wxyz": [
@@ -22271,24 +22363,353 @@
         0.0
       ],
       "half_size_m": [
-        0.025,
-        0.025,
-        0.001
+        0.0125,
+        0.03,
+        0.0004
       ],
       "rgba": [
-        0.4000000059604645,
+        0.75,
+        0.800000011920929,
+        0.8500000238418579,
+        0.44999998807907104
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "left_wing_vein_0",
+      "body": 27,
+      "type": 6,
+      "position": [
+        0.006,
+        0.0276,
+        0.0005
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0004,
+        0.026496,
+        0.0002
+      ],
+      "rgba": [
+        0.3799999952316284,
+        0.33000001311302185,
+        0.25,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "left_wing_vein_1",
+      "body": 27,
+      "type": 6,
+      "position": [
+        0.0,
+        0.0294,
+        0.0005
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0004,
+        0.028224,
+        0.0002
+      ],
+      "rgba": [
+        0.3799999952316284,
+        0.33000001311302185,
+        0.25,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "left_wing_vein_2",
+      "body": 27,
+      "type": 6,
+      "position": [
+        -0.006,
+        0.0255,
+        0.0005
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0004,
+        0.02448,
+        0.0002
+      ],
+      "rgba": [
+        0.3799999952316284,
+        0.33000001311302185,
+        0.25,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "right_wing_hub",
+      "body": 28,
+      "type": 3,
+      "position": [
+        0.0,
+        -0.003,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.7071067811865475,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.001,
+        0.003,
+        0.0
+      ],
+      "rgba": [
         0.44999998807907104,
-        0.30000001192092896,
+        0.3499999940395355,
+        0.20000000298023224,
         1.0
       ],
-      "collision": true,
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "right_wing_membrane",
+      "body": 29,
+      "type": 4,
+      "position": [
+        0.0,
+        -0.03,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0125,
+        0.03,
+        0.0004
+      ],
+      "rgba": [
+        0.75,
+        0.800000011920929,
+        0.8500000238418579,
+        0.44999998807907104
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "right_wing_vein_0",
+      "body": 29,
+      "type": 6,
+      "position": [
+        0.006,
+        -0.0276,
+        0.0005
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0004,
+        0.026496,
+        0.0002
+      ],
+      "rgba": [
+        0.3799999952316284,
+        0.33000001311302185,
+        0.25,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "right_wing_vein_1",
+      "body": 29,
+      "type": 6,
+      "position": [
+        0.0,
+        -0.0294,
+        0.0005
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0004,
+        0.028224,
+        0.0002
+      ],
+      "rgba": [
+        0.3799999952316284,
+        0.33000001311302185,
+        0.25,
+        0.800000011920929
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "right_wing_vein_2",
+      "body": 29,
+      "type": 6,
+      "position": [
+        -0.006,
+        -0.0255,
+        0.0005
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.0004,
+        0.02448,
+        0.0002
+      ],
+      "rgba": [
+        0.3799999952316284,
+        0.33000001311302185,
+        0.25,
+        0.800000011920929
+      ],
+      "collision": false,
       "mesh_id": -1
     }
   ],
   "constraints": [],
-  "digest": "6c99248005066cb771945ad92f1fea8799f18aaf3543a84a679adf0c28114ed7",
+  "flight": {
+    "model": "resonant-flight-v1",
+    "wingbeat_hz": 40.0,
+    "stroke_inertia_kg_m2": 2.6042777272727273e-07,
+    "stroke_stiffness_n_m_per_rad": 0.016450042187999937,
+    "drive_stiffness_n_m_per_rad": 0.03,
+    "drive_damping_n_m_s_per_rad": 0.0005,
+    "drive_torque_limit_n_m": 0.2,
+    "amplitude_max_rad": 1.2,
+    "centre_max_rad": 0.4,
+    "fold_rad": 1.45,
+    "recruitment": [
+      0.2,
+      0.5
+    ],
+    "hinge_angle_rad": 0.5,
+    "hinge_rate_rad_s": 50.0,
+    "hinge_lead_rad": 0.5,
+    "hinge_stiffness_n_m_per_rad": 0.002,
+    "wings": [
+      {
+        "side": "left",
+        "stroke_joint": "left_wing_flap",
+        "pitch_joint": "left_wing_pitch"
+      },
+      {
+        "side": "right",
+        "stroke_joint": "right_wing_flap",
+        "pitch_joint": "right_wing_pitch"
+      }
+    ],
+    "commands": [
+      {
+        "name": "power",
+        "readout": [
+          {
+            "channel": 12,
+            "coefficient": 0.5
+          },
+          {
+            "channel": 36,
+            "coefficient": 0.5
+          }
+        ],
+        "decode_tau_s": 0.008
+      },
+      {
+        "name": "amplitude_left",
+        "readout": [
+          {
+            "channel": 14,
+            "coefficient": 1.0
+          }
+        ],
+        "decode_tau_s": 0.008
+      },
+      {
+        "name": "amplitude_right",
+        "readout": [
+          {
+            "channel": 38,
+            "coefficient": 1.0
+          }
+        ],
+        "decode_tau_s": 0.008
+      },
+      {
+        "name": "centre_left",
+        "readout": [
+          {
+            "channel": 6,
+            "coefficient": 1.0
+          },
+          {
+            "channel": 22,
+            "coefficient": -1.0
+          }
+        ],
+        "decode_tau_s": 0.008
+      },
+      {
+        "name": "centre_right",
+        "readout": [
+          {
+            "channel": 30,
+            "coefficient": 1.0
+          },
+          {
+            "channel": 46,
+            "coefficient": -1.0
+          }
+        ],
+        "decode_tau_s": 0.008
+      }
+    ],
+    "note": "shared thoracic phase at the stroke resonance; neural power, per-side amplitude and stroke centre; engineering surrogate of asynchronous flight muscle and steering muscles, not measured physiology"
+  },
+  "digest": "db78019b6232305dd6f23dc6f90681bcd44e8db3a561d20a8738b09593376868",
   "profile_assumptions": "sim/content/embodiments/legacy-native-v1.json",
-  "profile_assumptions_sha256": "ba3bc61514d0e72e95a905f7f319682af6842d996dcac1489c021a316d08c5ea",
+  "profile_assumptions_sha256": "fa7bfbfe48e68fbcd425dbf624828672cb3221e75feb9dc54c92923b6c348144",
   "neural_targets": [
     "mujoco"
   ]

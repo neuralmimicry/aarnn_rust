@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // Common Scilab helpers for FPAA-oriented AARNN kernel simulation.
 
 function y = aarnn_clamp(x, lo, hi)

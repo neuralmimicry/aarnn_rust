@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Read-only installed-toolchain inventory; presence never proves execution.
 
 Optional SSH hosts must be explicitly selected through NM_EMBODIMENT_QA_SSH.

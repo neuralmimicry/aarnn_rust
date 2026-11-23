@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use crate::engine::{EngineActivity, EnginePayloadKind, EngineStatus, EngineTopologySnapshot};
 use crate::morphology_contract::DisplaySnapshot;
 use anyhow::{Context, anyhow};

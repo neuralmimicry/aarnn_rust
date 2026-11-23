@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // NmSimulationManager.cs — Scene singleton that tracks all AARNN robots.
 // Compatible with Unity 2022.3 LTS+.
 

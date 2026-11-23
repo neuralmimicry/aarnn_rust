@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 /* AARNN-AER/1 browser adapter. Generated/portable protocol logic only. */
 (function (global) {
   "use strict";

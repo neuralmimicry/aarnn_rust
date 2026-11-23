@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Reserve BDS listener ports and isolate per-launch settings without changing originals."""
 from contextlib import contextmanager
 import errno

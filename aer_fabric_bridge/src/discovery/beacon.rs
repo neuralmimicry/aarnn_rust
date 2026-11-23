@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use crate::aer::SynapseId;
 use crate::discovery::{NodeIdentity, PeerTable, PeerUpsertOutcome, SlotAllocator};
 use crate::routing::{BridgeRoute, BridgeRouteTable, SynapseRange};

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Prepare isolated Minecraft instances for a NAO social run; never alter installed worlds."""
 import json
 import os

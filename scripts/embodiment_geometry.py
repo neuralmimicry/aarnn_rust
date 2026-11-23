@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Versioned convex primitive tessellation shared by game-engine factories.
 
 Sphere/ellipsoid/capsule/cylinder collision hulls are finite convex

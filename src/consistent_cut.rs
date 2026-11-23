@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Asynchronous global-virtual-time and consistent-cut coordination.
 //!
 //! A cut is complete only after every participant has reported and every

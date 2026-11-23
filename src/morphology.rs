@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! # Biological Morphology and Developmental Simulation
 //!
 //! This module implements the dynamic 3D physical growth and structural plasticity
@@ -1386,6 +1390,33 @@ fn dendrite_layout_for_type(type_name: Option<&str>) -> DendriteLayout {
 }
 
 #[inline]
+/// Growth propensity of a cell type: its synaptic gain relative to the
+/// network's base gain. `synaptic_gain` is the weight scale - designed
+/// circuits use 100-500 so their weights read in mV/ms - and used raw it made
+/// every designed neuron sprout and extend ~100x too often: growth ran away
+/// (cost per step rising without bound) and swamped the circuit. Relative to
+/// the base, a type with stronger synapses still grows faster; networks with
+/// base gain 1 (connectome imports) are unchanged.
+fn growth_gain_factor(config: &crate::config::NetworkConfig, type_gain: f64) -> f32 {
+    let base = config.aarnn_bio.synaptic_gain.abs().max(1.0e-6);
+    (type_gain / base) as f32
+}
+
+#[cfg(test)]
+mod growth_gain_tests {
+    use super::growth_gain_factor;
+
+    #[test]
+    fn growth_propensity_is_relative_to_the_network_gain() {
+        let mut cfg = crate::config::NetworkConfig::default();
+        cfg.aarnn_bio.synaptic_gain = 100.0;
+        assert!((growth_gain_factor(&cfg, 100.0) - 1.0).abs() < 1e-6, "designed circuit: nominal growth");
+        assert!((growth_gain_factor(&cfg, 500.0) - 5.0).abs() < 1e-6, "stronger type grows faster");
+        cfg.aarnn_bio.synaptic_gain = 1.0;
+        assert!((growth_gain_factor(&cfg, 14.0) - 14.0).abs() < 1e-6, "base-1 networks unchanged");
+    }
+}
+
 fn trunk_scale_for(dend_type: DendriteType, config: &crate::config::NetworkConfig) -> f32 {
     match dend_type {
         DendriteType::Apical => config.aarnn_apical_trunk_scale.max(0.05),
@@ -5520,7 +5551,7 @@ impl Morphology {
                     let mut local_branch_rate = config.branch_growth_rate;
                     if let Some(tname) = &soma.type_name {
                         if let Some(ntype) = config.neuron_types.iter().find(|t| &t.name == tname) {
-                            let factor = ntype.bio_params.synaptic_gain as f32;
+                            let factor = growth_gain_factor(config, ntype.bio_params.synaptic_gain);
                             local_trunk_rate *= factor;
                             local_branch_rate *= factor;
                         }
@@ -5697,7 +5728,7 @@ impl Morphology {
                 let mut local_branch_rate = config.branch_growth_rate;
                 if let Some(tname) = &soma.type_name {
                     if let Some(ntype) = config.neuron_types.iter().find(|t| &t.name == tname) {
-                        let factor = ntype.bio_params.synaptic_gain as f32;
+                        let factor = growth_gain_factor(config, ntype.bio_params.synaptic_gain);
                         local_trunk_rate *= factor;
                         local_branch_rate *= factor;
                     }
@@ -5889,7 +5920,7 @@ impl Morphology {
                 let mut local_sprout_p = sprout_p;
                 if let Some(tname) = &soma.type_name {
                     if let Some(ntype) = config.neuron_types.iter().find(|t| &t.name == tname) {
-                        local_sprout_p *= ntype.bio_params.synaptic_gain as f32;
+                        local_sprout_p *= growth_gain_factor(config, ntype.bio_params.synaptic_gain);
                     }
                 }
                 let effective_sprout_p = local_sprout_p * (0.4 + local_e * 2.0);
@@ -6155,7 +6186,7 @@ impl Morphology {
                 let soma = &somas_layer[j];
                 if let Some(tname) = &soma.type_name {
                     if let Some(ntype) = config.neuron_types.iter().find(|t| &t.name == tname) {
-                        local_sprout_p *= ntype.bio_params.synaptic_gain as f32;
+                        local_sprout_p *= growth_gain_factor(config, ntype.bio_params.synaptic_gain);
                     }
                 }
                 let effective_sprout_p = local_sprout_p * (1.0 + local_e * 5.0) * homeo_boost;

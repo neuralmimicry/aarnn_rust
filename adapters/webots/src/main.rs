@@ -1,17 +1,26 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Native Webots reference physics/AER controller. No production effect grant.
 use aarnn_embodiment::{
     actuation::Actuation,
     aer::{Binding, Capture, Client},
     force::panel_force,
-    motor::Coupling,
+    motor::{self, Coupling},
     schema,
+    vision::Cell,
 };
-use aarnn_webots::native::{Controller, Node};
+use aarnn_webots::{
+    legacy,
+    native::{Controller, Node},
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fs,
+    io::Write,
     path::PathBuf,
     sync::{
         Arc,
@@ -35,9 +44,35 @@ struct Config {
     diagnostic: Option<Diagnostic>,
     #[serde(default = "default_control")]
     control: String,
+    /// Wait for each reference reply before the next physics step (as the
+    /// MuJoCo `--lockstep` reference), so a slow brain receives every frame.
+    #[serde(default)]
+    lockstep: bool,
+    /// Managed startup gate: no physics step before this file exists.
+    arm_file: Option<PathBuf>,
+    /// Directory for a read-only `INSTANCE.jsonl` body/joint/sensor trace.
+    trace: Option<PathBuf>,
+    #[serde(default = "default_trace_every")]
+    trace_every: u64,
 }
 fn default_control() -> String {
     "auto".into()
+}
+fn default_trace_every() -> u64 {
+    25
+}
+/// One preserved legacy sensory name resolved to its Webots measurement.
+#[derive(Clone, Copy)]
+enum Source {
+    Angle(usize),
+    Contact(Node, Option<[f64; 3]>),
+    Accel(usize, usize),
+    Gyro(usize, usize),
+    Flow(usize, usize),
+    Depth(usize),
+    Pitch(usize),
+    Range(usize, f64),
+    Camera(usize, [usize; 2]),
 }
 #[derive(Deserialize)]
 struct Diagnostic {
@@ -95,8 +130,30 @@ fn main() -> Result<(), String> {
     let npc_enabled =
         aarnn_embodiment::npc::Control::parse(&config.control)?.npc(config.binding.is_some())?;
     let legacy = !aarnn_embodiment::projection::Projection::supported(&model);
-    if legacy && config.binding.is_some() {
-        return Err("This native graph's legacy sensory adapter is implemented in MuJoCo; use the preserved Webots legacy route or the MuJoCo physics service".into());
+    let unsupported: BTreeSet<&str> = model
+        .io
+        .sensors
+        .iter()
+        .map(|s| s.kind.as_str())
+        .filter(|k| !legacy::SUPPORTED.contains(k))
+        .collect();
+    if legacy && config.binding.is_some() && !unsupported.is_empty() {
+        return Err(format!(
+            "Webots legacy sensory adapter lacks {unsupported:?} (implemented in MuJoCo); use the preserved Webots legacy route or the MuJoCo physics service"
+        ));
+    }
+    if legacy
+        && config.binding.is_some()
+        && (model.profile_id == "zebrafish"
+            || model
+                .scene
+                .as_ref()
+                .is_some_and(|s| s.resistive_force.is_some()))
+    {
+        return Err("Webots native water/substrate forces are not implemented; use MuJoCo".into());
+    }
+    if config.trace_every == 0 || config.trace_every > 100_000 {
+        return Err("trace interval outside 1..=100000 steps".into());
     }
     let mut value: Value =
         serde_json::from_slice(&fs::read(&config.target).map_err(|e| e.to_string())?)
@@ -223,6 +280,105 @@ fn main() -> Result<(), String> {
     } else {
         vec![]
     };
+    // Preserved legacy names: resolve each to its Webots measurement once.
+    let mut sources = Vec::new();
+    let mut sense_bodies: Vec<Node> = Vec::new();
+    let mut sense_slots: HashMap<String, usize> = HashMap::new();
+    let mut cameras: Vec<(u16, [usize; 2], Vec<Cell>)> = Vec::new();
+    let mut camera_slots: HashMap<String, usize> = HashMap::new();
+    let mut proxies = BTreeSet::new();
+    if legacy && unsupported.is_empty() {
+        let target_index: HashMap<&str, usize> = target
+            .targets
+            .iter()
+            .enumerate()
+            .map(|(i, j)| (j.joint.as_str(), i))
+            .collect();
+        for s in &model.io.sensors {
+            if legacy::PROXY.contains(&s.kind.as_str()) {
+                proxies.insert(s.kind.clone());
+            }
+            let axis = s.axis.unwrap_or(0);
+            if axis >= 3 {
+                return Err("sensor axis outside XYZ".into());
+            }
+            let mut slot = |name: &Option<String>| -> Result<usize, String> {
+                let name = name.as_deref().ok_or("legacy sensor body absent")?;
+                if let Some(&i) = sense_slots.get(name) {
+                    return Ok(i);
+                }
+                sense_bodies.push(node(name)?);
+                sense_slots.insert(name.to_owned(), sense_bodies.len() - 1);
+                Ok(sense_bodies.len() - 1)
+            };
+            sources.push(match s.kind.as_str() {
+                "legacy-angle" => Source::Angle(
+                    *target_index
+                        .get(s.joint.as_deref().ok_or("legacy joint absent")?)
+                        .ok_or("legacy joint has no Webots sensor")?,
+                ),
+                "legacy-contact" => Source::Contact(
+                    node(s.body.as_deref().ok_or("legacy sensor body absent")?)?,
+                    s.direction,
+                ),
+                "legacy-accel" => Source::Accel(slot(&s.body)?, axis),
+                "legacy-gyro" => Source::Gyro(slot(&s.body)?, axis),
+                "legacy-flow" => Source::Flow(slot(&s.body)?, axis),
+                "legacy-depth" => Source::Depth(slot(&s.body)?),
+                "legacy-pitch" => Source::Pitch(slot(&s.body)?),
+                "legacy-range" => {
+                    if ranges.is_empty() {
+                        return Err("legacy range proxy needs the root laser rays".into());
+                    }
+                    Source::Range(
+                        legacy::nearest_ray(
+                            s.direction.ok_or("legacy ray direction absent")?,
+                            ranges.len(),
+                        ),
+                        s.angle_rad.ok_or("legacy range reach absent")?,
+                    )
+                }
+                "legacy-camera" => {
+                    let name = s.camera.clone().ok_or("legacy camera absent")?;
+                    let shape = s.retina_shape.ok_or("camera shape absent")?;
+                    if shape[0] == 0 || shape[1] == 0 || shape[0] * shape[1] > 192 {
+                        return Err("camera bound".into());
+                    }
+                    let index = match camera_slots.get(&name) {
+                        Some(&i) => i,
+                        None => {
+                            cameras.push((
+                                engine.sensor(&name, "camera")?,
+                                shape,
+                                vec![Cell::default(); shape[0] * shape[1]],
+                            ));
+                            camera_slots.insert(name, cameras.len() - 1);
+                            cameras.len() - 1
+                        }
+                    };
+                    let cell = s.cell.ok_or("camera cell absent")?;
+                    if cell[0] >= shape[0] || cell[1] >= shape[1] {
+                        return Err("camera cell outside retina".into());
+                    }
+                    let mode = match s.mode.as_deref() {
+                        Some("on") => 0,
+                        Some("off") => 1,
+                        Some("lum") => 2,
+                        Some("gradient") => 3,
+                        _ => return Err("camera mode".into()),
+                    };
+                    Source::Camera(index, [cell[0] * shape[1] + cell[1], mode])
+                }
+                _ => return Err(format!("unimplemented legacy sensor {} {}", s.name, s.kind)),
+            });
+        }
+    }
+    let mut previous_velocity: Vec<Option<[f64; 3]>> = vec![None; sense_bodies.len()];
+    let mut camera_unavailable = 0u64;
+    // Pose-only nodes of every body, for the trace (MuJoCo `body_xyz` order).
+    let trace_nodes: Vec<Node> = (1..=body_names.len())
+        .map(|i| engine.pose_node(&format!("{}_BODY_{}", config.instance_id, i)))
+        .collect::<Result<_, _>>()?;
     for &n in &roots {
         engine.save(n);
     }
@@ -259,10 +415,69 @@ fn main() -> Result<(), String> {
     let mut previous_retina = vec![0.; 192];
     let mut energy = 20000.;
     let mut sensors = vec![];
+    let mut submitted = 0u64;
+    let mut trace = match &config.trace {
+        Some(dir) => {
+            fs::create_dir_all(dir).map_err(|e| format!("trace {}: {e}", dir.display()))?;
+            let path = dir.join(format!("{}.jsonl", config.instance_id));
+            let mut writer = std::io::BufWriter::new(
+                fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .map_err(|e| format!("trace {}: {e}", path.display()))?,
+            );
+            let header = json!({"schema":"aarnn-webots-trace-v1","physics":"Webots R2025a (ODE)","instance_id":config.instance_id,"profile":model.profile_id,"brain_id":config.binding.as_ref().map(|b|&b.brain_id),"model_digest":model.digest,"io_digest":model.io.digest,"body_count":trace_nodes.len()+1,"actuated_joints":model.actuators.iter().map(|a|&a.joint).collect::<Vec<_>>(),"sensor_names":model.io.sensors.iter().map(|s|&s.name).collect::<Vec<_>>(),"output_names":model.io.output_names,"legacy_proxies":proxies,"lockstep":config.lockstep,"trace_every_steps":config.trace_every,"scope":"read-only physics/IO observation; no production commit or effect authority"});
+            writeln!(writer, "{header}").map_err(|e| e.to_string())?;
+            Some((path, writer, 0u64))
+        }
+        None => None,
+    };
+    // Data-timeout backstop identical to the MuJoCo lock-step reference.
+    let lockstep_deadline = Duration::from_millis(
+        (std::env::var("NM_AER_REFERENCE_DATA_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|v| v.clamp(1_000, 600_000))
+            .unwrap_or(0)
+            + 5_000)
+            .max(30_000),
+    );
+    // Managed startup: no physics step before the arm gate and handshake.
+    if let Some(c) = &client {
+        while !cancel.load(Ordering::Acquire) {
+            let status = c.status();
+            if let Some(fault) = status.fault {
+                return Err(format!("reference startup failed: {fault}"));
+            }
+            if status.ready && config.arm_file.as_ref().is_none_or(|p| p.is_file()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     let outcome = (|| -> Result<(), String> {
         for iteration in 0..config.steps {
             if cancel.load(Ordering::Acquire) {
                 break;
+            }
+            if config.lockstep
+                && let Some(c) = &client
+            {
+                let waited = Instant::now();
+                loop {
+                    let status = c.status();
+                    if let Some(fault) = status.fault {
+                        return Err(format!("reference transport failed: {fault}"));
+                    }
+                    if status.exchanges >= submitted || cancel.load(Ordering::Acquire) {
+                        break;
+                    }
+                    if waited.elapsed() >= lockstep_deadline {
+                        return Err("lock-step reply deadline exceeded".into());
+                    }
+                    std::thread::sleep(Duration::from_micros(250));
+                }
             }
             if config.reset_at == Some(iteration) {
                 client.take();
@@ -316,6 +531,9 @@ fn main() -> Result<(), String> {
             for (i, j) in target.targets.iter().enumerate() {
                 if let Some(aid) = j.actuator
                     && actuation.active(aid)
+                    && model.actuators[aid].velocity_limit.is_none_or(|limit| {
+                        motor::servo_speed_allows(controls[aid], q[i], velocity[i], limit)
+                    })
                 {
                     let command = controls[aid];
                     let scalar =
@@ -393,8 +611,96 @@ fn main() -> Result<(), String> {
                 .collect();
             let gyro_values = engine.vector(gyro, false)?;
             sensors.clear();
-            if legacy {
+            if legacy && sources.is_empty() {
                 sensors.resize(model.io.sensors.len(), 0.);
+            } else if legacy {
+                let states = sense_bodies
+                    .iter()
+                    .map(|n| engine.body(*n))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut frames: Vec<Vec<[f64; 4]>> = Vec::with_capacity(cameras.len());
+                for (tag, shape, cells) in &mut cameras {
+                    let image = engine.luminance(*tag);
+                    if image.is_err() {
+                        camera_unavailable += 1;
+                    }
+                    let mut out = Vec::with_capacity(cells.len());
+                    for (k, cell) in cells.iter_mut().enumerate() {
+                        let light = match &image {
+                            Ok((w, h, data)) => legacy::cell_luminance(
+                                data,
+                                [k / shape[1], k % shape[1]],
+                                *shape,
+                                *w,
+                                *h,
+                            ),
+                            Err(_) => 0.,
+                        };
+                        out.push(cell.sample(light, 0.002)?);
+                    }
+                    frames.push(out);
+                }
+                let specific: Vec<[f64; 3]> = states
+                    .iter()
+                    .zip(&previous_velocity)
+                    .map(|(st, previous)| {
+                        let v = [st.2[0], st.2[1], st.2[2]];
+                        legacy::local(
+                            st.1,
+                            legacy::specific_force(previous.unwrap_or(v), v, 0.002),
+                        )
+                    })
+                    .collect();
+                for (source, s) in sources.iter().zip(&model.io.sensors) {
+                    let mode = s.mode.as_deref();
+                    let value = match *source {
+                        Source::Angle(i) => legacy::angle(measured[i]),
+                        Source::Contact(n, None) => {
+                            if engine.contact(n) {
+                                1.
+                            } else {
+                                0.
+                            }
+                        }
+                        Source::Contact(n, Some(direction)) => {
+                            let (p, r, _, _) = engine.body(n)?;
+                            legacy::directional(p, r, &engine.contact_points(n), direction)
+                        }
+                        Source::Accel(b, axis) => legacy::inertial(specific[b], axis, mode, true),
+                        Source::Gyro(b, axis) => {
+                            let st = &states[b];
+                            legacy::inertial(
+                                legacy::local(st.1, [st.2[3], st.2[4], st.2[5]]),
+                                axis,
+                                mode,
+                                false,
+                            )
+                        }
+                        Source::Flow(b, axis) => {
+                            let st = &states[b];
+                            legacy::flow(
+                                legacy::local(st.1, [st.2[0], st.2[1], st.2[2]]),
+                                axis,
+                                mode,
+                            )
+                        }
+                        Source::Depth(b) => legacy::depth(states[b].0[2]),
+                        Source::Pitch(b) => legacy::pitch(states[b].1),
+                        Source::Range(ray, reach) => legacy::range_reading(
+                            engine.range(ranges[ray])?,
+                            reach,
+                            s.lookup.as_deref(),
+                        )?,
+                        Source::Camera(c, [k, m]) => frames[c][k][m],
+                    };
+                    if !value.is_finite() {
+                        return Err(format!("nonfinite sensor {}", s.name));
+                    }
+                    sensors.push(value.clamp(0., 1.));
+                }
+                for (previous, st) in previous_velocity.iter_mut().zip(&states) {
+                    *previous = Some([st.2[0], st.2[1], st.2[2]]);
+                }
             } else if crow {
                 let mut next_retina = Vec::with_capacity(192);
                 for &camera in &retina {
@@ -440,8 +746,15 @@ fn main() -> Result<(), String> {
                     0.,
                 ]);
             } else {
+                let gravity = if model.io.sensors.iter().any(|s| s.kind == "body_gravity") {
+                    let (_, r, _, _) = engine.body(root)?;
+                    inverse(r, [0., 0., -1.])
+                } else {
+                    [0.; 3]
+                };
                 for sensor in &model.io.sensors {
                     let value = match sensor.kind.as_str() {
+                        "body_gravity" => gravity[sensor.axis.ok_or("gravity axis")?],
                         "angle" => {
                             measured[indices[sensor.joint.as_ref().ok_or("sensor joint")?]]
                         }
@@ -465,12 +778,33 @@ fn main() -> Result<(), String> {
             if sensors.len() != model.io.sensors.len() {
                 return Err("ordered projection width mismatch".into());
             }
-            if client.as_ref().is_some_and(|c| c.status().ready) {
-                client.as_ref().unwrap().submit(Capture {
+            if client.as_ref().is_some_and(|c| c.status().ready)
+                && client.as_ref().unwrap().submit(Capture {
                     step,
                     timestamp_us: step.checked_mul(2000).ok_or("source clock overflow")?,
                     values: sensors.clone(),
-                });
+                })
+            {
+                submitted += 1;
+            }
+            if let Some((path, writer, records)) = &mut trace
+                && step.is_multiple_of(config.trace_every)
+                && *records < 200_000
+            {
+                let bodies = trace_nodes
+                    .iter()
+                    .map(|n| engine.origin(*n))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let joints: Vec<f64> = model
+                    .actuators
+                    .iter()
+                    .map(|a| indices.get(&a.joint).map_or(0., |&i| measured[i]))
+                    .collect();
+                let status = client.as_ref().map(Client::status);
+                let record = json!({"step":step,"reset_epoch":reset_epoch,"time_s":step as f64*0.002,"body_xyz":bodies,"joint_q":joints,"motor_rates":actuation.rates(),"disarmed":actuation.disarmed,"npc_control":actuation.npc_control,"sensors":sensors,"applied":actuation.applied,"expired":actuation.expired,"exchanges":status.as_ref().map(|s|s.exchanges),"output_code":status.as_ref().map(|s|s.output_code)});
+                writeln!(writer, "{record}")
+                    .map_err(|e| format!("trace {}: {e}", path.display()))?;
+                *records += 1;
             }
             if config.realtime {
                 deadline += Duration::from_millis(2);
@@ -489,7 +823,7 @@ fn main() -> Result<(), String> {
     let transport = client.as_ref().map(Client::status);
     client.take();
     let final_root = engine.body(root)?.0;
-    let result = json!({"schema_version":1,"status":if outcome.is_ok()&&transport.as_ref().is_none_or(|s|s.fault.is_none()){"pass"}else{"fail"},"scope":"native articulated physics and optional AER1 reference; no learned task/production commitment/parity claim","profile":model.profile_id,"instance_id":config.instance_id,"brain_id":config.binding.as_ref().map(|b|&b.brain_id),"model_digest":model.digest,"io_digest":model.io.digest,"steps":step,"reset_epoch":reset_epoch,"disarmed_at_stop":true,"npc_policy":aarnn_embodiment::npc::POLICY,"npc_steps":actuation.npc_steps,"controller_mode":if actuation.npc_control{"programmed-NPC"}else if config.diagnostic.is_some(){"diagnostic-mechanics"}else if config.binding.is_some(){"AER1-reference-untrained"}else{"silent-mechanics"},"initial_root":initial_root,"final_root":final_root,"initial_joints":initial_q,"final_joints":final_q,"sensor_values":sensors,"transport":transport,"applied":actuation.applied,"active_steps":active_steps,"expired":actuation.expired,"energy_J":if crow{Some(energy)}else{None},"elapsed_s":start.elapsed().as_secs_f64(),"error":outcome.as_ref().err()});
+    let result = json!({"schema_version":1,"status":if outcome.is_ok()&&transport.as_ref().is_none_or(|s|s.fault.is_none()){"pass"}else{"fail"},"scope":"native articulated physics and optional AER1 reference; no learned task/production commitment/parity claim","profile":model.profile_id,"instance_id":config.instance_id,"brain_id":config.binding.as_ref().map(|b|&b.brain_id),"model_digest":model.digest,"io_digest":model.io.digest,"steps":step,"reset_epoch":reset_epoch,"disarmed_at_stop":true,"npc_policy":aarnn_embodiment::npc::POLICY,"npc_steps":actuation.npc_steps,"controller_mode":if actuation.npc_control{"programmed-NPC"}else if config.diagnostic.is_some(){"diagnostic-mechanics"}else if config.binding.is_some(){"AER1-reference-untrained"}else{"silent-mechanics"},"initial_root":initial_root,"final_root":final_root,"initial_joints":initial_q,"final_joints":final_q,"sensor_values":sensors,"transport":transport,"applied":actuation.applied,"active_steps":active_steps,"expired":actuation.expired,"energy_J":if crow{Some(energy)}else{None},"elapsed_s":start.elapsed().as_secs_f64(),"error":outcome.as_ref().err(),"physics":"Webots R2025a (ODE)","time_s":step as f64*0.002,"lockstep":config.lockstep,"legacy_proxies":proxies,"camera_unavailable":camera_unavailable,"trace":trace.as_mut().map(|(path,writer,records)|json!({"path":path,"records":records,"flush_error":writer.flush().err().map(|e|e.to_string())}))});
     if let Some(parent) = config.output.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }

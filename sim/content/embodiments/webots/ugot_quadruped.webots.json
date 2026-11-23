@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "profile_id": "ugot_quadruped",
-  "model_digest": "aae0c5bef04935ef228d8351ed2ff58380041c64c0e0b454855db5ad88d101ee",
-  "io_digest": "a60b710e6cc50af65709f0293c40d9aa1eda4df05aa2249fa8bd53b4f18c4848",
+  "model_digest": "166174422b4926674ba5e39f1f6841cafb7b7064ea47d8b14fde4e917474ea91",
+  "io_digest": "667c2a92ff2bc09aaf0c56f4dde63d2d01223e1a8e711d8b6d06036d7ced6311",
   "targets": [
     {
       "joint": "leg_-1_-1_0",
@@ -17,13 +17,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.196133,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "leg_-1_-1_1",
@@ -38,18 +39,19 @@
         0.0,
         0.0
       ],
-      "gear": 0.196133,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
-      "joint": "leg_-1_-1_2",
-      "device": "leg_-1_-1_2",
-      "sensor": "leg_-1_-1_2_position",
+      "joint": "leg_-1_1_0",
+      "device": "leg_-1_1_0",
+      "sensor": "leg_-1_1_0_position",
       "body": 4,
       "kind": "rotational",
       "actuator": 2,
@@ -59,18 +61,19 @@
         0.0,
         0.0
       ],
-      "gear": 0.196133,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
-      "joint": "leg_-1_1_0",
-      "device": "leg_-1_1_0",
-      "sensor": "leg_-1_1_0_position",
+      "joint": "leg_-1_1_1",
+      "device": "leg_-1_1_1",
+      "sensor": "leg_-1_1_1_position",
       "body": 5,
       "kind": "rotational",
       "actuator": 3,
@@ -80,18 +83,19 @@
         0.0,
         0.0
       ],
-      "gear": 0.196133,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
-      "joint": "leg_-1_1_1",
-      "device": "leg_-1_1_1",
-      "sensor": "leg_-1_1_1_position",
+      "joint": "leg_1_-1_0",
+      "device": "leg_1_-1_0",
+      "sensor": "leg_1_-1_0_position",
       "body": 6,
       "kind": "rotational",
       "actuator": 4,
@@ -101,18 +105,19 @@
         0.0,
         0.0
       ],
-      "gear": 0.196133,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
-      "joint": "leg_-1_1_2",
-      "device": "leg_-1_1_2",
-      "sensor": "leg_-1_1_2_position",
+      "joint": "leg_1_-1_1",
+      "device": "leg_1_-1_1",
+      "sensor": "leg_1_-1_1_position",
       "body": 7,
       "kind": "rotational",
       "actuator": 5,
@@ -122,18 +127,19 @@
         0.0,
         0.0
       ],
-      "gear": 0.196133,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
-      "joint": "leg_1_-1_0",
-      "device": "leg_1_-1_0",
-      "sensor": "leg_1_-1_0_position",
+      "joint": "leg_1_1_0",
+      "device": "leg_1_1_0",
+      "sensor": "leg_1_1_0_position",
       "body": 8,
       "kind": "rotational",
       "actuator": 6,
@@ -143,18 +149,19 @@
         0.0,
         0.0
       ],
-      "gear": 0.196133,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
-      "joint": "leg_1_-1_1",
-      "device": "leg_1_-1_1",
-      "sensor": "leg_1_-1_1_position",
+      "joint": "leg_1_1_1",
+      "device": "leg_1_1_1",
+      "sensor": "leg_1_1_1_position",
       "body": 9,
       "kind": "rotational",
       "actuator": 7,
@@ -164,102 +171,19 @@
         0.0,
         0.0
       ],
-      "gear": 0.196133,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
-    },
-    {
-      "joint": "leg_1_-1_2",
-      "device": "leg_1_-1_2",
-      "sensor": "leg_1_-1_2_position",
-      "body": 10,
-      "kind": "rotational",
-      "actuator": 8,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "gear": 0.196133,
-      "force_range": [
-        -1000000.0,
-        1000000.0
-      ],
-      "damping": 0.05,
-      "driven": true
-    },
-    {
-      "joint": "leg_1_1_0",
-      "device": "leg_1_1_0",
-      "sensor": "leg_1_1_0_position",
-      "body": 11,
-      "kind": "rotational",
-      "actuator": 9,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "gear": 0.196133,
-      "force_range": [
-        -1000000.0,
-        1000000.0
-      ],
-      "damping": 0.05,
-      "driven": true
-    },
-    {
-      "joint": "leg_1_1_1",
-      "device": "leg_1_1_1",
-      "sensor": "leg_1_1_1_position",
-      "body": 12,
-      "kind": "rotational",
-      "actuator": 10,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "gear": 0.196133,
-      "force_range": [
-        -1000000.0,
-        1000000.0
-      ],
-      "damping": 0.05,
-      "driven": true
-    },
-    {
-      "joint": "leg_1_1_2",
-      "device": "leg_1_1_2",
-      "sensor": "leg_1_1_2_position",
-      "body": 13,
-      "kind": "rotational",
-      "actuator": 11,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "gear": 0.196133,
-      "force_range": [
-        -1000000.0,
-        1000000.0
-      ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     }
   ],
   "constraints": [],
   "fixed_world_bodies": [],
-  "composite_mass_kg": 2.5,
+  "composite_mass_kg": 2.1,
   "controller_transfer": "untrained",
   "calibration": "ODE contact/constraint response not calibrated; all self-collision suppressed; mesh collisions use Webots dynamic convex policy; fixed-link masses merged exactly",
   "coordinates": "X-forward Y-left Z-up; SI",
@@ -289,12 +213,12 @@
         "position": [
           0.0,
           1.3,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -316,12 +240,12 @@
         "position": [
           0.0,
           -1.3,
-          0.045500000000000006
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.09100000000000001
+          0.42
         ],
         "colour": [
           0.42,
@@ -330,7 +254,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -343,12 +267,12 @@
         "position": [
           1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -370,12 +294,12 @@
         "position": [
           -1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -3230,5 +3154,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 109,
-  "digest": "2d678bc696c65f0452d405c3ea9cbbc73532d9b48a8a2ffd66e57decd6cb5fea"
+  "digest": "d74fc55ea3f3f2bdbc7d2087cccf716e62e7bc0b859043e8a4741e4b5334ab26"
 }

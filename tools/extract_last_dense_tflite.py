@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """
 Extract the last Dense-like head from a TFLite model and emit a minimal
 aarnn_rust Runner snapshot JSON (network.json) that preserves only

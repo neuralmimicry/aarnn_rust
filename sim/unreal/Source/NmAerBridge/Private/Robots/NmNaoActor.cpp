@@ -1,6 +1,10 @@
-// Copyright NeuralMimicry. All Rights Reserved.
+// SPDX-FileCopyrightText: NEURALMIMICRY LTD
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 
 #include "Robots/NmNaoActor.h"
+#include "Robots/NmNaoOem.generated.h"
 #include "NmNaoChatComponent.h"
 
 #include "Components/StaticMeshComponent.h"
@@ -12,6 +16,127 @@
 #include "UObject/ConstructorHelpers.h"
 
 // ============================================================================
+// OEM NAO tables (NmNaoOem.generated.h, scripts/generate_nao_engine_tables.py)
+// ============================================================================
+
+namespace
+{
+// ENaoJoint order.
+const TCHAR* const NaoJointNames[UNmNaoComponent::NumJoints] = {
+    TEXT("HeadYaw"), TEXT("HeadPitch"),
+    TEXT("LShoulderPitch"), TEXT("LShoulderRoll"), TEXT("LElbowYaw"), TEXT("LElbowRoll"), TEXT("LWristYaw"),
+    TEXT("RShoulderPitch"), TEXT("RShoulderRoll"), TEXT("RElbowYaw"), TEXT("RElbowRoll"), TEXT("RWristYaw"),
+    TEXT("LHipYawPitch"), TEXT("LHipRoll"), TEXT("LHipPitch"), TEXT("LKneePitch"), TEXT("LAnklePitch"), TEXT("LAnkleRoll"),
+    TEXT("RHipYawPitch"), TEXT("RHipRoll"), TEXT("RHipPitch"), TEXT("RKneePitch"), TEXT("RAnklePitch"), TEXT("RAnkleRoll"),
+};
+
+/** Index of a record link (joint) by name; -1 when absent. */
+int32 OemLink(const TCHAR* Name)
+{
+    for (int32 i = 0; i < NmNaoOem::NumLinks; ++i)
+    {
+        if (FCString::Strcmp(NmNaoOem::Links[i].Name, Name) == 0)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/** Record link of ENaoJoint j. */
+int32 JointLink(int32 j)
+{
+    static const TArray<int32> Map = []
+    {
+        TArray<int32> M;
+        for (const TCHAR* Name : NaoJointNames)
+        {
+            M.Add(OemLink(Name));
+        }
+        return M;
+    }();
+    return Map.IsValidIndex(j) ? Map[j] : -1;
+}
+
+/** Rest pose of a joint (its wake pose, else the zero pose), rad. */
+double RestRad(const NmNaoOem::FLink& K)
+{
+    return FMath::Clamp(K.bWake ? K.WakeFrom : 0.0, K.Lo, K.Hi);
+}
+
+/** MuJoCo frame (x fwd, y left, z up; m) to Unreal (x fwd, y right, z up; cm). */
+FVector Oem(const double P[3])
+{
+    return FVector(P[0] * 100.0, -P[1] * 100.0, P[2] * 100.0);
+}
+
+/** Link origin of the OEM zero pose relative to the torso frame, cm. */
+FVector LinkOrigin(int32 L)
+{
+    FVector P = FVector::ZeroVector;
+    for (int32 i = L; i >= 0; i = NmNaoOem::Links[i].Parent)
+    {
+        P += Oem(NmNaoOem::Links[i].PositionM);
+    }
+    return P;
+}
+
+FVector JointOrigin(const TCHAR* Name)
+{
+    const int32 L = OemLink(Name);
+    return L >= 0 ? LinkOrigin(L) : FVector::ZeroVector;
+}
+
+/** Summed OEM mass of named links; a hand includes its phalanges. */
+double OemMass(std::initializer_list<const TCHAR*> Names)
+{
+    double Kg = 0.0;
+    for (const TCHAR* Name : Names)
+    {
+        const int32 L = OemLink(Name);
+        if (L < 0)
+        {
+            continue;
+        }
+        Kg += NmNaoOem::Links[L].MassKg;
+        for (int32 c = 0; c < NmNaoOem::NumLinks; ++c)
+        {
+            if (NmNaoOem::Links[c].Parent == L && FCString::Strstr(NmNaoOem::Links[c].Name, TEXT("Phalanx")))
+            {
+                Kg += NmNaoOem::Links[c].MassKg;
+            }
+        }
+    }
+    return Kg;
+}
+
+/** The record's readouts, decode_tau_s and wake: the reference Actuation decode. */
+NmOutputDecode::FGradedJoints MakeOemDecoder()
+{
+    std::vector<std::vector<NmOutputDecode::FReadout>> Readouts(NmNaoOem::NumLinks);
+    for (int32 i = 0; i < NmNaoOem::NumLinks; ++i)
+    {
+        Readouts[i].push_back(NmOutputDecode::FReadout{static_cast<std::size_t>(NmNaoOem::Links[i].Channel), 1.0});
+    }
+    NmOutputDecode::FGradedJoints Decoder(std::move(Readouts));
+    for (int32 i = 0; i < NmNaoOem::NumLinks; ++i)
+    {
+        const NmNaoOem::FLink& K = NmNaoOem::Links[i];
+        const std::size_t j = static_cast<std::size_t>(i);
+        if (K.DecodeTauS > 0.0)
+        {
+            Decoder.SetDecodeTau(j, K.DecodeTauS);
+        }
+        if (K.bWake)
+        {
+            Decoder.SetWake(j, K.WakeFrom, K.WakeSeconds, K.Lo, K.Hi);
+        }
+    }
+    return Decoder;
+}
+} // namespace
+
+// ============================================================================
 // UNmNaoComponent
 // ============================================================================
 
@@ -19,6 +144,7 @@ UNmNaoComponent::UNmNaoComponent()
 {
     BrainId = TEXT("nao");
     PrimaryComponentTick.bCanEverTick = true;
+    GradedJoints = MakeOemDecoder();
 }
 
 // ----------------------------------------------------------------------------
@@ -41,12 +167,13 @@ float UNmNaoComponent::SampleFootPressure(int32 FootIndex, int32 PointIndex) con
     }
 
     const FVector FootLoc = FeetMeshes[FootIndex]->GetComponentLocation();
-    // Offset to 4 corners of a typical NAO foot (6 cm × 10 cm)
+    // Corners just below the OEM sole box (16 x 8.8 x 2.4 cm, centred on
+    // the foot mesh): toe left/right, heel left/right.
     const FVector Offsets[4] = {
-        FVector( 3.f,  5.f, -1.f),
-        FVector(-3.f,  5.f, -1.f),
-        FVector( 3.f, -5.f, -1.f),
-        FVector(-3.f, -5.f, -1.f),
+        FVector( 7.2f, -4.0f, -1.8f),
+        FVector( 7.2f,  4.0f, -1.8f),
+        FVector(-7.2f, -4.0f, -1.8f),
+        FVector(-7.2f,  4.0f, -1.8f),
     };
 
     const FVector TestLoc = FootLoc + Offsets[PointIndex % 4];
@@ -249,42 +376,43 @@ void UNmNaoComponent::CollectSensors(TArray<float>& OutSensors)
 }
 
 // ----------------------------------------------------------------------------
-// ApplyActuators — 40 channels
-// [0..23]  26 joint drives (ENaoJoint enum order)
-// [26..33] 8 LED placeholder floats
-// [34..39] reserved
+// ApplyActuators — 40 channels: the reference NAO output contract
+// (NmNaoOem::OutputNames). Each joint reads its record readout channel; the
+// 16 phalanx channels have no joint in this body.
 // ----------------------------------------------------------------------------
 
 void UNmNaoComponent::ApplyActuators(const TArray<float>& Actuators)
 {
-    if (Actuators.Num() < 26)
+    if (Actuators.Num() < NmNaoOem::NumLinks)
     {
         return;
     }
 
-    constexpr float MaxAngleDeg = 120.f;
+    // A pulse-density brain: reference decode (actuation.rs) with the record's
+    // decode_tau_s and servo wake-up, onto each joint's OEM range.
+    const bool bGraded = IsGraded();
+    const bool bFresh = IsFreshFrame();
+    if (bGraded && bFresh)
+    {
+        GradedJoints.Accept(Actuators.GetData(), static_cast<size_t>(Actuators.Num()));
+        GradedJoints.Advance();
+    }
 
     for (int32 j = 0; j < JointConstraints.Num() && j < NumJoints; ++j)
     {
         UPhysicsConstraintComponent* Joint = JointConstraints[j];
-        if (Joint)
+        const int32 L = JointLink(j);
+        if (!Joint || L < 0)
         {
-            const float Target = FMath::Clamp(Actuators[j], -1.f, 1.f) * MaxAngleDeg;
-            Joint->SetAngularOrientationTarget(FRotator(Target, 0.f, 0.f));
+            continue;
         }
-    }
-
-    // LED floats
-    if (Actuators.Num() > 33)
-    {
-        LedChestR = FMath::Clamp(Actuators[26], 0.f, 1.f);
-        LedChestG = FMath::Clamp(Actuators[27], 0.f, 1.f);
-        LedChestB = FMath::Clamp(Actuators[28], 0.f, 1.f);
-        LedFootL  = FMath::Clamp(Actuators[29], 0.f, 1.f);
-        LedFootR  = FMath::Clamp(Actuators[30], 0.f, 1.f);
-        LedEarL   = FMath::Clamp(Actuators[31], 0.f, 1.f);
-        LedEarR   = FMath::Clamp(Actuators[32], 0.f, 1.f);
-        LedEyeL   = FMath::Clamp(Actuators[33], 0.f, 1.f);
+        const NmNaoOem::FLink& K = NmNaoOem::Links[L];
+        // Spikes: activation 0..1 over the upper half of the range (silence
+        // never commands the lower limit); a tick without a reply holds rest.
+        const double Rad = bGraded ? GradedJoints.Target(static_cast<size_t>(L), K.Lo, K.Hi)
+                         : bFresh  ? K.Lo + (0.5 + 0.5 * FMath::Clamp(static_cast<double>(Actuators[K.Channel]), 0.0, 1.0)) * (K.Hi - K.Lo)
+                                   : RestRad(K);
+        Joint->SetAngularOrientationTarget(FRotator(static_cast<float>(FMath::RadiansToDegrees(Rad)), 0.f, 0.f));
     }
 }
 
@@ -341,28 +469,9 @@ void UNmNaoComponent::GetSensorNames(TArray<FString>& OutNames) const
 void UNmNaoComponent::GetActuatorNames(TArray<FString>& OutNames) const
 {
     OutNames.Reset(NumActuators);
-    // Mirror ENaoJoint order
-    const char* JointNameStr[] = {
-        "HeadYaw","HeadPitch",
-        "LShoulderPitch","LShoulderRoll","LElbowYaw","LElbowRoll","LWristYaw",
-        "RShoulderPitch","RShoulderRoll","RElbowYaw","RElbowRoll","RWristYaw",
-        "LHipYawPitch","LHipRoll","LHipPitch","LKneePitch","LAnklePitch","LAnkleRoll",
-        "RHipYawPitch","RHipRoll","RHipPitch","RKneePitch","RAnklePitch","RAnkleRoll",
-    };
-    for (const char* Name : JointNameStr)
+    for (const TCHAR* Name : NmNaoOem::OutputNames)
     {
-        OutNames.Add(ANSI_TO_TCHAR(Name));
-    }
-    // Remaining 2 joints + 8 LEDs = 10 more
-    OutNames.Add(TEXT("joint_reserved_24"));
-    OutNames.Add(TEXT("joint_reserved_25"));
-    OutNames.Add(TEXT("led_chest_r")); OutNames.Add(TEXT("led_chest_g")); OutNames.Add(TEXT("led_chest_b"));
-    OutNames.Add(TEXT("led_foot_l"));  OutNames.Add(TEXT("led_foot_r"));
-    OutNames.Add(TEXT("led_ear_l"));   OutNames.Add(TEXT("led_ear_r"));
-    OutNames.Add(TEXT("led_eye_l"));
-    while (OutNames.Num() < NumActuators)
-    {
-        OutNames.Add(FString::Printf(TEXT("reserved_%d"), OutNames.Num()));
+        OutNames.Add(Name);
     }
 }
 
@@ -382,117 +491,147 @@ ANmNaoActor::ANmNaoActor()
     UStaticMesh* CubeMesh   = CubeMeshFinder.Succeeded()   ? CubeMeshFinder.Object  : nullptr;
     UStaticMesh* SphereMesh = SphereMeshFinder.Succeeded() ? SphereMeshFinder.Object : nullptr;
 
-    // --- Torso (15×8×22 cm) ---
+    // OEM NAO geometry (NmNaoOem, the MuJoCo reference link tree) in the OEM
+    // zero pose: arms forward, legs straight; joint angle 0 = built pose. The
+    // root mesh is the torso collision box; every other location is relative
+    // to it. Segment masses are the summed OEM link masses.
+    static_assert(UNmNaoComponent::NumActuators == NmNaoOem::NumLinks, "NAO output contract");
+    const FVector Root = Oem(NmNaoOem::TorsoBoxPositionM);
+    const FVector TorsoScale = FVector(NmNaoOem::TorsoBoxHalfM[0], NmNaoOem::TorsoBoxHalfM[1], NmNaoOem::TorsoBoxHalfM[2]) * 2.0;
+    // A child's relative location is in the (scaled) torso box space.
+    auto Rel = [&](const FVector& TorsoFrame) { return (TorsoFrame - Root) / TorsoScale; };
+    auto Mass = [](UStaticMeshComponent* M, double Kg) { M->SetMassOverrideInKg(NAME_None, static_cast<float>(Kg), true); };
+
+    // --- Torso: OEM collision box ---
     TorsoMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Torso"));
     TorsoMesh->SetStaticMesh(CubeMesh);
-    TorsoMesh->SetWorldScale3D(FVector(0.15f, 0.08f, 0.22f));
+    TorsoMesh->SetWorldScale3D(TorsoScale);
     TorsoMesh->SetSimulatePhysics(true);
+    Mass(TorsoMesh, NmNaoOem::TorsoMassKg);
     SetRootComponent(TorsoMesh);
 
-    // --- Head (7 cm sphere) ---
-    HeadMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Head"));
-    HeadMesh->SetStaticMesh(SphereMesh);
-    HeadMesh->SetWorldScale3D(FVector(0.07f));
-    HeadMesh->SetupAttachment(TorsoMesh);
-    HeadMesh->SetRelativeLocation(FVector(0.f, 0.f, 14.5f));
-    HeadMesh->SetSimulatePhysics(true);
+    // --- Head: OEM head ellipsoid as a sphere on HeadPitch ---
+    const NmNaoOem::FLink& HeadLink = NmNaoOem::Links[OemLink(TEXT("HeadPitch"))];
+    const FVector HeadCentre = JointOrigin(TEXT("HeadPitch")) + Oem(HeadLink.ColliderPositionM);
+    const double HeadScale = 2.0 * (HeadLink.ColliderHalfM[0] + HeadLink.ColliderHalfM[1] + HeadLink.ColliderHalfM[2]) / 3.0;
+    {
+        HeadMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Head"));
+        HeadMesh->SetStaticMesh(SphereMesh);
+        HeadMesh->SetWorldScale3D(FVector(HeadScale));
+        HeadMesh->SetupAttachment(TorsoMesh);
+        HeadMesh->SetRelativeLocation(Rel(HeadCentre));
+        HeadMesh->SetSimulatePhysics(true);
+        Mass(HeadMesh, OemMass({TEXT("HeadYaw"), TEXT("HeadPitch")}));
+    }
 
-    // Helper: create a box segment
-    auto MakeBox = [&](const FString& Name, FVector Scale, FVector RelLoc,
-                        USceneComponent* Parent) -> UStaticMeshComponent*
+    // Box segment spanning joint A -> joint B (axis-aligned in the zero pose).
+    auto MakeSegment = [&](const FString& Name, const FVector& A, const FVector& B, double ThicknessCm, double Kg)
+        -> UStaticMeshComponent*
     {
         UStaticMeshComponent* M = CreateDefaultSubobject<UStaticMeshComponent>(*Name);
         M->SetStaticMesh(CubeMesh);
-        M->SetWorldScale3D(Scale);
-        M->SetupAttachment(Parent ? Parent : TorsoMesh);
-        M->SetRelativeLocation(RelLoc);
+        const FVector D = (B - A).GetAbs();
+        M->SetWorldScale3D(FVector(FMath::Max(D.X, ThicknessCm), FMath::Max(D.Y, ThicknessCm), FMath::Max(D.Z, ThicknessCm)) / 100.0);
+        M->SetupAttachment(TorsoMesh);
+        M->SetRelativeLocation(Rel(0.5 * (A + B)));
         M->SetSimulatePhysics(true);
+        Mass(M, Kg);
+        return M;
+    };
+    // Box at a link's OEM collision box (hand, sole).
+    auto MakeBoxOf = [&](const FString& Name, const TCHAR* Joint, double Kg) -> UStaticMeshComponent*
+    {
+        const NmNaoOem::FLink& K = NmNaoOem::Links[OemLink(Joint)];
+        UStaticMeshComponent* M = CreateDefaultSubobject<UStaticMeshComponent>(*Name);
+        M->SetStaticMesh(CubeMesh);
+        M->SetWorldScale3D(FVector(K.ColliderHalfM[0], K.ColliderHalfM[1], K.ColliderHalfM[2]) * 2.0);
+        M->SetupAttachment(TorsoMesh);
+        M->SetRelativeLocation(Rel(JointOrigin(Joint) + Oem(K.ColliderPositionM)));
+        M->SetSimulatePhysics(true);
+        Mass(M, Kg);
         return M;
     };
 
-    // Helper: create a joint constraint
-    auto MakeJoint = [&](const FString& Name, FVector RelLoc, float Swing1, float Swing2, float Twist)
-        -> UPhysicsConstraintComponent*
+    // Joint constraint at the OEM joint origin. The rig keeps one constraint
+    // per joint on shared segments, so its symmetric angular limits are an
+    // envelope of the OEM range [lo, hi] (the command is clamped to [lo, hi]).
+    // Drives: OEM kp, kd and torque limit in force mode, SI -> Unreal
+    // (N m = 1e4 kg cm2/s2).
+    enum class EDof : uint8 { Swing1, Swing2, Twist };
+    auto MakeJoint = [&](const TCHAR* Joint, EDof Dof) -> UPhysicsConstraintComponent*
     {
-        UPhysicsConstraintComponent* J = CreateDefaultSubobject<UPhysicsConstraintComponent>(*Name);
+        const NmNaoOem::FLink& K = NmNaoOem::Links[OemLink(Joint)];
+        const float Envelope = static_cast<float>(FMath::RadiansToDegrees(FMath::Max(FMath::Abs(K.Lo), FMath::Abs(K.Hi))));
+        UPhysicsConstraintComponent* J = CreateDefaultSubobject<UPhysicsConstraintComponent>(*(FString(TEXT("J_")) + Joint));
         J->SetupAttachment(TorsoMesh);
-        J->SetRelativeLocation(RelLoc);
-        J->SetAngularSwing1Limit(EAngularConstraintMotion::ACM_Limited, Swing1);
-        J->SetAngularSwing2Limit(EAngularConstraintMotion::ACM_Limited, Swing2);
-        J->SetAngularTwistLimit(EAngularConstraintMotion::ACM_Limited, Twist);
+        J->SetRelativeLocation(Rel(JointOrigin(Joint)));
+        J->SetAngularSwing1Limit(EAngularConstraintMotion::ACM_Limited, Dof == EDof::Swing1 ? Envelope : 5.f);
+        J->SetAngularSwing2Limit(EAngularConstraintMotion::ACM_Limited, Dof == EDof::Swing2 ? Envelope : 5.f);
+        J->SetAngularTwistLimit(EAngularConstraintMotion::ACM_Limited, Dof == EDof::Twist ? Envelope : 5.f);
         J->SetLinearXLimit(ELinearConstraintMotion::LCM_Locked, 0.f);
         J->SetLinearYLimit(ELinearConstraintMotion::LCM_Locked, 0.f);
         J->SetLinearZLimit(ELinearConstraintMotion::LCM_Locked, 0.f);
         J->SetAngularDriveMode(EAngularDriveMode::TwistAndSwing);
         J->SetAngularOrientationDrive(true, true);
-        J->SetAngularDriveParams(300.f, 30.f, 0.f);
+        J->SetAngularDriveAccelerationMode(false);
+        J->SetAngularDriveParams(static_cast<float>(K.Kp * 1e4), static_cast<float>(K.Kd * 1e4), static_cast<float>(K.EffortNm * 1e4));
+        J->SetDisableCollision(true);
         return J;
     };
 
-    // Ensure JointConstraints has exactly NumJoints slots
+    // Ensure JointConstraints has exactly NumJoints slots (ENaoJoint order).
     JointConstraints.SetNum(UNmNaoComponent::NumJoints);
     int32 JIdx = 0;
 
     // Head joints (HeadYaw, HeadPitch)
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_HeadYaw"),   FVector(0.f, 0.f, 11.f), 60.f, 5.f,  120.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_HeadPitch"), FVector(0.f, 0.f, 13.f), 45.f, 5.f,  5.f);
+    JointConstraints[JIdx++] = MakeJoint(TEXT("HeadYaw"),   EDof::Twist);
+    JointConstraints[JIdx++] = MakeJoint(TEXT("HeadPitch"), EDof::Swing1);
 
-    // Left arm
-    const float LX = 8.f;
-    UStaticMeshComponent* LUArm = MakeBox(TEXT("LUpperArm"), FVector(0.04f,0.04f,0.10f), FVector( LX, 0.f, 8.f), TorsoMesh);
-    UStaticMeshComponent* LFArm = MakeBox(TEXT("LForeArm"),  FVector(0.03f,0.03f,0.09f), FVector( LX, 0.f,-2.f), TorsoMesh);
-    UStaticMeshComponent* LHand = MakeBox(TEXT("LHand"),     FVector(0.03f,0.02f,0.04f), FVector( LX, 0.f,-7.f), TorsoMesh);
-    ArmSegments.Add(LUArm); ArmSegments.Add(LFArm); ArmSegments.Add(LHand);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_LShoulderPitch"), FVector( LX,0.f, 11.f), 120.f,5.f, 5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_LShoulderRoll"),  FVector( LX,0.f, 11.f), 5.f,76.f, 5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_LElbowYaw"),      FVector( LX,0.f,  3.f), 5.f, 5.f,120.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_LElbowRoll"),     FVector( LX,0.f,  3.f), 5.f,88.f, 5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_LWristYaw"),      FVector( LX,0.f, -4.f), 5.f, 5.f,105.f);
+    for (const TCHAR Side : {TEXT('L'), TEXT('R')})
+    {
+        auto N = [Side](const TCHAR* Joint) { return FString::Printf(TEXT("%c%s"), Side, Joint); };
+        const double ArmCm = 2.0 * NmNaoOem::Links[OemLink(*N(TEXT("ShoulderRoll")))].ColliderHalfM[0] * 100.0;
+        const double ForeCm = 2.0 * NmNaoOem::Links[OemLink(*N(TEXT("ElbowRoll")))].ColliderHalfM[0] * 100.0;
+        UStaticMeshComponent* UArm = MakeSegment(N(TEXT("UpperArm")), JointOrigin(*N(TEXT("ShoulderPitch"))), JointOrigin(*N(TEXT("ElbowYaw"))),
+                                                 ArmCm, OemMass({*N(TEXT("ShoulderPitch")), *N(TEXT("ShoulderRoll"))}));
+        UStaticMeshComponent* FArm = MakeSegment(N(TEXT("ForeArm")), JointOrigin(*N(TEXT("ElbowYaw"))), JointOrigin(*N(TEXT("WristYaw"))),
+                                                 ForeCm, OemMass({*N(TEXT("ElbowYaw")), *N(TEXT("ElbowRoll"))}));
+        UStaticMeshComponent* Hand = MakeBoxOf(N(TEXT("Hand")), *N(TEXT("WristYaw")), OemMass({*N(TEXT("WristYaw"))}));
+        ArmSegments.Add(UArm); ArmSegments.Add(FArm); ArmSegments.Add(Hand);
+        JointConstraints[JIdx++] = MakeJoint(*N(TEXT("ShoulderPitch")), EDof::Swing1);
+        JointConstraints[JIdx++] = MakeJoint(*N(TEXT("ShoulderRoll")),  EDof::Swing2);
+        JointConstraints[JIdx++] = MakeJoint(*N(TEXT("ElbowYaw")),      EDof::Twist);
+        JointConstraints[JIdx++] = MakeJoint(*N(TEXT("ElbowRoll")),     EDof::Swing2);
+        JointConstraints[JIdx++] = MakeJoint(*N(TEXT("WristYaw")),      EDof::Twist);
+    }
 
-    // Right arm
-    const float RX = -8.f;
-    UStaticMeshComponent* RUArm = MakeBox(TEXT("RUpperArm"), FVector(0.04f,0.04f,0.10f), FVector(RX, 0.f, 8.f), TorsoMesh);
-    UStaticMeshComponent* RFArm = MakeBox(TEXT("RForeArm"),  FVector(0.03f,0.03f,0.09f), FVector(RX, 0.f,-2.f), TorsoMesh);
-    UStaticMeshComponent* RHand = MakeBox(TEXT("RHand"),     FVector(0.03f,0.02f,0.04f), FVector(RX, 0.f,-7.f), TorsoMesh);
-    ArmSegments.Add(RUArm); ArmSegments.Add(RFArm); ArmSegments.Add(RHand);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_RShoulderPitch"), FVector(RX,0.f, 11.f), 120.f,5.f, 5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_RShoulderRoll"),  FVector(RX,0.f, 11.f), 5.f,76.f, 5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_RElbowYaw"),      FVector(RX,0.f,  3.f), 5.f, 5.f,120.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_RElbowRoll"),     FVector(RX,0.f,  3.f), 5.f,88.f, 5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_RWristYaw"),      FVector(RX,0.f, -4.f), 5.f, 5.f,105.f);
-
-    // Left leg
-    UStaticMeshComponent* LThigh = MakeBox(TEXT("LThigh"), FVector(0.06f,0.06f,0.12f), FVector(4.f,0.f,-7.f),  TorsoMesh);
-    UStaticMeshComponent* LShank = MakeBox(TEXT("LShank"), FVector(0.05f,0.05f,0.10f), FVector(4.f,0.f,-22.f), TorsoMesh);
-    UStaticMeshComponent* LFoot  = MakeBox(TEXT("LFoot"),  FVector(0.10f,0.05f,0.02f), FVector(4.f,0.f,-30.f), TorsoMesh);
-    LegSegments.Add(LThigh); LegSegments.Add(LShank); LegSegments.Add(LFoot);
-    FeetMeshes.Add(LFoot);
-    LFoot->OnComponentHit.AddDynamic(this, &ANmNaoActor::OnFootHit);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_LHipYawPitch"), FVector(4.f,0.f,-3.f),  45.f,21.f,21.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_LHipRoll"),      FVector(4.f,0.f,-3.f),  5.f,45.f, 5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_LHipPitch"),     FVector(4.f,0.f,-3.f),  88.f,5.f, 5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_LKneePitch"),    FVector(4.f,0.f,-15.f), 120.f,5.f,5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_LAnklePitch"),   FVector(4.f,0.f,-26.f), 68.f,5.f, 5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_LAnkleRoll"),    FVector(4.f,0.f,-26.f), 5.f,45.f, 5.f);
-
-    // Right leg
-    UStaticMeshComponent* RThigh = MakeBox(TEXT("RThigh"), FVector(0.06f,0.06f,0.12f), FVector(-4.f,0.f,-7.f),  TorsoMesh);
-    UStaticMeshComponent* RShank = MakeBox(TEXT("RShank"), FVector(0.05f,0.05f,0.10f), FVector(-4.f,0.f,-22.f), TorsoMesh);
-    UStaticMeshComponent* RFoot  = MakeBox(TEXT("RFoot"),  FVector(0.10f,0.05f,0.02f), FVector(-4.f,0.f,-30.f), TorsoMesh);
-    LegSegments.Add(RThigh); LegSegments.Add(RShank); LegSegments.Add(RFoot);
-    FeetMeshes.Add(RFoot);
-    RFoot->OnComponentHit.AddDynamic(this, &ANmNaoActor::OnFootHit);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_RHipYawPitch"), FVector(-4.f,0.f,-3.f),  45.f,21.f,21.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_RHipRoll"),      FVector(-4.f,0.f,-3.f),  5.f,45.f, 5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_RHipPitch"),     FVector(-4.f,0.f,-3.f),  88.f,5.f, 5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_RKneePitch"),    FVector(-4.f,0.f,-15.f), 120.f,5.f,5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_RAnklePitch"),   FVector(-4.f,0.f,-26.f), 68.f,5.f, 5.f);
-    JointConstraints[JIdx++] = MakeJoint(TEXT("J_RAnkleRoll"),    FVector(-4.f,0.f,-26.f), 5.f,45.f, 5.f);
+    for (const TCHAR Side : {TEXT('L'), TEXT('R')})
+    {
+        auto N = [Side](const TCHAR* Joint) { return FString::Printf(TEXT("%c%s"), Side, Joint); };
+        const double ThighCm = 2.0 * NmNaoOem::Links[OemLink(*N(TEXT("HipPitch")))].ColliderHalfM[0] * 100.0;
+        const double ShinCm = 2.0 * NmNaoOem::Links[OemLink(*N(TEXT("KneePitch")))].ColliderHalfM[0] * 100.0;
+        UStaticMeshComponent* Thigh = MakeSegment(N(TEXT("Thigh")), JointOrigin(*N(TEXT("HipPitch"))), JointOrigin(*N(TEXT("KneePitch"))),
+                                                  ThighCm, OemMass({*N(TEXT("HipYawPitch")), *N(TEXT("HipRoll")), *N(TEXT("HipPitch"))}));
+        UStaticMeshComponent* Shank = MakeSegment(N(TEXT("Shank")), JointOrigin(*N(TEXT("KneePitch"))), JointOrigin(*N(TEXT("AnklePitch"))),
+                                                  ShinCm, OemMass({*N(TEXT("KneePitch"))}));
+        UStaticMeshComponent* Foot = MakeBoxOf(N(TEXT("Foot")), *N(TEXT("AnkleRoll")), OemMass({*N(TEXT("AnklePitch")), *N(TEXT("AnkleRoll"))}));
+        LegSegments.Add(Thigh); LegSegments.Add(Shank); LegSegments.Add(Foot);
+        FeetMeshes.Add(Foot);
+        Foot->OnComponentHit.AddDynamic(this, &ANmNaoActor::OnFootHit);
+        JointConstraints[JIdx++] = MakeJoint(*N(TEXT("HipYawPitch")), EDof::Swing1);
+        JointConstraints[JIdx++] = MakeJoint(*N(TEXT("HipRoll")),     EDof::Swing2);
+        JointConstraints[JIdx++] = MakeJoint(*N(TEXT("HipPitch")),    EDof::Swing1);
+        JointConstraints[JIdx++] = MakeJoint(*N(TEXT("KneePitch")),   EDof::Swing1);
+        JointConstraints[JIdx++] = MakeJoint(*N(TEXT("AnklePitch")),  EDof::Swing1);
+        JointConstraints[JIdx++] = MakeJoint(*N(TEXT("AnkleRoll")),   EDof::Swing2);
+    }
 
     // Eye camera (head mount)
     USceneCaptureComponent2D* EyeCam = CreateDefaultSubobject<USceneCaptureComponent2D>(TEXT("EyeCamera"));
     EyeCam->SetupAttachment(HeadMesh);
-    EyeCam->SetRelativeLocation(FVector(3.5f, 0.f, 0.f));
+    // Reference CameraTop: torso frame (5.39, 0, 19.44) cm, in head-sphere space.
+    EyeCam->SetRelativeLocation((FVector(5.39, 0.0, 19.44) - HeadCentre) / HeadScale);
+    EyeCam->FOVAngle = 60.7f;
     EyeCam->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
     EyeCam->bCaptureEveryFrame = true;
 
@@ -526,12 +665,7 @@ void ANmNaoActor::BeginPlay()
         {
             return;
         }
-        if (Parent && Child)
-        {
-            // Constraint at the world midpoint so it holds the bodies apart.
-            JointConstraints[JIdx]->SetWorldLocation(
-                0.5f * (Parent->GetComponentLocation() + Child->GetComponentLocation()));
-        }
+        // The constraint stays at its OEM joint origin (constructor).
         JointConstraints[JIdx]->OverrideComponent1 = Parent;
         JointConstraints[JIdx]->OverrideComponent2 = Child;
         JointConstraints[JIdx]->InitComponentConstraint();

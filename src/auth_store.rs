@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use crate::service_access::ServiceAccessMap;
 use crate::shared_fs::{read_json_if_exists, write_json_pretty};
 use anyhow::Context;

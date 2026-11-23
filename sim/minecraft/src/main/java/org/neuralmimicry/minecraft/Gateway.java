@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 AARNN contributors
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See sim/minecraft/LICENSE in the project root.
 package org.neuralmimicry.minecraft;
 
 import com.google.gson.Gson;
@@ -17,12 +21,17 @@ import java.util.concurrent.Flow;
 /** Opt-in legacy sandbox gateway. Never asserts production admission or EffectId guarantees. */
 public final class Gateway {
     public record Binding(String networkId, String nodeId, int sensory, int output, long firstStep) {}
-    public record Reply(long step, int[] spikes) {}
+    /** One exchanged frame: distinct channels with an event, in the brain's negotiated output code. */
+    public record Reply(long step, int[] spikes, OutputDecoder.Code code) {
+        public Reply(long step, int[] spikes) { this(step, spikes, OutputDecoder.Code.SPIKES); }
+    }
     public record Capture(long sequence, long captureNanos, long step, String contentDigest) {}
     public record Metrics(long inputFrames, long outputFrames, long lastInputStep,
                           long lastOutputStep, int lastOutputSpikes, double lastInputMean) {}
     private static final Gson JSON = new Gson();
     public static final int MAX_RESPONSE = 65536;
+    /** The companion negotiates 1 ms Rust steps: one exchanged frame is one brain step. */
+    public static final int DT_MS = 1;
 
     private Gateway() {}
     public static URI endpoint(String value) {
@@ -45,6 +54,8 @@ public final class Gateway {
         private long inputFrames, outputFrames, lastInputStep = -1, lastOutputStep = -1;
         private int lastOutputSpikes;
         private double lastInputMean;
+        /** Brain output code, fixed by the first reply (negotiated once in the handshake). */
+        private OutputDecoder.Code outputCode;
         private boolean active = true;
         private Capture capture;
         private String status = "armed: legacy sandbox";
@@ -65,6 +76,7 @@ public final class Gateway {
         public String status() { return status; }
         public Capture capture() { return capture; }
         public Binding binding() { return binding; }
+        public OutputDecoder.Code outputCode() { return outputCode; }
         public Metrics metrics() {
             return new Metrics(inputFrames, outputFrames, lastInputStep, lastOutputStep,
                     lastOutputSpikes, lastInputMean);
@@ -82,7 +94,7 @@ public final class Gateway {
             body.addProperty("capture_sequence",capture.sequence());
             body.addProperty("capture_nanos",capture.captureNanos());
             body.addProperty("network_id",binding.networkId()); body.addProperty("node_id",binding.nodeId());
-            body.addProperty("step_index",nextStep); body.addProperty("time_ms",nextStep); body.addProperty("dt_ms",1);
+            body.addProperty("step_index",nextStep); body.addProperty("time_ms",nextStep); body.addProperty("dt_ms",DT_MS);
             body.addProperty("timeout_ms",250); body.add("input_values",JSON.toJsonTree(input));
             int timeout=Content.frameTimeoutMillis(profile);
             var request=HttpRequest.newBuilder(uri).timeout(Duration.ofMillis(timeout))
@@ -103,6 +115,9 @@ public final class Gateway {
                 var response=completed.join();
                 if (response.statusCode()!=200) throw new IllegalArgumentException("HTTP "+response.statusCode());
                 Reply reply=decode(response.body(),profile,binding.networkId(),lastOutput);
+                if (outputCode!=null && reply.code()!=outputCode)
+                    throw new IllegalArgumentException("Brain output_code changed within a session");
+                outputCode=reply.code();
                 lastOutput=reply.step(); lastOutputStep=lastOutput;
                 outputFrames++; lastOutputSpikes=reply.spikes().length;
                 nextStep=Math.max(nextStep+1,lastOutput+1);
@@ -136,7 +151,7 @@ public final class Gateway {
             if(n<0 || n>=p.output() || seen[n]) throw new IllegalArgumentException("Invalid/duplicate output address");
             seen[n]=true; spikes[i]=n;
         }
-        return new Reply(step,spikes);
+        return new Reply(step,spikes,OutputDecoder.Code.parse(data.get("output_code")));
     }
     static final class BoundedBody implements HttpResponse.BodySubscriber<byte[]> {
         private final int limit;

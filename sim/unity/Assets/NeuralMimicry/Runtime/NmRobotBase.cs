@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // NmRobotBase.cs — Abstract MonoBehaviour that drives a robot with an AARNN brain.
 // Compatible with Unity 2022.3 LTS+.
 //
@@ -62,11 +66,14 @@ namespace NeuralMimicry
         private bool _attemptedConnection;
         private float _nextRetryTime;
         private bool _handshakeSent;
+        private bool _gradedArmed;
+        private float _lastBrainFrameMs;
 
         private struct StepResult
         {
             public bool ok;
             public float[] outputs;
+            public NmOutputCode code;
             public string error;
         }
 
@@ -78,6 +85,24 @@ namespace NeuralMimicry
 
         /// <summary>Total number of successful brain steps this session.</summary>
         public int StepCount { get; private set; }
+
+        /// <summary>
+        /// <c>true</c> while a brain that negotiated
+        /// <c>output_code = pulse_density</c> is armed: bodies decode its
+        /// outputs with <see cref="NmGradedJoints"/> / <see cref="NmMuscleActivations"/>
+        /// (the MuJoCo reference decode) and hold their targets between frames.
+        /// </summary>
+        protected bool IsGraded => _gradedArmed;
+
+        /// <summary>
+        /// <c>true</c> during an <see cref="ApplyActuators"/> call that carries a
+        /// fresh brain frame; <c>false</c> for the neutral frame of a tick
+        /// without a reply. A graded decoder advances only on fresh frames.
+        /// </summary>
+        protected bool FreshFrame { get; private set; }
+
+        /// <summary>Forget any graded decoder state (graded brain disarmed or re-armed).</summary>
+        protected virtual void ResetGradedDecode() { }
 
         // ------------------------------------------------------------------ //
         // Abstract interface — subclasses must implement
@@ -158,11 +183,18 @@ namespace NeuralMimicry
                     if (completed.ok)
                     {
                         StepCount++;
+                        bool graded = completed.code == NmOutputCode.PulseDensity;
+                        if (graded != _gradedArmed) ResetGradedDecode();
+                        _gradedArmed = graded;
+                        _lastBrainFrameMs = SimulationTimeMs;
+                        FreshFrame = true;
                         ApplyActuators(completed.outputs);
+                        FreshFrame = false;
                         freshOutput = true;
                     }
                     else
                     {
+                        DisarmGraded();
                         _nextRetryTime = Time.realtimeSinceStartup + 1f;
                         if (!string.IsNullOrEmpty(completed.error))
                             Debug.LogWarning($"[NmRobotBase] {name}: brain step failed — {completed.error}", this);
@@ -171,6 +203,11 @@ namespace NeuralMimicry
             }
             // Apply each sparse frame once; on other ticks drive muscles toward
             // rest. Physics still advances while a network reply is pending.
+            // A graded body holds its decoded targets between frames, and
+            // disarms after the reference's 50-frame (100 ms) reply expiry.
+            if (!freshOutput && _gradedArmed &&
+                SimulationTimeMs - _lastBrainFrameMs > NmOutputDecode.HoldMs)
+                DisarmGraded();
             if (!freshOutput) ApplyActuators(_neutralOutputs);
             if (_pendingStep != null) return;
             if ((!autoReconnect && !_connected && _attemptedConnection) ||
@@ -201,7 +238,7 @@ namespace NeuralMimicry
                 }
                 var outputs = new float[actuatorNames.Length];
                 if (transport.Step(timeMs, sensors, outputs))
-                    return new StepResult { ok = true, outputs = outputs };
+                    return new StepResult { ok = true, outputs = outputs, code = transport.OutputCode };
                 _handshakeSent = false;
                 return new StepResult { error = "connection lost" };
             }
@@ -238,6 +275,14 @@ namespace NeuralMimicry
         protected virtual void OnDisable()
         {
             _connected = false;
+            DisarmGraded();
+        }
+
+        private void DisarmGraded()
+        {
+            if (!_gradedArmed) return;
+            _gradedArmed = false;
+            ResetGradedDecode();
         }
 
         // ------------------------------------------------------------------ //

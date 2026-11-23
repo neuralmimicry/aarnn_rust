@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """
 Generate a mixed Webots world containing multiple robot types, each bound to a
 distinct brain ID via controllerArgs (NM_BRAINS=<brain_id>).

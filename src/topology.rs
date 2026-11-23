@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! # 3D Topology and Spatial Layout Scaffolding
 //!
 //! This module provides the data structures for managing the spatial 3D layout

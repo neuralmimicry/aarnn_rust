@@ -1,4 +1,8 @@
 #![cfg(feature = "opencl")]
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 
 use opencl3 as ocl;
 use std::ffi::c_void;

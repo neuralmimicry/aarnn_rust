@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Additive generated-gRPC seam for causal event transport.
 //!
 //! This module owns wire conversion, bounded receiver validation and the

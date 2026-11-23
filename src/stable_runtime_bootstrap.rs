@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Versioned bootstrap for the stable-ID durable execution runtime.
 //!
 //! A deployed process must never infer biological authority from a dense

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Orchestrator-owned migration executor registration and dispatch.
 //!
 //! The management API owns migration intent and durable operation state.  It

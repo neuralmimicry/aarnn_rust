@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Canonical legacy AER1 codec; distinct from AARNN-AER/1 and FPAA UDP.
 
 #[derive(Clone, Debug)]

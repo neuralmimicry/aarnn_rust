@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use anyhow::{Context, anyhow};
 use fs2::FileExt;
 use serde::{Serialize, de::DeserializeOwned};

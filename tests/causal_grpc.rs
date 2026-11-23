@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use aarnn_rust::authoritative_shard::{
     AuthoritativeShard, BIOLOGICAL_STATE_SCHEMA_VERSION, StableBiologicalState, StableNeuronState,
     StableSynapseState, StableTransitionInput,

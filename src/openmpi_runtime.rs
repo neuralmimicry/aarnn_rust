@@ -1,4 +1,8 @@
 #![cfg(feature = "openmpi")]
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 
 use anyhow::anyhow;
 use mpi::environment::{Threading, Universe, threading_support};

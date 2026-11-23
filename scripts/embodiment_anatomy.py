@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Massless anatomical landmarks bound to the actual native articulation.
 
 Original procedural illustrations, never inferred connectome locations or new

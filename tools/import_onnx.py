@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """
 Import an ONNX MLP and emit a aarnn_rust Runner snapshot JSON
 ("network.json" shape) to the given path.

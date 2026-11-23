@@ -8,7 +8,7 @@
   "exact_replica": "pending OEM variant and calibration",
   "controller_transfer": "legacy-native-projections-v1; native MuJoCo engineering adapter; calibration unvalidated",
   "source": "scripts/embodiment_legacy.py:build",
-  "source_digest": "2f4cd1909a47cd031ec8b5e099c1bb8737248320f6dd6c70fab87d8ff166f163",
+  "source_digest": "a2f0a10b13d7e755b75aca98929838ce2987f528a83c351b97123c5f4089ad5f",
   "policy_digest": "35a2dbc6477ae9308c4f5eae4d09ccffc2f7aadce2cb54ce29018d63e43b9e2f",
   "io": {
     "schema_version": 1,
@@ -1180,7 +1180,7 @@
       "velocity_limit": 6.0
     }
   ],
-  "native_mjcf_sha256": "e962627df5fcc031278ca487d39a8f0d072b28e00aa63ca044818820feaaf21a",
+  "native_mjcf_sha256": "8a5b77a0894eaa914545a33166256e2d062ea7f1561942096e5377247868d224",
   "source_licence": "repository-original",
   "assumptions": "sim/content/embodiments/policy.json",
   "total_mass_kg": 0.8800000000000006,
@@ -1236,12 +1236,12 @@
         "position": [
           0.0,
           -1.3,
-          0.045500000000000006
+          0.11699999999999999
         ],
         "size": [
           2.6,
           0.0325,
-          0.09100000000000001
+          0.23399999999999999
         ],
         "colour": [
           0.42,
@@ -1250,7 +1250,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -4149,9 +4149,9 @@
     ],
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
-  "scene_sources_sha256": "069c61ec98a416e5f5e95f67d33376ebbee22acab25e807a3a437a7c7f6da924",
-  "anatomy_sources_sha256": "99d64c74a569f856bab8839e8df2ae3c45eb1bf18bbc79e677fcf0301356111d",
-  "neural_sources_sha256": "ef1ae7875a7b4426ed37b8b815868929cb105df00974f3c82319f42f3813bd75",
+  "scene_sources_sha256": "a715a28f67ac75c9624deb144618f412dae8688b833c24e07b4ae9e8838d2884",
+  "anatomy_sources_sha256": "76e90c0ee8947775dbfb7ae187162c7c383557a5343383f64af84d2e625f2bd1",
+  "neural_sources_sha256": "491b1c8df3570eda7bb994493ecd7617ca21066362363aaaec542de36deab729",
   "bodies": [
     {
       "name": "chassis",
@@ -5419,7 +5419,7 @@
       "position": [
         0.0,
         -1.3,
-        0.045500000000000006
+        0.11699999999999999
       ],
       "quaternion_wxyz": [
         1.0,
@@ -5430,13 +5430,13 @@
       "half_size_m": [
         1.3,
         0.01625,
-        0.045500000000000006
+        0.11699999999999999
       ],
       "rgba": [
         0.41999998688697815,
         0.5,
         0.4699999988079071,
-        1.0
+        0.20000000298023224
       ],
       "collision": true,
       "mesh_id": -1
@@ -9561,9 +9561,9 @@
     }
   ],
   "constraints": [],
-  "digest": "085a25b77e34811c405b96c93f58db14b79572701428a4c906d9c732b3642d4d",
+  "digest": "46ba54cb9858d63a64ed64ed99e33231fe002eb5d8263e0afe9723e31c91c835",
   "profile_assumptions": "sim/content/embodiments/legacy-native-v1.json",
-  "profile_assumptions_sha256": "ba3bc61514d0e72e95a905f7f319682af6842d996dcac1489c021a316d08c5ea",
+  "profile_assumptions_sha256": "fa7bfbfe48e68fbcd425dbf624828672cb3221e75feb9dc54c92923b6c348144",
   "neural_targets": [
     "mujoco"
   ]

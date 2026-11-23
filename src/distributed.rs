@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Distributed simulation module for scaling neuromorphic workloads across multiple nodes.
 //!
 //! This module implements a gRPC-based distributed architecture that allows a large
@@ -806,6 +810,8 @@ fn apply_control_to_managed_network(
             net.remote_spikes_bwd.clear();
             net.remote_spike_steps_fwd.clear();
             net.remote_spike_steps_bwd.clear();
+            net.remote_membrane_v.clear();
+            net.shard_lockstep_origin = None;
         }
         proto::control_update::Action::Repeat => {
             net.runner.reset();
@@ -815,6 +821,8 @@ fn apply_control_to_managed_network(
             net.remote_spikes_bwd.clear();
             net.remote_spike_steps_fwd.clear();
             net.remote_spike_steps_bwd.clear();
+            net.remote_membrane_v.clear();
+            net.shard_lockstep_origin = None;
             net.avg_step_time_ms = 0.0;
             net.playing = true;
         }
@@ -844,6 +852,8 @@ fn apply_control_to_managed_network(
             net.remote_spikes_bwd.clear();
             net.remote_spike_steps_fwd.clear();
             net.remote_spike_steps_bwd.clear();
+            net.remote_membrane_v.clear();
+            net.shard_lockstep_origin = None;
             net.avg_step_time_ms = 0.0;
             net.playing = false;
         }
@@ -871,6 +881,8 @@ fn apply_control_to_managed_network(
             net.remote_spikes_bwd.clear();
             net.remote_spike_steps_fwd.clear();
             net.remote_spike_steps_bwd.clear();
+            net.remote_membrane_v.clear();
+            net.shard_lockstep_origin = None;
             net.avg_step_time_ms = 0.0;
             net.playing = false;
             net.initial_config = cfg;
@@ -1108,6 +1120,12 @@ async fn connect_peer(
     addr: &str,
 ) -> Result<DistributedNeuromorphicClient<tonic::transport::Channel>, String> {
     connect_peer_with_timeout(addr, Duration::from_secs(3)).await
+}
+
+/// Opt-in lock-step execution of layer shards (`NM_SHARD_LOCKSTEP=1`).
+fn shard_lockstep_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| env_flag("NM_SHARD_LOCKSTEP").unwrap_or(false))
 }
 
 fn env_flag(name: &str) -> Option<bool> {
@@ -2065,6 +2083,7 @@ struct ManagedChannelState {
     remote_spikes_bwd: std::collections::BTreeMap<u32, Vec<i8>>,
     remote_spike_steps_fwd: std::collections::BTreeMap<u32, i64>,
     remote_spike_steps_bwd: std::collections::BTreeMap<u32, i64>,
+    remote_membrane_v: std::collections::BTreeMap<u32, Vec<f64>>,
     external_sensory_spikes: Option<Vec<i8>>,
 }
 
@@ -2081,6 +2100,9 @@ struct CausalSpikeIngress {
     spike_indices: Vec<u32>,
     aer_payload: Vec<u8>,
     aer_base: u32,
+    /// Graded-layer membrane voltages (`SpikeBatch::membrane_v`).
+    #[serde(default)]
+    membrane_v: Vec<u8>,
 }
 
 #[cfg(feature = "replicated_durability")]
@@ -2126,6 +2148,11 @@ fn capture_channel_state_excluding(
             .iter()
             .map(|(key, value)| (*key, *value))
             .collect(),
+        remote_membrane_v: net
+            .remote_membrane_v
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect(),
         external_sensory_spikes: net.external_sensory_spikes.clone().or(queued_sensory),
     }
 }
@@ -2136,6 +2163,7 @@ fn restore_channel_state(net: &mut ManagedNetwork, state: ManagedChannelState) {
     net.remote_spikes_bwd = state.remote_spikes_bwd.into_iter().collect();
     net.remote_spike_steps_fwd = state.remote_spike_steps_fwd.into_iter().collect();
     net.remote_spike_steps_bwd = state.remote_spike_steps_bwd.into_iter().collect();
+    net.remote_membrane_v = state.remote_membrane_v.into_iter().collect();
     net.external_sensory_spikes = state.external_sensory_spikes;
 }
 
@@ -4306,6 +4334,12 @@ pub struct ManagedNetwork {
     /// Last received step index per layer (forward/backward).
     pub remote_spike_steps_fwd: HashMap<u32, i64>,
     pub remote_spike_steps_bwd: HashMap<u32, i64>,
+    /// Membrane voltages received with a remote layer's newest spikes when
+    /// that layer contains graded cells (see `SpikeBatch::membrane_v`).
+    pub remote_membrane_v: HashMap<u32, Vec<f64>>,
+    /// Starting tick of opt-in lock-step layer-shard execution
+    /// (`NM_SHARD_LOCKSTEP`); reset whenever the boundary channels are.
+    pub shard_lockstep_origin: Option<i64>,
     /// Optional external sensory spikes to apply on the next step.
     pub external_sensory_spikes: Option<Vec<i8>>,
     /// One bounded ingress mailbox is shared with RPC handlers. It stays
@@ -4439,6 +4473,8 @@ impl ManagedNetwork {
             remote_spikes_bwd: HashMap::new(),
             remote_spike_steps_fwd: HashMap::new(),
             remote_spike_steps_bwd: HashMap::new(),
+            remote_membrane_v: HashMap::new(),
+            shard_lockstep_origin: None,
             external_sensory_spikes: None,
             external_sensory_ingress,
             display_activity: DisplayActivityHistory::default(),
@@ -4685,6 +4721,7 @@ impl ManagedNetwork {
                     spike_indices: batch.spike_indices.clone(),
                     aer_payload: batch.aer_payload.clone(),
                     aer_base: batch.aer_base,
+                    membrane_v: batch.membrane_v.clone(),
                 })
                 .collect::<Vec<_>>();
             for peer in outbox_peers {
@@ -4755,6 +4792,15 @@ fn managed_spike_batches(net: &ManagedNetwork, step_index: i64) -> Vec<SpikeBatc
             continue;
         }
         let layer_spikes: Vec<i8> = net.runner.last_spk_h[layer_idx].iter().copied().collect();
+        // Graded cells release as a function of voltage, not spikes.
+        let membrane_v = if net.runner.layer_boundary_carries_membrane(layer_idx) {
+            net.runner.v_h[layer_idx]
+                .as_slice()
+                .map(crate::layer_shard::encode_membrane_v)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let exchange = encode_exchange(ts_us, 0, &layer_spikes);
         let indices = exchange.spike_indices;
         let mut aer_payload = exchange.aer_payload;
@@ -4770,6 +4816,7 @@ fn managed_spike_batches(net: &ManagedNetwork, step_index: i64) -> Vec<SpikeBatc
             is_backward: false,
             aer_payload,
             aer_base: 0,
+            membrane_v,
         });
     }
     batches
@@ -7057,6 +7104,14 @@ impl DistributedNode {
                 ));
             }
             steps.insert(ingress.layer_index, ingress.step_index);
+            match crate::layer_shard::decode_membrane_v(&ingress.membrane_v, layer_size) {
+                Some(v) => {
+                    channel.remote_membrane_v.insert(ingress.layer_index, v);
+                }
+                None => {
+                    channel.remote_membrane_v.remove(&ingress.layer_index);
+                }
+            }
             if ingress.is_backward {
                 channel
                     .remote_spikes_bwd
@@ -8433,6 +8488,18 @@ impl DistributedNode {
                                 layer_size,
                             )
                             .unwrap_or_else(|_| vec![0i8; layer_size]);
+                            // Graded release crosses the boundary as voltage.
+                            match crate::layer_shard::decode_membrane_v(
+                                &batch.membrane_v,
+                                layer_size,
+                            ) {
+                                Some(v) => {
+                                    net.remote_membrane_v.insert(batch.layer_index, v);
+                                }
+                                None => {
+                                    net.remote_membrane_v.remove(&batch.layer_index);
+                                }
+                            }
                             if batch.is_backward {
                                 net.remote_spikes_bwd.insert(batch.layer_index, spikes);
                             } else {
@@ -8493,6 +8560,7 @@ impl DistributedNode {
                     spike_indices: batch.spike_indices.clone(),
                     aer_payload: batch.aer_payload.clone(),
                     aer_base: batch.aer_base,
+                    membrane_v: batch.membrane_v.clone(),
                 })
                 .collect::<Vec<_>>();
             // The managed step reserves the exact destination suffix in the
@@ -8545,6 +8613,7 @@ impl DistributedNode {
                 spike_indices: batch.spike_indices.clone(),
                 aer_payload: batch.aer_payload.clone(),
                 aer_base: batch.aer_base,
+                membrane_v: batch.membrane_v.clone(),
             };
             let payload = serde_json::to_vec(&ingress)
                 .map_err(|error| format!("encode causal ingress: {error}"))?;
@@ -9880,6 +9949,8 @@ impl DistributedNode {
                     net.remote_spikes_bwd.clear();
                     net.remote_spike_steps_fwd.clear();
                     net.remote_spike_steps_bwd.clear();
+                    net.remote_membrane_v.clear();
+                    net.shard_lockstep_origin = None;
 
                     let mut config_applied = !config_changed;
                     let mut loaded_config = None;
@@ -10210,6 +10281,11 @@ impl DistributedNode {
                                 .remote_spike_steps_bwd
                                 .into_iter()
                                 .collect(),
+                            remote_membrane_v: recovered_channel
+                                .remote_membrane_v
+                                .into_iter()
+                                .collect(),
+                            shard_lockstep_origin: None,
                             external_sensory_spikes: recovered_channel.external_sensory_spikes,
                             external_sensory_ingress: sensory_ingress,
                             display_activity: DisplayActivityHistory::default(),
@@ -10592,6 +10668,37 @@ impl DistributedNode {
                 continue;
             }
 
+            // Opt-in lock-step layer sharding (`NM_SHARD_LOCKSTEP=1`): step
+            // only once every remote layer has delivered the state the
+            // single-node kernel would read (upstream: this step, downstream:
+            // the previous one), so a sharded network computes the same
+            // transition sequence as one node. The default free-running
+            // loop admits whatever boundary state has arrived.
+            if shard_lockstep_enabled()
+                && !net.assigned_layers.is_empty()
+                && let Some(range) = net.runner.layer_range.clone()
+            {
+                let t = net.runner.t as i64;
+                let origin = *net.shard_lockstep_origin.get_or_insert(t);
+                let hidden = net.runner.net.num_hidden_layers;
+                let ready =
+                    crate::layer_shard::lockstep_boundary_ready(&range, hidden, t, origin, |l| {
+                        let key = l as u32;
+                        net.remote_spike_steps_fwd
+                            .get(&key)
+                            .copied()
+                            .max(net.remote_spike_steps_bwd.get(&key).copied())
+                    });
+                if !ready {
+                    drop(net);
+                    tokio::select! {
+                        _ = shutdown.changed() => {}
+                        _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                    }
+                    continue;
+                }
+            }
+
             // The input queues are drained into the compatibility kernel
             // before the step. Keep an owned pre-step image so a failed
             // durable publication can retry the exact same admission
@@ -10611,47 +10718,33 @@ impl DistributedNode {
             #[cfg(any(feature = "superdense_executor", feature = "replicated_durability"))]
             let previous_channel_state = capture_channel_state(&net);
 
-            // Sync remote spikes into runner before stepping.
-            // Use copy_from_slice instead of Array1::from_vec to reuse the existing
-            // allocation and avoid per-step heap allocation on the hot path.
+            // Admit the newest state received for layers owned by other
+            // shards. A layer shard stages it (spikes plus graded-cell
+            // voltages) for the kernel to replay where single-node execution
+            // evaluates that layer: downstream layers before the step,
+            // upstream layers at their position (`layer_shard`). A warm copy
+            // of a layer this runner itself evaluates keeps the legacy
+            // mirror of the active owner's spike vector.
             let fwd_spikes = std::mem::take(&mut net.remote_spikes_fwd);
-            for (l, spikes) in fwd_spikes {
-                let li = l as usize;
-                if li < net.runner.last_spk_h.len() {
-                    let sz = net.runner.layer_size(li);
-                    if spikes.len() == sz {
-                        if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
-                            dst.copy_from_slice(&spikes);
-                        }
-                    } else {
-                        // Topology mismatch: resize-and-copy (rare path).
-                        let n = sz.min(spikes.len());
-                        if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
-                            dst[..n].copy_from_slice(&spikes[..n]);
-                            for v in dst[n..].iter_mut() {
-                                *v = 0;
-                            }
-                        }
-                    }
-                }
-            }
             let bwd_spikes = std::mem::take(&mut net.remote_spikes_bwd);
-            for (l, spikes) in bwd_spikes {
+            let remote_membrane_v = std::mem::take(&mut net.remote_membrane_v);
+            for (l, spikes) in fwd_spikes.into_iter().chain(bwd_spikes) {
                 let li = l as usize;
-                if li < net.runner.last_spk_h.len() {
-                    let sz = net.runner.layer_size(li);
-                    if spikes.len() == sz {
-                        if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
-                            dst.copy_from_slice(&spikes);
-                        }
-                    } else {
-                        let n = sz.min(spikes.len());
-                        if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
-                            dst[..n].copy_from_slice(&spikes[..n]);
-                            for v in dst[n..].iter_mut() {
-                                *v = 0;
-                            }
-                        }
+                if li >= net.runner.last_spk_h.len() {
+                    continue;
+                }
+                if !net.runner.is_layer_assigned(li) {
+                    let membrane_v = remote_membrane_v.get(&l).map(Vec::as_slice);
+                    net.runner.stage_remote_layer(li, &spikes, membrane_v);
+                    continue;
+                }
+                let sz = net.runner.layer_size(li);
+                if let Some(dst) = net.runner.last_spk_h[li].as_slice_mut() {
+                    // Topology mismatch copies the common prefix (rare path).
+                    let n = sz.min(spikes.len()).min(dst.len());
+                    dst[..n].copy_from_slice(&spikes[..n]);
+                    for v in dst[n..].iter_mut() {
+                        *v = 0;
                     }
                 }
             }
@@ -14693,6 +14786,8 @@ mod tests {
             remote_spikes_bwd: HashMap::new(),
             remote_spike_steps_fwd: HashMap::new(),
             remote_spike_steps_bwd: HashMap::new(),
+            remote_membrane_v: HashMap::new(),
+            shard_lockstep_origin: None,
             external_sensory_spikes: None,
             external_sensory_ingress: sensory_ingress,
             display_activity: DisplayActivityHistory::default(),
@@ -14782,6 +14877,8 @@ mod tests {
             remote_spikes_bwd: HashMap::new(),
             remote_spike_steps_fwd: HashMap::new(),
             remote_spike_steps_bwd: HashMap::new(),
+            remote_membrane_v: HashMap::new(),
+            shard_lockstep_origin: None,
             external_sensory_spikes: None,
             external_sensory_ingress: sensory_ingress,
             display_activity: DisplayActivityHistory::default(),
@@ -15665,6 +15762,89 @@ mod tests {
         let network = network.read().await;
         assert_eq!(network.remote_spikes_fwd.get(&0), Some(&vec![0, 1]));
         assert_eq!(network.remote_spike_steps_fwd.get(&0), Some(&42));
+    }
+
+    /// Graded (non-spiking) cells release transmitter as a function of
+    /// voltage, so a boundary layer containing them carries its membrane
+    /// voltages; the receiving shard admits them with the layer's spikes.
+    #[cfg(feature = "growth3d")]
+    #[tokio::test]
+    async fn graded_boundary_layer_carries_membrane_voltages() {
+        let mut config = NetworkConfig::default();
+        config.num_sensory_neurons = 2;
+        config.num_hidden_layers = 2;
+        config.num_hidden_per_layer_initial = 3;
+        config.num_output_neurons = 1;
+        config.growth_enabled = false;
+        let lif = LIFParams::default();
+        let stdp = STDPParams::default();
+        let (model, learning) = (NeuronModel::Aarnn, Learning::Aarnn);
+        let managed = |config: &NetworkConfig, range, active: u32| {
+            let mut runner =
+                Runner::new(lif.clone(), stdp.clone(), config.clone(), model, learning);
+            runner.layer_range = Some(range);
+            // Untyped cells take the network-wide biology.
+            for layer in runner.topo.layers.iter_mut() {
+                for node in layer.iter_mut() {
+                    node.type_name = None;
+                }
+            }
+            runner.sync_bio_from_topo();
+            let mut net = ManagedNetwork::new(
+                "graded-shards".to_owned(),
+                runner,
+                config.clone(),
+                model,
+                learning,
+                lif.clone(),
+                stdp.clone(),
+            );
+            net.assigned_layers = vec![active];
+            net
+        };
+
+        let spiking = managed(&config, 0..1, 0);
+        let batches = managed_spike_batches(&spiking, 7);
+        assert!(
+            batches[0].membrane_v.is_empty(),
+            "spiking layers send spikes only"
+        );
+
+        config.aarnn_bio.graded_enabled = true;
+        let mut source = managed(&config, 0..1, 0);
+        assert!(source.runner.layer_boundary_carries_membrane(0));
+        let v: Vec<f64> = (0..source.runner.v_h[0].len())
+            .map(|j| -60.0 + j as f64 * 2.5)
+            .collect();
+        source.runner.v_h[0].assign(&ndarray::Array1::from_vec(v.clone()));
+        let batches = managed_spike_batches(&source, 7);
+        assert_eq!(
+            crate::layer_shard::decode_membrane_v(&batches[0].membrane_v, v.len()),
+            Some(v.clone())
+        );
+
+        let target = managed(&config, 1..2, 1);
+        let node = DistributedNode::new("graded-next".to_owned(), false);
+        node.state
+            .write()
+            .await
+            .networks
+            .insert("graded-shards".to_owned(), Arc::new(RwLock::new(target)));
+        node.handle_incoming_spike_batch(batches[0].clone(), None)
+            .await;
+        let state = node.state.read().await;
+        let network = state.networks.get("graded-shards").expect("loaded target");
+        let mut network = network.write().await;
+        assert_eq!(network.remote_membrane_v.get(&0), Some(&v));
+
+        // The upstream layer is admitted during the step at its own position.
+        let spikes = network.remote_spikes_fwd.remove(&0).expect("spikes");
+        let membrane = network.remote_membrane_v.remove(&0);
+        network
+            .runner
+            .stage_remote_layer(0, &spikes, membrane.as_deref());
+        network.runner.step(None);
+        assert_eq!(network.runner.v_h[0].to_vec(), v);
     }
 
     #[test]
@@ -17301,6 +17481,7 @@ mod tests {
             spike_indices: exchange.spike_indices,
             aer_payload: exchange.aer_payload,
             aer_base: exchange.aer_base,
+            membrane_v: Vec::new(),
         };
         let frame = crate::causal_transport::proto::CausalEventEnvelope {
             schema_version: u32::from(crate::deterministic::SchemaVersion::CURRENT.raw()),
@@ -17343,6 +17524,8 @@ mod tests {
             remote_spikes_bwd: HashMap::new(),
             remote_spike_steps_fwd: HashMap::new(),
             remote_spike_steps_bwd: HashMap::new(),
+            remote_membrane_v: HashMap::new(),
+            shard_lockstep_origin: None,
             external_sensory_spikes: None,
             external_sensory_ingress: sensory_ingress.clone(),
             display_activity: DisplayActivityHistory::default(),

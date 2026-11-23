@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use crate::config::NodeNetworkConfig;
 use anyhow::{Context, bail};
 use socket2::{Domain, Protocol, Socket, Type};

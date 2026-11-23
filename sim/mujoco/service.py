@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Private loopback reference physics service for functional viewers.
 
 One worker owns all physics and sensing. Viewers submit bounded environmental

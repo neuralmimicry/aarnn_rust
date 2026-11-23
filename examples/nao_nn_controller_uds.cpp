@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // Webots NAO controller that talks to the NN server over Unix datagram sockets (UDS).
 // Preferred payload is AER (Address-Event Representation); legacy float frames are
 // still supported via NM_IPC_FORMAT=float.

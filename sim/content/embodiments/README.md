@@ -18,8 +18,10 @@ intents, not learned skills, a verified gait or biological cognition. Crow is
 an original reduced Corvus corone model with a proposed sensory/motor mapping.
 Flight, walking, perching, feeding and commercial process tasks remain open.
 The six existing network IDs/files and backend routes remain preserved; BANC
-and FAFB are separate. MuJoCo C. elegans now supports its preserved network
-through a versioned engineering projection and named muscle-response v2. Native
+and FAFB are separate. MuJoCo C. elegans runs the regenerated connectome
+(import v2: signed chemical synapses, gap junctions, anatomical typing) through
+48 named inputs (24 exteroceptive/inertial + 24 proprioceptive bend channels)
+and named muscle-response v3 (row 01 = head). Native
 Rust also implements hexapod 34/18, distinct BANC/FAFB 418/48, NAO 250/40 and
 zebrafish 32/32 adapters. Biological calibration and learned task transfer remain open.
 All profiles can run programmed NPC mechanics without neural transfer.
@@ -81,6 +83,31 @@ the existing TCP/UDS bridge and loads the preserved snapshot instead. Explicit
 NPC/silent/reference bindings opt out. See [simulation assumptions](celegans-simulation-v2.json)
 and the [reproduction/evidence record](../../../docs/lec-crow-delivery.md).
 
+Closed-loop behaviour is measured separately from exchange counts.
+`--trace DIR [--trace-every N]` writes a read-only body/joint/sensor/applied-spike
+sample per body, and headless `--lockstep` makes the body's source clock wait
+for each reference reply so a slower-than-real-time brain receives every frame.
+`scripts/qa/probe_celegans_mujoco_behaviour.py` compares the worm with a
+same-binary passive control against fixed sense/wriggle/move/explore
+thresholds, and `scripts/qa/celegans_depth_study.py` compares every AARNN depth
+level (closed loop, lock-step, with frame-by-frame MP4 replay at simulation
+speed) and all depth-3 mechanism permutations (open loop). The worm senses,
+bends and drifts (0.5 body lengths in 30 s at depth 1) but **does not yet crawl
+with a travelling wave**; the calibrated body crawls at 0.16 L/s under a
+programmed wave. See the
+[import v2 and depth study](../../../docs/lec-crow-delivery.md#c-elegans-import-v2-biological-io-habitat-v3-and-depth-study-2026-11-21).
+
+Motor neurons and muscles can be graded (non-spiking) cells
+(`build_celegans_network_json.py --motor-model graded --muscle-model graded`).
+Graded muscles send a pulse-density code that the brain announces in its
+handshake (`output_code: pulse_density`), and the body then decodes muscle
+activation linearly instead of by twitch summation. Graded cells roughly
+double curvature and travel on the same anatomy but still do not crawl; see
+[graded motor neurons and muscles](../../../docs/lec-crow-delivery.md#c-elegans-graded-motor-neurons-and-muscles-2026-11-21).
+`--graded-classes AVA,AVB --tonic AVB=2 --tonic AVA=-15` adds graded command
+interneurons held in a forward state; see
+[forward state](../../../docs/lec-crow-delivery.md#c-elegans-graded-command-interneurons-and-forward-state-2026-11-21).
+
 Managed MuJoCo selects legacy snapshots independently; a new unbound robot in
 the same population remains NPC. Matching explicit `--network-map` entries can
 select brains for new profiles. Strict preflight checks ordered names/imported
@@ -101,9 +128,11 @@ the unsupported native legacy sensory path explicitly.
 
 Native habitats reuse the existing shared catalogue for all 28 profiles. Worms
 have tapered capsule cuticle with schematic annuli/internal landmarks, nearby
-range/contact food proxies, ridges, refuge and light/heat cues. The 0.34 m body
-and inherited mass are engineering scale, not measured worm anatomy. The exact
-24/96 neural contract is preserved. Shared fly/fish anatomy and crow feather
+contact food proxies, ridges, refuge and light/heat cues, plus analytic stimulus
+fields (habitat v3: odour, soluble food/salt, repellent spot and ring,
+temperature gradient, light, O2, plate taps) and a resistive-force agar
+substrate. The 0.34 m body and inherited mass are engineering scale, not
+measured worm anatomy. Other engines keep the 24/96 device contract. Shared fly/fish anatomy and crow feather
 details are massless visual geometry. Local body checkpoint digests change;
 incompatible snapshots are rejected, while neural snapshots stay untouched.
 
@@ -173,6 +202,7 @@ cargo xtask qa run --suite lec-crow
 cargo xtask qa run --suite lec-crow-habitats
 cargo xtask qa run --suite lec-crow-legacy-neural
 cargo xtask qa run --suite lec-crow-mujoco-population
+cargo xtask qa run --suite lec-crow-mujoco-behaviour
 cargo xtask qa run --suite lec-crow-shared
 cargo xtask qa run --suite lec-crow-launchers
 cargo xtask qa run --suite lec-crow-npc
@@ -211,3 +241,15 @@ trained/held-out tasks remain open. Chaos body reset is tested separately from
 checkpoint/replay: `--reset-at 50 --steps 100` disconnects the reference stream,
 advances the local epoch and leaves both controllers inhibited. No physical
 device is connected or actuated.
+
+Mechanics and habitat revisions (2026-11-22; see `docs/lec-crow-delivery.md`,
+"Embodied locomotion across bodies"): zebrafish v2 (tapered neutral-density
+trunk, vertical hinged caudal fin, low joint damping/armature, snout-mounted
+range rays, `scene.hydrodynamics` = `resistive-ellipsoid-v1` applied through
+`aarnn_embodiment::force::ellipsoid_drag` by every engine); Drosophila v2 (leg
+damping 2e-4, armature 1e-6, servo kp .03); wheeled archetypes drive-v2 (the
+front wheel pair rolls like casters so differential steering works); range
+rays never start inside the robot (`ray_beyond_self`); habitat rims are
+full-height (glass front) and never shifted with furniture. Designed AARNN
+circuits for these bodies are built by `scripts/build_*_network_json.py`
+from the shared blocks in `scripts/aarnn_circuit.py`.

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Bounded, asynchronous, loopback-only AER1 reference client. AARNN-AER/1
 //! authorisation/commit and FPAA UDP are deliberately different protocols.
 use aarnn_aer_legacy::{decode_events_bounded, encode_spikes};
@@ -51,6 +55,24 @@ pub struct Actuator {
     #[serde(default)]
     pub position_readout: bool,
     pub velocity_limit: Option<f64>,
+    /// Servo wake-up (graded position readouts): after arming, the target
+    /// blends linearly from `from` to the decoded target over `seconds`, as a
+    /// position-servo robot interpolates from its rest pose on wake-up. A
+    /// graded brain's outputs start at zero density, which would otherwise
+    /// command every joint to its lower limit for the first ~50 ms.
+    #[serde(default)]
+    pub wake: Option<Wake>,
+    /// Graded decode time constant (s) for this actuator's readout; default
+    /// motor::RATE_TAU_S (20 ms). A slower decode is the transducer's own
+    /// low-pass (a muscle twitch, a servo's position loop): at 20 ms the
+    /// pulse-density ripple (~+-5 % of the joint range) topples a biped.
+    #[serde(default)]
+    pub decode_tau_s: Option<f64>,
+}
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct Wake {
+    pub from: f64,
+    pub seconds: f64,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct WeightedChannel {
@@ -66,10 +88,196 @@ pub struct Model {
     pub actuators: Vec<Actuator>,
     pub controller_transfer: Option<String>,
     pub scene: Option<Scene>,
+    /// Insect flight motor (`resonant-flight-v1`, Drosophila bodies).
+    #[serde(default)]
+    pub flight: Option<crate::flight::Flight>,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct Scene {
     pub half_extent_m: f64,
+    /// Analytic stimulus fields (C. elegans habitat v3); empty for others.
+    #[serde(default)]
+    pub stimuli: Vec<Stimulus>,
+    /// Periodic whole-plate tap (mechanical stimulus), if declared.
+    #[serde(default)]
+    pub taps: Option<Taps>,
+    /// Resistive-force (agar groove) substrate drag per body segment.
+    #[serde(default)]
+    pub resistive_force: Option<ResistiveForce>,
+    /// Engine-independent water model (zebrafish `resistive-ellipsoid-v1`).
+    #[serde(default)]
+    pub hydrodynamics: Option<Hydrodynamics>,
+    /// Engine-independent air model (crow `quasi-steady-panel-v2`).
+    #[serde(default)]
+    pub aerodynamics: Option<Aerodynamics>,
+    /// Initial free-root velocity applied at load and every reset (a bird
+    /// released in flight), in world axes.
+    #[serde(default)]
+    pub launch: Option<Launch>,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct Aerodynamics {
+    pub model: String,
+    pub density_kg_m3: f64,
+    /// Named polars `[lift_slope_per_rad, lift_max, drag_zero, drag_induced,
+    /// drag_stall]` (see `force::polar_panel_force`).
+    pub polars: std::collections::BTreeMap<String, AeroPolar>,
+    pub panels: Vec<AeroPanel>,
+}
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct AeroPolar {
+    pub lift_slope_per_rad: f64,
+    pub lift_max: f64,
+    pub drag_zero: f64,
+    pub drag_induced: f64,
+    pub drag_stall: f64,
+}
+impl AeroPolar {
+    pub fn coefficients(&self) -> [f64; 5] {
+        [
+            self.lift_slope_per_rad,
+            self.lift_max,
+            self.drag_zero,
+            self.drag_induced,
+            self.drag_stall,
+        ]
+    }
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct AeroPanel {
+    pub body: String,
+    /// Centre of pressure in the body frame.
+    pub point_m: [f64; 3],
+    pub area_m2: f64,
+    pub polar: String,
+    /// Panel frame (X chord, Y span, Z normal) relative to the body frame.
+    #[serde(default = "identity_quaternion")]
+    pub quaternion_wxyz: [f64; 4],
+}
+fn identity_quaternion() -> [f64; 4] {
+    [1., 0., 0., 0.]
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct Launch {
+    pub root_linear_velocity_mps: [f64; 3],
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct Hydrodynamics {
+    pub model: String,
+    pub density_kg_m3: f64,
+    pub surface_z_m: f64,
+    pub bottom_z_m: f64,
+    pub submergence_band_m: f64,
+    pub drag_coefficients: [f64; 3],
+    pub rotational_coefficient: f64,
+    /// Centre of buoyancy relative to each body's centre of mass, in body
+    /// axes (a dorsal swim bladder gives a passive righting moment).
+    #[serde(default)]
+    pub buoyancy_offset_m: [f64; 3],
+    pub bodies: Vec<HydroBody>,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct HydroBody {
+    pub body: String,
+    pub half_size_m: [f64; 3],
+    pub offset_m: [f64; 3],
+}
+impl Hydrodynamics {
+    pub fn water(&self) -> crate::force::Water {
+        crate::force::Water {
+            density: self.density_kg_m3,
+            surface_z: self.surface_z_m,
+            bottom_z: self.bottom_z_m,
+            band: self.submergence_band_m,
+            drag: self.drag_coefficients,
+            rotational: self.rotational_coefficient,
+        }
+    }
+}
+/// One additive contribution to a named normalised field.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Stimulus {
+    pub field: String,
+    pub shape: String,
+    #[serde(default)]
+    pub center: [f64; 2],
+    #[serde(default)]
+    pub radii: [f64; 2],
+    #[serde(default)]
+    pub radius: f64,
+    #[serde(default)]
+    pub width: f64,
+    #[serde(default)]
+    pub edge: f64,
+    #[serde(default)]
+    pub strength: f64,
+    #[serde(default)]
+    pub offset: f64,
+    #[serde(default)]
+    pub gradient: [f64; 2],
+}
+impl Stimulus {
+    /// Contribution at the horizontal point `(x, y)`.
+    pub fn value(&self, x: f64, y: f64) -> f64 {
+        let dx = x - self.center[0];
+        let dy = y - self.center[1];
+        match self.shape.as_str() {
+            "gaussian" => {
+                let sx = self.radii[0].max(1.0e-6);
+                let sy = self.radii[1].max(1.0e-6);
+                self.strength * (-0.5 * ((dx / sx).powi(2) + (dy / sy).powi(2))).exp()
+            }
+            "ellipse" => {
+                let ax = self.radii[0].max(1.0e-6);
+                let ay = self.radii[1].max(1.0e-6);
+                let r = ((dx / ax).powi(2) + (dy / ay).powi(2)).sqrt();
+                // Soft edge in metres measured along the mean semi-axis.
+                let edge = (self.edge / (0.5 * (ax + ay))).max(1.0e-6);
+                self.strength / (1.0 + ((r - 1.0) / edge).exp())
+            }
+            "ring" => {
+                let d = (dx * dx + dy * dy).sqrt() - self.radius;
+                let w = self.width.max(1.0e-6);
+                self.strength * (-0.5 * (d / (0.5 * w)).powi(2)).exp()
+            }
+            "linear" => self.offset + self.gradient[0] * x + self.gradient[1] * y,
+            "constant" => self.strength,
+            _ => 0.0,
+        }
+    }
+}
+/// Sum of every stimulus of `field` at `(x, y)`, clamped to [0, 1].
+pub fn field_value(stimuli: &[Stimulus], field: &str, x: f64, y: f64) -> f64 {
+    stimuli
+        .iter()
+        .filter(|s| s.field == field)
+        .map(|s| s.value(x, y))
+        .sum::<f64>()
+        .clamp(0.0, 1.0)
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct Taps {
+    pub period_s: f64,
+    pub first_s: f64,
+    pub duration_s: f64,
+    pub acceleration_mps2: f64,
+}
+impl Taps {
+    /// Whether simulation time `t` (s) lies inside a tap pulse.
+    pub fn active(&self, t: f64) -> bool {
+        // A non-positive or NaN period never taps.
+        if self.period_s.is_nan() || self.period_s <= 0.0 || t < self.first_s {
+            return false;
+        }
+        (t - self.first_s).rem_euclid(self.period_s) < self.duration_s
+    }
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResistiveForce {
+    #[serde(rename = "tangential_N_s_per_m")]
+    pub tangential: f64,
+    #[serde(rename = "normal_N_s_per_m")]
+    pub normal: f64,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Binding {
@@ -114,15 +322,42 @@ pub struct Capture {
     pub timestamp_us: u64,
     pub values: Vec<f64>,
 }
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Reply {
     pub source_step: u64,
     pub timestamp_us: u64,
     pub spikes: Vec<u32>,
+    /// Encoding of `spikes`, negotiated once in the handshake reply.
+    pub output_code: OutputCode,
+}
+/// Encoding of the brain's output events, advertised by the brain in its
+/// handshake reply (`output_code`). Both arrive as per-frame event counts.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputCode {
+    /// Spike trains of spiking output cells (no key, or `"spikes"`).
+    #[default]
+    Spikes,
+    /// Pulse-density code of graded activations (`"pulse_density"`): the
+    /// fraction of 2 ms frames carrying an event equals the activation.
+    PulseDensity,
+}
+impl OutputCode {
+    pub fn from_handshake(reply: &serde_json::Value) -> Result<Self, String> {
+        match reply.get("output_code") {
+            None | Some(serde_json::Value::Null) => Ok(Self::Spikes),
+            Some(v) => match v.as_str() {
+                Some("spikes") => Ok(Self::Spikes),
+                Some("pulse_density") => Ok(Self::PulseDensity),
+                _ => Err(format!("unsupported brain output_code {v}")),
+            },
+        }
+    }
 }
 #[derive(Debug, Default, Serialize, Clone)]
 pub struct Status {
     pub ready: bool,
+    pub output_code: OutputCode,
     pub exchanges: u64,
     pub output_spikes: u64,
     pub pre_admission_gaps: u64,
@@ -177,16 +412,24 @@ fn exchange(stream: &mut TcpStream, payload: &[u8]) -> Result<Vec<u8>, String> {
         .and_then(|_| stream.write_all(payload))
         .map_err(|e| e.to_string())?;
     let mut length = [0; 4];
-    stream.read_exact(&mut length).map_err(|e| e.to_string())?;
+    stream.read_exact(&mut length).map_err(read_error)?;
     let count = u32::from_le_bytes(length) as usize;
     if !(1..=4 * 1024 * 1024).contains(&count) {
         return Err("response budget".into());
     }
     let mut response = vec![0; count];
-    stream
-        .read_exact(&mut response)
-        .map_err(|e| e.to_string())?;
+    stream.read_exact(&mut response).map_err(read_error)?;
     Ok(response)
+}
+/// A socket read timeout surfaces as `WouldBlock` (EAGAIN) on Unix and
+/// `TimedOut` on Windows; report it as the brain-reply timeout it is.
+fn read_error(error: std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+            "no brain reply within the data timeout (NM_AER_REFERENCE_DATA_TIMEOUT_MS)".into()
+        }
+        _ => error.to_string(),
+    }
 }
 impl Client {
     pub fn start(model: Model, binding: Binding) -> Result<Self, String> {
@@ -251,11 +494,23 @@ impl Client {
                     }
                 }
                 // Managed layout/name negotiation may take longer than one
-                // steady-state exchange. Restore the unchanged 5s data budget.
+                // steady-state exchange. Restore the 5s data budget, which an
+                // explicitly slower-than-real-time lock-step experiment may
+                // raise with NM_AER_REFERENCE_DATA_TIMEOUT_MS (1 s .. 10 min).
+                let data_timeout_ms = std::env::var("NM_AER_REFERENCE_DATA_TIMEOUT_MS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .map(|v| v.clamp(1_000, 600_000))
+                    .unwrap_or(5_000);
                 stream
-                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .set_read_timeout(Some(Duration::from_millis(data_timeout_ms)))
                     .map_err(|e| e.to_string())?;
-                progress.lock().unwrap().ready = true;
+                let output_code = OutputCode::from_handshake(&reply)?;
+                {
+                    let mut status = progress.lock().unwrap();
+                    status.output_code = output_code;
+                    status.ready = true;
+                }
                 let mut phase = vec![0.; model.io.sensors.len()];
                 while !cancel.load(Ordering::Relaxed) {
                     let capture = match rx.recv_timeout(Duration::from_millis(10)) {
@@ -304,6 +559,7 @@ impl Client {
                         source_step: capture.step,
                         timestamp_us,
                         spikes,
+                        output_code,
                     })
                     .map_err(|_| "output consumer closed")?;
                     let mut status = progress.lock().unwrap();

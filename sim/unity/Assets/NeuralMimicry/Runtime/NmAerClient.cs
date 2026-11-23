@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // NmAerClient.cs — TCP client for AARNN neuromorphic bridge
 // Protocol: AER1 binary framing over TCP with u32 LE length-prefix framing.
 // Compatible with Unity 2022.3 LTS+.
@@ -55,6 +59,7 @@ namespace NeuralMimicry
 
         private bool _disposed;
         private bool _connected;
+        private volatile NmOutputCode _outputCode = NmOutputCode.Spikes;
 
         // ------------------------------------------------------------------ //
         // Construction / teardown
@@ -98,6 +103,13 @@ namespace NeuralMimicry
         }
 
         /// <summary>
+        /// Output encoding the brain advertised in its handshake reply
+        /// (<c>output_code</c>); <see cref="NmOutputCode.Spikes"/> until a
+        /// handshake succeeds.
+        /// </summary>
+        public NmOutputCode OutputCode => _outputCode;
+
+        /// <summary>
         /// Opens the TCP connection to the AARNN server.
         /// Safe to call from any thread.
         /// </summary>
@@ -123,10 +135,15 @@ namespace NeuralMimicry
         }
 
         /// <summary>
-        /// Sends the JSON handshake that announces sensor and actuator names.
-        /// Must be called once immediately after <see cref="Connect"/> and before
-        /// the first <see cref="Step"/> call.
+        /// Sends the JSON handshake that announces sensor and actuator names and
+        /// the 2 ms contract frame, then reads the brain's reply and negotiates
+        /// <see cref="OutputCode"/>. Must be called once immediately after
+        /// <see cref="Connect"/> and before the first <see cref="Step"/> call.
         /// </summary>
+        /// <exception cref="InvalidDataException">
+        /// The brain advertised an unsupported <c>output_code</c>; the
+        /// connection is dropped and no motor output is accepted.
+        /// </exception>
         /// <param name="sensorNames">Ordered list of sensor channel names.</param>
         /// <param name="actuatorNames">Ordered list of actuator channel names.</param>
         public void SendHandshake(string[] sensorNames, string[] actuatorNames)
@@ -156,10 +173,38 @@ namespace NeuralMimicry
             sb.Append(sensorNames.Length);
             sb.Append(",\"output\":");
             sb.Append(actuatorNames.Length);
+            // One AER exchange is one 2 ms brain frame, as in the MuJoCo
+            // reference; without it the brain falls back to NM_IPC_DT_MS.
+            sb.Append(",\"dt_ms\":2");
             sb.Append('}');
 
             byte[] payload = Encoding.UTF8.GetBytes(sb.ToString());
-            WriteFramed(payload);
+            lock (_lock)
+            {
+                if (!_connected) throw new IOException("AARNN bridge not connected");
+                _outputCode = NmOutputCode.Spikes;
+                WriteFramed(payload);
+                // The brain answers the handshake with one JSON frame. Leaving it
+                // unread made every Step decode the previous frame's reply.
+                // Name/layout negotiation may exceed one data exchange.
+                int dataTimeout = _tcp.ReceiveTimeout;
+                _tcp.ReceiveTimeout = 5000;
+                byte[] reply;
+                try { reply = ReadFramed(); }
+                finally { if (_tcp != null) _tcp.ReceiveTimeout = dataTimeout; }
+                if (reply == null)
+                {
+                    DropConnection();
+                    throw new IOException("AARNN bridge closed during handshake");
+                }
+                if (!NmOutputDecode.TryParseHandshake(Encoding.UTF8.GetString(reply),
+                                                      out var code, out var error))
+                {
+                    DropConnection();
+                    throw new InvalidDataException(error);
+                }
+                _outputCode = code;
+            }
         }
 
         /// <summary>
@@ -432,6 +477,7 @@ namespace NeuralMimicry
         private void DropConnection()
         {
             _connected = false;
+            _outputCode = NmOutputCode.Spikes;
             try { _stream?.Close(); } catch { /* ignored */ }
             try { _tcp?.Close(); } catch { /* ignored */ }
             _stream = null;

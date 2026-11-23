@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Shared spike transport helpers for AER payloads, index lists, and hex framing.
 
 use thiserror::Error;

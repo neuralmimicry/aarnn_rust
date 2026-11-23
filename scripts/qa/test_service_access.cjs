@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');

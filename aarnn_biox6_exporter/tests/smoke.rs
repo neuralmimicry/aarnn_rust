@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use aarnn_biox6_exporter::{
     build_plan, export_artifacts, export_bundle, load_calibration, load_machine, load_snapshot,
     preview_html_with_defaults, snapshot_from_json_str, zip_export_with_defaults,

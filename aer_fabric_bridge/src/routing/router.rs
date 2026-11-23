@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use crate::aer::{AerEvent, SynapseId};
 use crate::metrics::Metrics;
 use crate::routing::bridge_route_table::BridgeRouteTable;

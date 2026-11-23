@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Shared spike input/output boundary for external systems.
 //!
 //! This module separates three concerns that were previously spread across the

@@ -9,7 +9,7 @@ def Xform "Robot" (
     prepend apiSchemas = ["PhysicsArticulationRootAPI"]
     customData = {
         string aarnnIODigest = "3e5a0f2a3ddf8e6c25b211e85bae46089e3bdbf487617096d493bd2ab07e230f"
-        string aarnnModelDigest = "c53a48fd296307e7dd94ef86be82aa7d9ea81030f3f78a4731cd3f0506ba101f"
+        string aarnnModelDigest = "0880c807b214dd9c475188097eaf34682cb9710c462e3c1bbf26faff51cd9f9b"
     }
 )
 {
@@ -329,6 +329,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "original_arm_1_joint1"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -351,6 +352,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "original_arm_1_joint2"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -373,6 +375,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "original_arm_1_joint3"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -395,6 +398,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "original_arm_1_joint4"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -417,6 +421,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "original_arm_1_joint5"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -439,6 +444,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "original_arm_1_joint6"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -460,6 +466,7 @@ def Xform "Robot" (
     def PhysicsPrismaticJoint "joint_original_arm_1_grip__1" (
         customData = {
             string aarnnJointName = "original_arm_1_grip_-1"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -478,6 +485,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:linear"]
         customData = {
             string aarnnJointName = "original_arm_1_grip_1"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -528,7 +536,7 @@ def Xform "Habitat"
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
         float3 xformOp:scale = (3, 0.0375, 1.2)
-        double3 xformOp:translate = (0.75, 3, 1.2000000000000002)
+        double3 xformOp:translate = (0, 3, 1.2000000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 
@@ -537,11 +545,11 @@ def Xform "Habitat"
     )
     {
         color3f[] primvars:displayColor = [(0.42, 0.5, 0.47)]
-        float[] primvars:displayOpacity = [1]
+        float[] primvars:displayOpacity = [0.2]
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
-        float3 xformOp:scale = (3, 0.0375, 0.105)
-        double3 xformOp:translate = (0.75, -3, 0.10500000000000001)
+        float3 xformOp:scale = (3, 0.0375, 1.2)
+        double3 xformOp:translate = (0, -3, 1.2000000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 
@@ -554,7 +562,7 @@ def Xform "Habitat"
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
         float3 xformOp:scale = (0.0375, 3, 1.2)
-        double3 xformOp:translate = (3.75, 0, 1.2000000000000002)
+        double3 xformOp:translate = (3, 0, 1.2000000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 
@@ -567,7 +575,7 @@ def Xform "Habitat"
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
         float3 xformOp:scale = (0.0375, 3, 1.2)
-        double3 xformOp:translate = (-3.75, 0, 1.2000000000000002)
+        double3 xformOp:translate = (-3, 0, 1.2000000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 

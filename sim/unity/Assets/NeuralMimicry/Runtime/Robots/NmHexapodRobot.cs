@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // NmHexapodRobot.cs — Unity C# MonoBehaviour for the Freenove Big Hexapod robot.
 // Compatible with Unity 2022.3 LTS+.
 //
@@ -116,6 +120,10 @@ namespace NeuralMimicry
         private Transform _ultraRearOrigin;
 
         private bool _bodyBuilt;
+
+        // Graded (pulse-density) brain decode: joint i reads channel i with
+        // coefficient 1, as sim/content/embodiments/generated/hexapod.json.
+        private readonly NmGradedJoints _graded = NmGradedJoints.Identity(TotalActuators);
 
         // Cached names.
         private string[] _sensorNamesCache;
@@ -381,6 +389,23 @@ namespace NeuralMimicry
         protected override void ApplyActuators(float[] outputs)
         {
             if (_legJoints == null || outputs == null) return;
+            if (IsGraded)
+            {
+                // Reference linear decode (actuation.rs): activation 0..1 spans
+                // the joint range and joints stay driven at activation 0. The
+                // range is this body's own drive limit (coxa/femur/tibia
+                // +-60/80/100 deg), not hexapod.json's control_range
+                // ([-0.7,0.7], [-1.4,-0.2], [-1.9,-0.5] rad).
+                if (FreshFrame)
+                {
+                    _graded.Accept(outputs);
+                    _graded.Advance();
+                }
+                for (int i = 0; i < TotalActuators; i++)
+                    DriveArticulationNorm(_legJoints[i / JointsPerLeg, i % JointsPerLeg],
+                                          (float)_graded.Normalized(i), 0);
+                return;
+            }
             int idx = 0;
             for (int l = 0; l < NumLegs; l++)
                 for (int j = 0; j < JointsPerLeg; j++, idx++)
@@ -389,5 +414,8 @@ namespace NeuralMimicry
                     DriveArticulationActivation(_legJoints[l, j], outputs[idx], 0);
                 }
         }
+
+        /// <inheritdoc/>
+        protected override void ResetGradedDecode() => _graded.Reset();
     }
 }

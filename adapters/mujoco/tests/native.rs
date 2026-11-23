@@ -1,4 +1,8 @@
 #![cfg(feature = "native")]
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use aarnn_mujoco::{aer::Model, native::Physics, world::World};
 use std::path::PathBuf;
 fn directory() -> PathBuf {
@@ -158,6 +162,7 @@ fn legacy_named_readouts_cover_outputs_silence_reset_and_joint_response() {
             source_step: 0,
             timestamp_us: 0,
             spikes: vec![0; model.io.output_names.len()],
+            ..Default::default()
         };
         state.accept(0, &empty).unwrap();
         state.advance(0);
@@ -179,6 +184,7 @@ fn legacy_named_readouts_cover_outputs_silence_reset_and_joint_response() {
                         source_step: 1,
                         timestamp_us: 2000,
                         spikes,
+                        ..Default::default()
                     },
                 )
                 .unwrap();
@@ -256,6 +262,7 @@ fn celegans_named_muscle_effort_silence_and_proper_acceleration() {
                     source_step: step,
                     timestamp_us: step * 2000,
                     spikes: vec![0; 96],
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -264,14 +271,19 @@ fn celegans_named_muscle_effort_silence_and_proper_acceleration() {
     assert!(state.controls(&world.model).iter().all(|v| *v == 0.));
     assert!(!world.physics.has_active_effort());
     let sensors = world.sensors().unwrap();
-    assert!((sensors[0] - 0.5).abs() < 0.001);
-    assert!(
-        (sensors[1] - (9.81 + 20.) / 40.).abs() < 0.001,
-        "proper acceleration {:?}",
-        &sensors[..3]
-    );
+    // v2 vibration is a rectified high-pass of proper acceleration: the
+    // static 1 g reference of a resting worm no longer drives the touch cells.
+    for (i, v) in sensors[..6].iter().enumerate() {
+        assert!(*v < 0.01, "resting inertial channel {i} = {v}");
+    }
     assert_eq!(sensors[6], 0.);
     assert_eq!(sensors[7], 0.);
+    // A straight body reports no bend on any of the 24 proprioceptive channels.
+    assert!(
+        sensors[24..].iter().all(|v| *v < 0.05),
+        "{:?}",
+        &sensors[24..]
+    );
     let mut spikes = vec![0; 96];
     spikes[world
         .model
@@ -280,7 +292,9 @@ fn celegans_named_muscle_effort_silence_and_proper_acceleration() {
         .iter()
         .position(|n| n.ends_with("MDL12"))
         .unwrap()] = 1;
-    let (joint, _) = world.physics.joint("celegans_spine_12").unwrap();
+    // v3 rows run head to tail: row 12 spans the hinges on segments 12 and
+    // 13 (celegans_spine_13 and _14).
+    let (joint, _) = world.physics.joint("celegans_spine_13").unwrap();
     let initial = world.physics.qpos()[joint];
     for step in 1000..1400 {
         state
@@ -290,6 +304,7 @@ fn celegans_named_muscle_effort_silence_and_proper_acceleration() {
                     source_step: step,
                     timestamp_us: step * 2000,
                     spikes: spikes.clone(),
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -305,11 +320,63 @@ fn celegans_named_muscle_effort_silence_and_proper_acceleration() {
         world.physics.step();
     }
     assert!(world.physics.qpos()[joint] < initial - 1e-3);
+    // The dorsal bend is sensed on the dorsal bend channel nearest that hinge
+    // (body fraction (23.5 - 12) / 24 = 0.48, i.e. sample 6), not the ventral.
+    let bent = world.sensors().unwrap();
+    let names: Vec<&str> = world
+        .model
+        .io
+        .sensors
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    let dorsal = names
+        .iter()
+        .position(|n| n.ends_with("bend_dorsal06"))
+        .unwrap();
+    let ventral = names
+        .iter()
+        .position(|n| n.ends_with("bend_ventral06"))
+        .unwrap();
+    assert!(
+        bent[dorsal] > 0.02 && bent[ventral] == 0.,
+        "dorsal {} ventral {}",
+        bent[dorsal],
+        bent[ventral]
+    );
     assert_eq!(state.npc_steps, 0);
     world.reset();
     assert!(!world.physics.has_active_effort());
     state.stop();
     assert!(state.controls(&world.model).iter().all(|v| *v == 0.));
+}
+
+#[test]
+fn celegans_trace_and_passive_observation_never_perturb_physics() {
+    let path = directory().join("celegans.xml");
+    let record = aarnn_mujoco::schema::load_model(&path).unwrap();
+    let mut observed = World::load(&path, record.clone()).unwrap();
+    let mut plain = World::load(&path, record).unwrap();
+    let header = observed.trace_header();
+    assert_eq!(header["segment_body_ids"].as_array().unwrap().len(), 24);
+    assert_eq!(header["sensor_names"].as_array().unwrap().len(), 48);
+    for _ in 0..500 {
+        observed.advance().unwrap();
+        plain.advance().unwrap();
+        observed.observe_unbound().unwrap();
+        let sample = observed.trace_record().unwrap();
+        assert_eq!(sample["sensor_source"], "passive-observation");
+        assert_eq!(sample["sensors"].as_array().unwrap().len(), 48);
+        assert_eq!(sample["joint_q"].as_array().unwrap().len(), 23);
+        assert_eq!(
+            sample["qpos"].as_array().unwrap().len(),
+            observed.physics.qpos().len()
+        );
+    }
+    assert_eq!(observed.physics.snapshot(), plain.physics.snapshot());
+    assert!(observed.applied_spikes.iter().all(|n| *n == 0));
+    observed.reset();
+    assert!(observed.last_sensors.is_empty());
 }
 
 #[test]
@@ -348,4 +415,291 @@ fn all_profiles_have_explicit_npc_mechanics_and_stop_clears_drives() {
         assert!(!world.physics.has_active_effort());
         assert_eq!(world.npc_steps, 20);
     }
+}
+
+#[test]
+fn celegans_stimulus_fields_follow_the_habitat() {
+    use aarnn_embodiment::aer::field_value;
+    let path = directory().join("celegans.xml");
+    let record = aarnn_mujoco::schema::load_model(&path).unwrap();
+    let scene = record.scene.clone().unwrap();
+    assert!(scene.resistive_force.is_some() && scene.taps.is_some());
+    let s = &scene.stimuli;
+    // Food odour peaks on the largest lawn and decays away from it.
+    let lawn = s
+        .iter()
+        .find(|x| x.field == "attractant_volatile")
+        .unwrap()
+        .center;
+    let on = field_value(s, "attractant_volatile", lawn[0], lawn[1]);
+    let off = field_value(s, "attractant_volatile", -0.55, 0.55);
+    let between = field_value(s, "attractant_volatile", 0.5 * lawn[0], 0.5 * lawn[1]);
+    assert!(
+        on > 0.7 && off < 0.1 * on && between > off && between < on,
+        "on {on} between {between} off {off}"
+    );
+    // O2 is lower inside the lawn than in open air.
+    assert!(field_value(s, "oxygen", lawn[0], lawn[1]) < field_value(s, "oxygen", -0.55, 0.55));
+    // The plate is warmer towards +x; the warm patch is warmer still.
+    assert!(field_value(s, "temperature", 0.3, -0.5) > field_value(s, "temperature", -0.3, -0.5));
+    // Every field stays normalised everywhere on the plate.
+    for field in [
+        "light",
+        "temperature",
+        "attractant_soluble",
+        "repellent_soluble",
+        "attractant_volatile",
+        "oxygen",
+    ] {
+        for i in 0..27 {
+            for j in 0..27 {
+                let (x, y) = (-0.65 + 0.05 * i as f64, -0.65 + 0.05 * j as f64);
+                let v = field_value(s, field, x, y);
+                assert!(v.is_finite() && (0. ..=1.).contains(&v));
+            }
+        }
+    }
+    // A passive worm under substrate drag stays put; taps register on the
+    // vibration channels only while a pulse is active.
+    let mut world = World::load(&path, record).unwrap();
+    let start = world.physics.qpos()[..2].to_vec();
+    let mut tapped = 0.0f64;
+    for _ in 0..4500 {
+        world.advance().unwrap();
+        if scene.taps.as_ref().unwrap().active(world.physics.time()) {
+            let v = world.sensors().unwrap();
+            tapped = tapped.max(v[0].max(v[1]).max(v[2]));
+        }
+    }
+    assert!(tapped > 0.2, "plate tap vibration {tapped}");
+    let end = &world.physics.qpos()[..2];
+    let drift = ((end[0] - start[0]).powi(2) + (end[1] - start[1]).powi(2)).sqrt();
+    assert!(drift < 0.03, "passive drift {drift} m");
+}
+
+/// The calibrated body crawls under a biological travelling wave: a 0.5 Hz,
+/// 0.65 body-length head-to-tail wave moves it forward, the reversed wave
+/// backward (resistive-force substrate, mechanics v3).
+#[test]
+fn celegans_travelling_wave_crawls_in_the_wave_direction() {
+    let path = directory().join("celegans.xml");
+    let speed = |direction: f64| {
+        let record = aarnn_mujoco::schema::load_model(&path).unwrap();
+        let mut world = World::load(&path, record).unwrap();
+        let hinges: Vec<(usize, f64)> = world
+            .model
+            .actuators
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let n: f64 = a
+                    .joint
+                    .strip_prefix("celegans_spine_")
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                (i, (23.5 - (n - 1.)) / 24.)
+            })
+            .collect();
+        let head = world.physics.body("segment_23").unwrap();
+        let tail = world.physics.body("segment_00").unwrap();
+        let axis = {
+            let (h, _, _) = world.physics.body_state(head).unwrap();
+            let (t, _, _) = world.physics.body_state(tail).unwrap();
+            let v = [h[0] - t[0], h[1] - t[1]];
+            let n = (v[0] * v[0] + v[1] * v[1]).sqrt();
+            [v[0] / n, v[1] / n]
+        };
+        let centroid = |w: &World| {
+            let mut c = [0.; 2];
+            for b in 1..25 {
+                let (p, _, _) = w.physics.body_state(b).unwrap();
+                c[0] += p[0] / 24.;
+                c[1] += p[1] / 24.;
+            }
+            c
+        };
+        let start = centroid(&world);
+        let steps = 4000;
+        for k in 0..steps {
+            let t = k as f64 * 0.002;
+            let ramp = (t / 1.0).min(1.0);
+            for &(i, ap) in &hinges {
+                let target =
+                    ramp * 0.3 * (std::f64::consts::TAU * (0.5 * t - direction * ap / 0.65)).sin();
+                world.physics.control(i, target, true).unwrap();
+            }
+            world.physics.clear_forces();
+            world.celegans_substrate_forces().unwrap();
+            world.physics.step();
+        }
+        let end = centroid(&world);
+        ((end[0] - start[0]) * axis[0] + (end[1] - start[1]) * axis[1])
+            / 0.34
+            / (steps as f64 * 0.002)
+    };
+    let forward = speed(1.0);
+    let backward = speed(-1.0);
+    assert!(forward > 0.08, "head-to-tail wave speed {forward} L/s");
+    assert!(backward < -0.08, "tail-to-head wave speed {backward} L/s");
+}
+
+/// Fly mechanics v3 (`resonant-flight-v1`): the wings fold and the fly
+/// stands without a brain; graded pulse-density commands on the record's
+/// flight readouts (decoded by the shared actuation) beat both wings in phase
+/// at the declared resonance and lift the fly off. Exercises the record's
+/// readouts, the shared decoder, the crate motor and the declared blade
+/// panels on the native physics, as `World::advance` applies them.
+#[test]
+fn fly_flight_motor_lifts_off_only_on_a_neural_command() {
+    use aarnn_embodiment::{
+        actuation::Actuation,
+        aer::{OutputCode, Reply},
+        flight::COMMANDS,
+        force::polar_panel_force,
+    };
+    let path = directory().join("drosophila_banc.xml");
+    let model = aarnn_mujoco::schema::load_model(&path).unwrap();
+    let flight = model.flight.clone().expect("fly declares a flight motor");
+    flight.validate().unwrap();
+    // No brain: the thoracic spring holds both wings folded back and the
+    // fly stays on its feet.
+    let mut world = World::load(&path, model.clone()).unwrap();
+    for _ in 0..500 {
+        world.advance().unwrap();
+    }
+    let fold = |p: &Physics, side: &str| p.qpos()[p.joint(&format!("{side}_wing_flap")).unwrap().0];
+    for side in ["left", "right"] {
+        assert!(
+            (fold(&world.physics, side) - flight.fold_rad).abs() < 0.05,
+            "{side} wing not folded"
+        );
+    }
+    let standing = world.physics.qpos()[2];
+    assert!(standing < 0.06 && !world.physics.has_active_effort());
+    // Programmed brain: power 1, amplitude 0.85 (1.02 rad; the 10.3 g fly
+    // hovers near 0.85 rad), centred strokes, as sigma-delta pulse densities
+    // on the readouts.
+    let aero = model.scene.as_ref().unwrap().aerodynamics.clone().unwrap();
+    let mut physics = Physics::load(&path).unwrap();
+    let panels: Vec<_> = aero
+        .panels
+        .iter()
+        .map(|p| {
+            (
+                physics.body(&p.body).unwrap(),
+                p.point_m,
+                p.area_m2,
+                aero.polars[&p.polar].coefficients(),
+            )
+        })
+        .collect();
+    let joints: Vec<[(usize, usize); 2]> = flight
+        .wings
+        .iter()
+        .map(|w| {
+            [
+                physics.joint(&w.stroke_joint).unwrap(),
+                physics.joint(&w.pitch_joint).unwrap(),
+            ]
+        })
+        .collect();
+    let mut state = Actuation::new(&model);
+    state.arm();
+    let density = [1.0, 0.85, 0.85, 0.5, 0.5];
+    let mut phase = vec![0.0; model.io.output_names.len()];
+    let mut stroke = Vec::new();
+    for step in 1..=600u64 {
+        let mut drive = vec![0.0; phase.len()];
+        for (command, d) in flight.commands.iter().zip(density) {
+            // Signed centre readouts: equal densities on both channels.
+            for c in &command.readout {
+                drive[c.channel] = d;
+            }
+        }
+        let spikes = phase
+            .iter_mut()
+            .zip(&drive)
+            .map(|(p, d)| {
+                *p += d;
+                let spike = u32::from(*p >= 1. - 1e-12);
+                *p -= f64::from(spike);
+                spike
+            })
+            .collect();
+        let reply = Reply {
+            source_step: step,
+            timestamp_us: step * 2000,
+            spikes,
+            output_code: OutputCode::PulseDensity,
+        };
+        state
+            .select(&model, step, false, true, Some(&reply), None)
+            .unwrap();
+        assert_eq!(state.commands().len(), COMMANDS.len());
+        for (i, target) in state
+            .controls(&model)
+            .iter()
+            .take(model.actuators.len())
+            .enumerate()
+        {
+            physics.control(i, *target, state.active(i)).unwrap();
+        }
+        physics.clear_forces();
+        let (q, v) = (physics.qpos().to_vec(), physics.qvel().to_vec());
+        let wings = [0, 1].map(|s| joints[s].map(|(qi, di)| [q[qi], v[di]]));
+        let torques = flight
+            .torques(physics.time(), state.commands(), wings)
+            .unwrap();
+        for (wing, tau) in joints.iter().zip(torques) {
+            for ((_, dof), t) in wing.iter().zip(tau) {
+                physics.add_joint_force(*dof, t).unwrap();
+            }
+        }
+        for &(body, local, area, polar) in &panels {
+            let (position, r, velocity) = physics.body_state(body).unwrap();
+            let point: [f64; 3] = std::array::from_fn(|i| {
+                position[i] + (0..3).map(|j| r[i][j] * local[j]).sum::<f64>()
+            });
+            let com = physics.center_of_mass(body).unwrap();
+            let arm: [f64; 3] = std::array::from_fn(|i| point[i] - com[i]);
+            let w = [velocity[0], velocity[1], velocity[2]];
+            let spin = [
+                w[1] * arm[2] - w[2] * arm[1],
+                w[2] * arm[0] - w[0] * arm[2],
+                w[0] * arm[1] - w[1] * arm[0],
+            ];
+            let relative: [f64; 3] = std::array::from_fn(|i| velocity[i + 3] + spin[i]);
+            let force = polar_panel_force(relative, r, area, aero.density_kg_m3, &polar).unwrap();
+            physics.force_at(body, force, point).unwrap();
+        }
+        physics.step();
+        stroke.push((fold(&physics, "left"), fold(&physics, "right")));
+    }
+    // In phase (one thoracic oscillator) and mirrored.
+    assert!(stroke[300..].iter().all(|(l, r)| (l - r).abs() < 0.03));
+    // 40 Hz: 20 full beats (40 sign changes) in the last 0.5 s.
+    let late: Vec<f64> = stroke[350..].iter().map(|s| s.0).collect();
+    let mean = late.iter().sum::<f64>() / late.len() as f64;
+    let crossings = late
+        .windows(2)
+        .filter(|w| (w[0] - mean) * (w[1] - mean) < 0.)
+        .count();
+    assert!(
+        (38..=42).contains(&crossings),
+        "{crossings} stroke reversals in 0.5 s"
+    );
+    // Amplitude of the fundamental from the stroke's rms (sqrt 2 x rms of a
+    // sine); the 8 ms decode leaves a little pulse-density ripple on peaks.
+    let rms = (late.iter().map(|q| (q - mean).powi(2)).sum::<f64>() / late.len() as f64).sqrt();
+    let amplitude = std::f64::consts::SQRT_2 * rms;
+    assert!(
+        (amplitude - 1.02).abs() < 0.1,
+        "stroke amplitude {amplitude}"
+    );
+    assert!(
+        physics.qpos()[2] > standing + 0.03,
+        "no lift-off: {} m",
+        physics.qpos()[2]
+    );
 }

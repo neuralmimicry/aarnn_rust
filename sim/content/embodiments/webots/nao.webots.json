@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "profile_id": "nao",
-  "model_digest": "7866788b1a77fe3d7148c9be25a0babb1b5793cbc602153ccec05aa6cec102d5",
-  "io_digest": "08fcb08c55ae94fad081ac79ad8f57f50b5bac6a9909c8121ed3bcacc91b6f52",
+  "model_digest": "28f3d75621a73b2c7968bafe2dcc0de2fc89dd706c2ee567d24aa004c9c08098",
+  "io_digest": "bd85f639ac3991aec6019cf4b90c08cee78496c58f42bef3186b10313888f91d",
   "targets": [
     {
       "joint": "HeadYaw",
@@ -11,19 +11,20 @@
       "body": 2,
       "kind": "rotational",
       "actuator": 0,
-      "gain": 1.0,
+      "gain": 21.48861,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -21.48861,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -2.148861,
+        2.148861
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.28818290481114506,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "HeadPitch",
@@ -32,822 +33,871 @@
       "body": 3,
       "kind": "rotational",
       "actuator": 1,
-      "gain": 1.0,
+      "gain": 24.77046,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -24.77046,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -2.477046,
+        2.477046
       ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "LHipYawPitch",
-      "device": "LHipYawPitch",
-      "sensor": "LHipYawPitch_position",
-      "body": 4,
-      "kind": "rotational",
-      "actuator": 2,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        -1.0,
-        -0.05
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -1.0,
-        1.0
-      ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "LHipRoll",
-      "device": "LHipRoll",
-      "sensor": "LHipRoll_position",
-      "body": 5,
-      "kind": "rotational",
-      "actuator": 3,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        -1.0,
-        -0.05
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -1.0,
-        1.0
-      ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "LHipPitch",
-      "device": "LHipPitch",
-      "sensor": "LHipPitch_position",
-      "body": 6,
-      "kind": "rotational",
-      "actuator": 4,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        -1.0,
-        -0.05
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -1.0,
-        1.0
-      ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "LKneePitch",
-      "device": "LKneePitch",
-      "sensor": "LKneePitch_position",
-      "body": 7,
-      "kind": "rotational",
-      "actuator": 5,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        -1.0,
-        -0.05
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -1.0,
-        1.0
-      ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "LAnklePitch",
-      "device": "LAnklePitch",
-      "sensor": "LAnklePitch_position",
-      "body": 8,
-      "kind": "rotational",
-      "actuator": 6,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        -1.0,
-        -0.05
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -1.0,
-        1.0
-      ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "LAnkleRoll",
-      "device": "LAnkleRoll",
-      "sensor": "LAnkleRoll_position",
-      "body": 9,
-      "kind": "rotational",
-      "actuator": 7,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        -1.0,
-        -0.05
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -1.0,
-        1.0
-      ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.3829302809105929,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "LShoulderPitch",
       "device": "LShoulderPitch",
       "sensor": "LShoulderPitch_position",
-      "body": 10,
+      "body": 4,
       "kind": "rotational",
-      "actuator": 8,
-      "gain": 1.0,
+      "actuator": 2,
+      "gain": 33.66048,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -33.66048,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -3.366048,
+        3.366048
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.42370064179324773,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "LShoulderRoll",
       "device": "LShoulderRoll",
       "sensor": "LShoulderRoll_position",
-      "body": 11,
+      "body": 5,
       "kind": "rotational",
-      "actuator": 9,
-      "gain": 1.0,
+      "actuator": 3,
+      "gain": 24.77046,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -24.77046,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -2.477046,
+        2.477046
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.3829302809105929,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "LElbowYaw",
       "device": "LElbowYaw",
       "sensor": "LElbowYaw_position",
-      "body": 12,
+      "body": 6,
       "kind": "rotational",
-      "actuator": 10,
-      "gain": 1.0,
+      "actuator": 4,
+      "gain": 21.48861,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -21.48861,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -2.148861,
+        2.148861
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.28818290481114506,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "LElbowRoll",
       "device": "LElbowRoll",
       "sensor": "LElbowRoll_position",
-      "body": 13,
+      "body": 7,
       "kind": "rotational",
-      "actuator": 11,
-      "gain": 1.0,
+      "actuator": 5,
+      "gain": 24.77046,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -24.77046,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -2.477046,
+        2.477046
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.3829302809105929,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "LWristYaw",
       "device": "LWristYaw",
       "sensor": "LWristYaw_position",
-      "body": 14,
+      "body": 8,
       "kind": "rotational",
-      "actuator": 12,
-      "gain": 1.0,
+      "actuator": 6,
+      "gain": 4.757339999999999,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -4.757339999999999,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.475734,
+        0.475734
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.027371123497422024,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "LPhalanx1",
       "device": "LPhalanx1",
       "sensor": "LPhalanx1_position",
-      "body": 15,
+      "body": 9,
       "kind": "rotational",
-      "actuator": 13,
-      "gain": 1.0,
+      "actuator": 7,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "LPhalanx2",
       "device": "LPhalanx2",
       "sensor": "LPhalanx2_position",
-      "body": 16,
+      "body": 10,
       "kind": "rotational",
-      "actuator": 14,
-      "gain": 1.0,
+      "actuator": 8,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "LPhalanx3",
       "device": "LPhalanx3",
       "sensor": "LPhalanx3_position",
-      "body": 17,
+      "body": 11,
       "kind": "rotational",
-      "actuator": 15,
-      "gain": 1.0,
+      "actuator": 9,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "LPhalanx4",
       "device": "LPhalanx4",
       "sensor": "LPhalanx4_position",
-      "body": 18,
+      "body": 12,
       "kind": "rotational",
-      "actuator": 16,
-      "gain": 1.0,
+      "actuator": 10,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "LPhalanx5",
       "device": "LPhalanx5",
       "sensor": "LPhalanx5_position",
-      "body": 19,
+      "body": 13,
       "kind": "rotational",
-      "actuator": 17,
-      "gain": 1.0,
+      "actuator": 11,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "LPhalanx6",
       "device": "LPhalanx6",
       "sensor": "LPhalanx6_position",
-      "body": 20,
+      "body": 14,
       "kind": "rotational",
-      "actuator": 18,
-      "gain": 1.0,
+      "actuator": 12,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "LPhalanx7",
       "device": "LPhalanx7",
       "sensor": "LPhalanx7_position",
-      "body": 21,
+      "body": 15,
       "kind": "rotational",
-      "actuator": 19,
-      "gain": 1.0,
+      "actuator": 13,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "LPhalanx8",
       "device": "LPhalanx8",
       "sensor": "LPhalanx8_position",
+      "body": 16,
+      "kind": "rotational",
+      "actuator": 14,
+      "gain": 0.42582,
+      "bias": [
+        0.0,
+        -0.42582,
+        -0.0
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -0.042582,
+        0.042582
+      ],
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "LHipYawPitch",
+      "device": "LHipYawPitch",
+      "sensor": "LHipYawPitch_position",
+      "body": 17,
+      "kind": "rotational",
+      "actuator": 15,
+      "gain": 130.845,
+      "bias": [
+        0.0,
+        -130.845,
+        -0.0
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -13.084500000000002,
+        13.084500000000002
+      ],
+      "damping": 2.8910329123167773,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "LHipRoll",
+      "device": "LHipRoll",
+      "sensor": "LHipRoll_position",
+      "body": 18,
+      "kind": "rotational",
+      "actuator": 16,
+      "gain": 130.845,
+      "bias": [
+        0.0,
+        -130.845,
+        -0.0
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -13.084500000000002,
+        13.084500000000002
+      ],
+      "damping": 2.8910329123167773,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "LHipPitch",
+      "device": "LHipPitch",
+      "sensor": "LHipPitch_position",
+      "body": 19,
+      "kind": "rotational",
+      "actuator": 17,
+      "gain": 85.0525,
+      "bias": [
+        0.0,
+        -85.0525,
+        -0.0
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -8.50525,
+        8.50525
+      ],
+      "damping": 1.2215547590205313,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "LKneePitch",
+      "device": "LKneePitch",
+      "sensor": "LKneePitch_position",
+      "body": 20,
+      "kind": "rotational",
+      "actuator": 18,
+      "gain": 85.0525,
+      "bias": [
+        0.0,
+        -85.0525,
+        -0.0
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -8.50525,
+        8.50525
+      ],
+      "damping": 1.2215547590205313,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "LAnklePitch",
+      "device": "LAnklePitch",
+      "sensor": "LAnklePitch_position",
+      "body": 21,
+      "kind": "rotational",
+      "actuator": 19,
+      "gain": 85.0525,
+      "bias": [
+        0.0,
+        -85.0525,
+        -0.0
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -8.50525,
+        8.50525
+      ],
+      "damping": 1.2215547590205313,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "LAnkleRoll",
+      "device": "LAnkleRoll",
+      "sensor": "LAnkleRoll_position",
       "body": 22,
       "kind": "rotational",
       "actuator": 20,
-      "gain": 1.0,
+      "gain": 130.845,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -130.845,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -13.084500000000002,
+        13.084500000000002
       ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "RHipYawPitch",
-      "device": "RHipYawPitch",
-      "sensor": "RHipYawPitch_position",
-      "body": 23,
-      "kind": "rotational",
-      "actuator": 21,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        -1.0,
-        -0.05
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -1.0,
-        1.0
-      ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "RHipRoll",
-      "device": "RHipRoll",
-      "sensor": "RHipRoll_position",
-      "body": 24,
-      "kind": "rotational",
-      "actuator": 22,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        -1.0,
-        -0.05
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -1.0,
-        1.0
-      ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "RHipPitch",
-      "device": "RHipPitch",
-      "sensor": "RHipPitch_position",
-      "body": 25,
-      "kind": "rotational",
-      "actuator": 23,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        -1.0,
-        -0.05
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -1.0,
-        1.0
-      ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "RKneePitch",
-      "device": "RKneePitch",
-      "sensor": "RKneePitch_position",
-      "body": 26,
-      "kind": "rotational",
-      "actuator": 24,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        -1.0,
-        -0.05
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -1.0,
-        1.0
-      ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "RAnklePitch",
-      "device": "RAnklePitch",
-      "sensor": "RAnklePitch_position",
-      "body": 27,
-      "kind": "rotational",
-      "actuator": 25,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        -1.0,
-        -0.05
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -1.0,
-        1.0
-      ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "RAnkleRoll",
-      "device": "RAnkleRoll",
-      "sensor": "RAnkleRoll_position",
-      "body": 28,
-      "kind": "rotational",
-      "actuator": 26,
-      "gain": 1.0,
-      "bias": [
-        0.0,
-        -1.0,
-        -0.05
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -1.0,
-        1.0
-      ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 2.8910329123167773,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "RShoulderPitch",
       "device": "RShoulderPitch",
       "sensor": "RShoulderPitch_position",
-      "body": 29,
+      "body": 23,
       "kind": "rotational",
-      "actuator": 27,
-      "gain": 1.0,
+      "actuator": 21,
+      "gain": 33.66048,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -33.66048,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -3.366048,
+        3.366048
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.42370064179324773,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "RShoulderRoll",
       "device": "RShoulderRoll",
       "sensor": "RShoulderRoll_position",
-      "body": 30,
+      "body": 24,
       "kind": "rotational",
-      "actuator": 28,
-      "gain": 1.0,
+      "actuator": 22,
+      "gain": 24.77046,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -24.77046,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -2.477046,
+        2.477046
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.3829302809105929,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "RElbowYaw",
       "device": "RElbowYaw",
       "sensor": "RElbowYaw_position",
-      "body": 31,
+      "body": 25,
       "kind": "rotational",
-      "actuator": 29,
-      "gain": 1.0,
+      "actuator": 23,
+      "gain": 21.48861,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -21.48861,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -2.148861,
+        2.148861
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.28818290481114506,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "RElbowRoll",
       "device": "RElbowRoll",
       "sensor": "RElbowRoll_position",
-      "body": 32,
+      "body": 26,
       "kind": "rotational",
-      "actuator": 30,
-      "gain": 1.0,
+      "actuator": 24,
+      "gain": 24.77046,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -24.77046,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -2.477046,
+        2.477046
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.3829302809105929,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "RWristYaw",
       "device": "RWristYaw",
       "sensor": "RWristYaw_position",
-      "body": 33,
+      "body": 27,
       "kind": "rotational",
-      "actuator": 31,
-      "gain": 1.0,
+      "actuator": 25,
+      "gain": 4.757339999999999,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -4.757339999999999,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.475734,
+        0.475734
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.027371123497422024,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "RPhalanx1",
       "device": "RPhalanx1",
       "sensor": "RPhalanx1_position",
-      "body": 34,
+      "body": 28,
       "kind": "rotational",
-      "actuator": 32,
-      "gain": 1.0,
+      "actuator": 26,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "RPhalanx2",
       "device": "RPhalanx2",
       "sensor": "RPhalanx2_position",
-      "body": 35,
+      "body": 29,
       "kind": "rotational",
-      "actuator": 33,
-      "gain": 1.0,
+      "actuator": 27,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "RPhalanx3",
       "device": "RPhalanx3",
       "sensor": "RPhalanx3_position",
-      "body": 36,
+      "body": 30,
       "kind": "rotational",
-      "actuator": 34,
-      "gain": 1.0,
+      "actuator": 28,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "RPhalanx4",
       "device": "RPhalanx4",
       "sensor": "RPhalanx4_position",
-      "body": 37,
+      "body": 31,
       "kind": "rotational",
-      "actuator": 35,
-      "gain": 1.0,
+      "actuator": 29,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "RPhalanx5",
       "device": "RPhalanx5",
       "sensor": "RPhalanx5_position",
-      "body": 38,
+      "body": 32,
       "kind": "rotational",
-      "actuator": 36,
-      "gain": 1.0,
+      "actuator": 30,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "RPhalanx6",
       "device": "RPhalanx6",
       "sensor": "RPhalanx6_position",
-      "body": 39,
+      "body": 33,
       "kind": "rotational",
-      "actuator": 37,
-      "gain": 1.0,
+      "actuator": 31,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "RPhalanx7",
       "device": "RPhalanx7",
       "sensor": "RPhalanx7_position",
-      "body": 40,
+      "body": 34,
       "kind": "rotational",
-      "actuator": 38,
-      "gain": 1.0,
+      "actuator": 32,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "RPhalanx8",
       "device": "RPhalanx8",
       "sensor": "RPhalanx8_position",
-      "body": 41,
+      "body": 35,
       "kind": "rotational",
-      "actuator": 39,
-      "gain": 1.0,
+      "actuator": 33,
+      "gain": 0.42582,
       "bias": [
         0.0,
-        -1.0,
-        -0.05
+        -0.42582,
+        -0.0
       ],
       "gear": 1.0,
       "force_range": [
-        -1.0,
-        1.0
+        -0.042582,
+        0.042582
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0017543100065101757,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "RHipYawPitch",
+      "device": "RHipYawPitch",
+      "sensor": "RHipYawPitch_position",
+      "body": 36,
+      "kind": "rotational",
+      "actuator": 34,
+      "gain": 130.845,
+      "bias": [
+        0.0,
+        -130.845,
+        -0.0
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -13.084500000000002,
+        13.084500000000002
+      ],
+      "damping": 2.8910329123167773,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "RHipRoll",
+      "device": "RHipRoll",
+      "sensor": "RHipRoll_position",
+      "body": 37,
+      "kind": "rotational",
+      "actuator": 35,
+      "gain": 130.845,
+      "bias": [
+        0.0,
+        -130.845,
+        -0.0
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -13.084500000000002,
+        13.084500000000002
+      ],
+      "damping": 2.8910329123167773,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "RHipPitch",
+      "device": "RHipPitch",
+      "sensor": "RHipPitch_position",
+      "body": 38,
+      "kind": "rotational",
+      "actuator": 36,
+      "gain": 85.0525,
+      "bias": [
+        0.0,
+        -85.0525,
+        -0.0
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -8.50525,
+        8.50525
+      ],
+      "damping": 1.2215547590205313,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "RKneePitch",
+      "device": "RKneePitch",
+      "sensor": "RKneePitch_position",
+      "body": 39,
+      "kind": "rotational",
+      "actuator": 37,
+      "gain": 85.0525,
+      "bias": [
+        0.0,
+        -85.0525,
+        -0.0
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -8.50525,
+        8.50525
+      ],
+      "damping": 1.2215547590205313,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "RAnklePitch",
+      "device": "RAnklePitch",
+      "sensor": "RAnklePitch_position",
+      "body": 40,
+      "kind": "rotational",
+      "actuator": 38,
+      "gain": 85.0525,
+      "bias": [
+        0.0,
+        -85.0525,
+        -0.0
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -8.50525,
+        8.50525
+      ],
+      "damping": 1.2215547590205313,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "RAnkleRoll",
+      "device": "RAnkleRoll",
+      "sensor": "RAnkleRoll_position",
+      "body": 41,
+      "kind": "rotational",
+      "actuator": 39,
+      "gain": 130.845,
+      "bias": [
+        0.0,
+        -130.845,
+        -0.0
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -13.084500000000002,
+        13.084500000000002
+      ],
+      "damping": 2.8910329123167773,
+      "driven": true,
+      "qpos0": 0.0
     }
   ],
-  "constraints": [],
+  "constraints": [
+    {
+      "joint1": "LHipYawPitch",
+      "joint2": "RHipYawPitch",
+      "offset": 0.0,
+      "ratio": 1.0,
+      "stiffness": 208.80499465713785,
+      "damping": 1.6704399572571027,
+      "scope": "target compliant approximation; calibration pending"
+    }
+  ],
   "fixed_world_bodies": [],
-  "composite_mass_kg": 4.872,
+  "composite_mass_kg": 5.30539,
   "controller_transfer": "legacy-native-projections-v1; native MuJoCo engineering adapter; calibration unvalidated",
   "calibration": "ODE contact/constraint response not calibrated; all self-collision suppressed; mesh collisions use Webots dynamic convex policy; fixed-link masses merged exactly",
   "coordinates": "X-forward Y-left Z-up; SI",
@@ -904,12 +954,12 @@
         "position": [
           0.0,
           -1.5,
-          0.052500000000000005
+          0.6000000000000001
         ],
         "size": [
           3.0,
           0.037500000000000006,
-          0.10500000000000001
+          1.2000000000000002
         ],
         "colour": [
           0.42,
@@ -918,7 +968,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -3359,5 +3409,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 92,
-  "digest": "f82a403750002186d1ce1eaabbc8397fd9f9ed9bde48fe3b0b706f6bb93b2174"
+  "digest": "b5569957974d0118277424ef998c6d2528cf6ea7fee055edcd41892105a05ef4"
 }

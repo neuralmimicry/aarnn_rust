@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 #include "NmNaoChatComponent.h"
 #include "NmRobotBase.h"
 #include "Components/TextRenderComponent.h"

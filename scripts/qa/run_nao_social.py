@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """SIM-NAO-INTERACTION-001: contracts, real Rust output and optional real browser."""
 import argparse
 from datetime import datetime, timezone

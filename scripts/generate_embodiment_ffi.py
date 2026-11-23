@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Generate the deliberately small C/C# ABI directly from Rust export signatures.
 
 Rejects any new type/syntax until its ABI mapping has been reviewed. No parallel

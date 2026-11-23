@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Deployment manifest validation for automatic migration executor startup.
 //!
 //! These tests cover the configuration boundary that turns deployment-owned

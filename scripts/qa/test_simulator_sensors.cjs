@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 /* Spatial/transducer fixtures: fixed geometry, no network or wall-clock oracle. */
 const assert=require('node:assert/strict');
 require('../../web_ui/sim-content.generated.js');
@@ -46,3 +50,33 @@ for(const p of c.profiles){
  assert.equal(w.withParticipants(base,Array(100).fill(robot.participants[0])).objects.length,64);
  assert.equal(w.withParticipants(base,[{id:'bad',position:[NaN,0,0],size:[1,1,1]}]).objects.length,0);
 }
+// Brain-output decode, vectors replicated from crates/aarnn-embodiment
+// (actuation.rs graded_position_readout_spans_the_full_joint_range,
+// celegans.rs pulse_density_code_decodes_linearly) at the reference 2 ms frame.
+{
+ const hex=c.profiles.find(p=>p.id==='hexapod'),femur=hex.output_names.indexOf('hex_o_001_lf_femur'),lo=-1.4,hi=-.2;
+ assert.equal(femur,1);
+ for(const density of [0,.5,1]){
+  const a=Array(hex.output).fill(0);let phase=0;
+  for(let step=1;step<=400;step++){phase+=density;const events=[];if(phase>=1-1e-12){phase-=1;events.push(femur);}w.decodeOutputs(hex,a,events,'pulse_density',2);}
+  const target=lo+Math.max(0,Math.min(1,a[femur]))*(hi-lo),expected=lo+density*(hi-lo);
+  assert.ok(Math.abs(target-expected)<.08*(hi-lo),'density '+density+': '+target+' vs '+expected);
+ }
+ const mdr=worm.output_names.findIndex(n=>n.endsWith('MDR05'));
+ for(const [p,floor] of [[.2,.6],[.5,.8]]){
+  const graded=Array(worm.output).fill(0),spiking=Array(worm.output).fill(0);let phase=0,sg=0,ss=0,n=0;
+  for(let f=0;f<5000;f++){phase+=p;const events=[];if(phase>=1){phase-=1;events.push(mdr);}
+   w.decodeOutputs(worm,graded,events,'pulse_density',2);w.decodeOutputs(worm,spiking,events,undefined,2);
+   if(f>=2500){sg+=graded[mdr];ss+=spiking[mdr];n++;}}
+  assert.ok(Math.abs(sg/n-p)<.01,'p '+p+': '+sg/n);
+  assert.ok(ss/n>floor,'spike display compresses: '+ss/n);
+ }
+ const one=Array(worm.output).fill(0);w.decodeOutputs(worm,one,[mdr],'pulse_density',2);
+ assert.ok(Math.abs(one[mdr]-(1-Math.exp(-2/55)))<1e-15,'C. elegans graded filter uses the 55 ms muscle constant');
+ const spike=[0,.5];w.decodeOutputs({kind:'fish'},spike,[0],'spikes',1);
+ assert.deepEqual(spike,[1,.5*.82],'spiking display is unchanged');
+ assert.equal(w.outputCode(undefined),'spikes');assert.equal(w.outputCode(null),'spikes');
+ assert.equal(w.outputCode('pulse_density'),'pulse_density');
+ assert.throws(()=>w.outputCode('analog'));assert.throws(()=>w.decodeOutputs(hex,Array(18).fill(0),[],'analog',1));
+}
+console.log('Output-code negotiation and pulse-density decode fixtures passed.');

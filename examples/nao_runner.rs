@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! # NAO Robot Runner Example
 //!
 //! This example demonstrates how to interface the neuromorphic simulation engine

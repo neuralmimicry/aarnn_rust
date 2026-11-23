@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 /* Native Bedrock pack contracts; actual engine execution is a separate capability. */
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'../..'),packs=path.join(root,'sim/minecraft/build/bedrock');
@@ -49,6 +53,7 @@ async function main(){
     assert.throws(()=>session.submit([],101));
     resolve({status:200,body:JSON.stringify({network_id:p.id,content_digest:content.digest,output_step_index:1,output_spike_indices:[0]})});
     await pending;assert.equal(session.poll().output_spike_indices[0],0);assert.equal(session.poll(),null);
+    assert.equal(session.outputCode,'spikes','absent companion output_code means spikes');
     const next=session.submit(new Array(p.sensory).fill(0),101);await Promise.resolve();
     assert.equal(seen.body.step_index,2);
     resolve({status:200,body:JSON.stringify({network_id:p.id,content_digest:content.digest,output_step_index:2,output_spike_indices:[]})});
@@ -59,6 +64,17 @@ async function main(){
     const bad=new Session(p,content.digest,()=>Promise.resolve({status:200,body:JSON.stringify({network_id:p.id,content_digest:content.digest,output_step_index:1,output_spike_indices:[p.output]})}));
     await bad.submit(new Array(p.sensory).fill(0),103);assert.equal(bad.active,false);
     const timeout=new Session(p,content.digest,()=>Promise.reject(Error('timeout')));await timeout.submit(new Array(p.sensory).fill(0),104);assert.equal(timeout.active,false);
+    // The brain's handshake output_code is forwarded by the companion and fixed per session.
+    const coded=(step,code)=>({status:200,body:JSON.stringify({network_id:p.id,content_digest:content.digest,output_step_index:step,output_spike_indices:[0],output_code:code})});
+    const graded=new Session(p,content.digest,()=>Promise.resolve(coded(1,'pulse_density')));
+    await graded.submit(new Array(p.sensory).fill(0),105);assert.equal(graded.active,true);
+    assert.equal(graded.outputCode,'pulse_density');assert.equal(graded.poll().output_code,'pulse_density');
+    const analog=new Session(p,content.digest,()=>Promise.resolve(coded(1,'analog')));
+    await analog.submit(new Array(p.sensory).fill(0),106);assert.equal(analog.active,false);
+    const codes=['pulse_density','spikes'];let codeStep=0;
+    const switched=new Session(p,content.digest,()=>Promise.resolve(coded(++codeStep,codes.shift())));
+    await switched.submit(new Array(p.sensory).fill(0),107);assert.equal(switched.active,true);
+    await switched.submit(new Array(p.sensory).fill(0),108);assert.equal(switched.active,false,'output_code may not change within a session');
     report.profiles.push({profile:p.id,status:'pass',sensory:p.sensory,output:p.output,bones:geometry.bones.length});
   }
   for(const file of files(packs).filter(p=>p.endsWith('.json')))JSON.parse(fs.readFileSync(file));

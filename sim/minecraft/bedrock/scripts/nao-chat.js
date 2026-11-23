@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 AARNN contributors
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See sim/minecraft/LICENSE in the project root.
 import { world, system, Player, CommandPermissionLevel, CustomCommandParamType, CustomCommandStatus } from '@minecraft/server';
 
 /** Ordinary players have a scoped chat path, independent of operator lab commands. */

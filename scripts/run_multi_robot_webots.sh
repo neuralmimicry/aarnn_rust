@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 set -euo pipefail
 
 # Profile-based native expansion uses the shared dispatcher before legacy GPU,
@@ -61,7 +65,9 @@ COUNT_NAO_OVERRIDE=""
 COUNT_ZEBRAFISH_OVERRIDE=""
 
 # Core asset paths
-CELEGANS_NETWORK_FILE="${CELEGANS_NETWORK_FILE:-$ROOT_DIR/network_celegans.json}"
+# Webots keeps the 24-channel contract (its proto has no rectified body-bend
+# sensors); the MuJoCo profile uses the 48-channel network_celegans.json.
+CELEGANS_NETWORK_FILE="${CELEGANS_NETWORK_FILE:-$ROOT_DIR/network_celegans_webots.json}"
 CELEGANS_CONFIG_FILE="${CELEGANS_CONFIG_FILE:-$ROOT_DIR/webots_world/configs/config_celegans_webots.json}"
 CELEGANS_PROTO_FILE="${CELEGANS_PROTO_FILE:-$ROOT_DIR/webots_world/protos/CelegansRobot.proto}"
 
@@ -544,7 +550,9 @@ if layers != 1 or hidden != 302:
     raise SystemExit(1)
 if bool(net.get("io_channels_are_biological", True)):
     raise SystemExit(1)
-if not bool(net.get("growth_enabled", False)):
+# The import is a frozen adult connectome (celegans-import-v2): growth is
+# deliberately off; active morphology (route delays) must be on.
+if (labels_schema := (data.get("connectome_labels") or {}).get("schema")) != "celegans-import-v2":
     raise SystemExit(1)
 if not bool(net.get("use_morphology", False)):
     raise SystemExit(1)
@@ -1114,6 +1122,7 @@ if [ "$COUNT_CELEGANS" -gt 0 ]; then
 
   if [ "$CELEGANS_REBUILD_NETWORK" = "1" ] || [ "$CELEGANS_NETWORK_STALE" = "1" ] || [ ! -f "$CELEGANS_NETWORK_FILE" ]; then
     python3 "$ROOT_DIR/scripts/build_celegans_network_json.py" \
+      --no-proprioception \
       --connectome "$CELEGANS_CONNECTOME_FILE" \
       --template "$CELEGANS_TEMPLATE_FILE" \
       --output "$CELEGANS_NETWORK_FILE"

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Private, loopback-only simulation authority. The physics thread alone owns
 //! MuJoCo and AER. HTTP/viewer requests never supply neural sensory samples.
 use aarnn_mujoco::{
@@ -216,6 +220,7 @@ fn physics_owner(
         let mut epoch = 0u64;
         let mut obstacles = BTreeMap::<usize, [f64; 3]>::new();
         let mut deadline = Instant::now();
+        let lockstep = std::env::var("NM_PHYSICS_SERVICE_LOCKSTEP").is_ok_and(|v| v == "1");
         let _ = ready.send(Ok(()));
         while !service.stop.load(Ordering::Acquire) {
             if service.emergency.swap(false, Ordering::AcqRel) {
@@ -306,6 +311,27 @@ fn physics_owner(
                 let _ = envelope.reply.send(result);
             }
             if !paused {
+                // NM_PHYSICS_SERVICE_LOCKSTEP=1: wait (bounded) for the brain's
+                // reply to the previous capture before stepping, so a brain
+                // slower than real time still receives every 2 ms frame (at
+                // real-time pace ~37 % of hexapod frames were skipped and the
+                // diluted pulse-density code halved its stepping rate). The
+                // service still paces at real time when the brain keeps up.
+                if lockstep && let Some(client) = &world.client {
+                    let until = Instant::now() + Duration::from_secs(30);
+                    loop {
+                        let status = client.status();
+                        if !status.ready
+                            || status.fault.is_some()
+                            || status.exchanges >= world.submitted
+                            || service.stop.load(Ordering::Acquire)
+                            || Instant::now() >= until
+                        {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_micros(250));
+                    }
+                }
                 world.advance()?;
             }
             publication += 1;

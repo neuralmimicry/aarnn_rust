@@ -11,6 +11,7 @@ extern "C" {
 #define NM_CONTROL_NPC 1u
 #define NM_CONTROL_SILENT 2u
 #define NM_CONTROL_AARNN 3u
+#define NM_HYDRO_INPUT_WIDTH 21u
 uint32_t nm_embodiment_version(void);
 int32_t nm_embodiment_error(uint8_t* output, uint32_t capacity);
 int32_t nm_embodiment_verify_graph(const uint8_t* model_path, uint32_t model_len, const uint8_t* graph_path, uint32_t graph_len);
@@ -19,10 +20,13 @@ int32_t nm_reference_close(uint64_t handle);
 int32_t nm_reference_disarm(uint64_t handle);
 int32_t nm_reference_reset(uint64_t handle);
 int32_t nm_reference_step(uint64_t handle, uint64_t source_step, const double* sensors, uint32_t sensor_count, double* controls, uint32_t control_capacity);
+int32_t nm_reference_apply(uint64_t handle, uint64_t source_step, const double* sensors, uint32_t sensor_count, double* controls, uint32_t control_capacity);
+int32_t nm_reference_submit(uint64_t handle, uint64_t source_step, const double* sensors, uint32_t sensor_count);
 int32_t nm_reference_status(uint64_t handle, uint8_t* output, uint32_t capacity);
 int32_t nm_control_mode(uint64_t handle, uint32_t mode);
 int32_t nm_reference_motor_mask(uint64_t handle, uint8_t* output, uint32_t capacity);
 int32_t nm_reference_project(uint64_t handle, const double* measurements, uint32_t measurement_count, double* sensors, uint32_t sensor_capacity);
+int32_t nm_reference_hydro(uint64_t handle, const double* inputs, uint32_t row_count, double* outputs, uint32_t output_capacity);
 int32_t nm_panel_forces(const double* inputs, uint32_t panel_count, double* outputs, uint32_t output_capacity);
 #ifdef __cplusplus
 }

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Versioned simulation motor/constraint numerics, independent of engine FFI.
 use serde::Deserialize;
 pub const RATE_TAU_S: f64 = 0.02;

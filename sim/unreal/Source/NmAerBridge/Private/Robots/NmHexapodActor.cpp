@@ -1,4 +1,7 @@
-// Copyright NeuralMimicry. All Rights Reserved.
+// SPDX-FileCopyrightText: NEURALMIMICRY LTD
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 
 #include "Robots/NmHexapodActor.h"
 #include "NmSharedContent.h"
@@ -144,6 +147,29 @@ void UNmHexapodComponent::ApplyActuators(const TArray<float>& Actuators)
     }
 
     constexpr float MaxAngleDeg = 90.f;
+    if (IsGraded())
+    {
+        // Reference linear decode (actuation.rs): activation 0..1 spans the
+        // joint's command range and joints stay driven at activation 0. The
+        // range is this body's own +-MaxAngleDeg pitch command (the Swing2
+        // limit is 55 deg), not hexapod.json's control_range ([-0.7,0.7],
+        // [-1.4,-0.2], [-1.9,-0.5] rad).
+        if (IsFreshFrame())
+        {
+            GradedJoints.Accept(Actuators.GetData(), static_cast<size_t>(Actuators.Num()));
+            GradedJoints.Advance();
+        }
+        for (int32 j = 0; j < LegJoints.Num() && j < NumJoints; ++j)
+        {
+            if (UPhysicsConstraintComponent* Joint = LegJoints[j])
+            {
+                const float Target = static_cast<float>(
+                    GradedJoints.Target(static_cast<size_t>(j), -MaxAngleDeg, MaxAngleDeg));
+                Joint->SetAngularOrientationTarget(FRotator(Target, 0.f, 0.f));
+            }
+        }
+        return;
+    }
     for (int32 j = 0; j < LegJoints.Num() && j < NumJoints; ++j)
     {
         UPhysicsConstraintComponent* Joint = LegJoints[j];

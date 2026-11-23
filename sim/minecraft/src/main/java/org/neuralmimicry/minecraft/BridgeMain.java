@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 AARNN contributors
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See sim/minecraft/LICENSE in the project root.
 package org.neuralmimicry.minecraft;
 
 import com.google.gson.Gson;
@@ -62,7 +66,7 @@ public final class BridgeMain {
         } finally {startup.shutdownNow();}
         try(var running=start(port,token,backends)) {
             System.out.println("AARNN sandbox bridge ready on 127.0.0.1:"+running.server.getAddress().getPort()+"; content "+Content.DATA.digest());
-            backends.forEach((id,b)->System.out.println(id+" -> Rust TCP 127.0.0.1:"+b.port+" ("+b.profile.sensory()+"/"+b.profile.output()+")"));
+            backends.forEach((id,b)->System.out.println(id+" -> Rust TCP 127.0.0.1:"+b.port+" ("+b.profile.sensory()+"/"+b.profile.output()+", output_code "+b.outputCode.wire()+")"));
             var stopped=new java.util.concurrent.CountDownLatch(1);
             Runtime.getRuntime().addShutdownHook(new Thread(stopped::countDown));
             stopped.await();
@@ -123,6 +127,8 @@ public final class BridgeMain {
     static final class Backend {
         final Content.Profile profile;final int port;final ReentrantLock lock=new ReentrantLock();
         Socket socket;long lastStep=-1;boolean faulted;
+        /** Advertised by the brain's handshake reply; absent means spikes, unknown codes are refused. */
+        OutputDecoder.Code outputCode=OutputDecoder.Code.SPIKES;
         Backend(Content.Profile p,int port) {profile=p;this.port=port;}
         void prepare() throws IOException {
             if(socket!=null)return;
@@ -133,6 +139,7 @@ public final class BridgeMain {
             var ack=JSON.fromJson(new String(read(4096),StandardCharsets.UTF_8),JsonObject.class);
             if(ack.get("expected_s").getAsInt()!=profile.sensory()||ack.get("expected_o").getAsInt()!=profile.output())
                 throw new IOException("Rust channel mismatch");
+            outputCode=OutputDecoder.Code.parse(ack.get("output_code"));
             socket.setSoTimeout(Content.frameTimeoutMillis(profile)-500);
         }
         Map<String,Object> infer(JsonObject request) throws IOException {
@@ -154,7 +161,8 @@ public final class BridgeMain {
                 // Consume sequence before send. A timeout cannot silently cause this input to be replayed.
                 lastStep=step;write(frame);var output=AerCodec.decode(read(12+profile.output()*15),profile.output());
                 return Map.of("network_id",profile.id(),"output_step_index",output.timestampUs()/1000,"output_spike_indices",output.spikes(),
-                    "time_source","legacy_AER1_reply","quality","legacy_uncommitted","content_digest",Content.DATA.digest());
+                    "time_source","legacy_AER1_reply","quality","legacy_uncommitted","content_digest",Content.DATA.digest(),
+                    "output_code",outputCode.wire());
             } catch(Exception error) {
                 faulted=true;close();
                 System.err.println("Rust route "+profile.id()+" fault: "+error.getClass().getSimpleName()+": "+error.getMessage());

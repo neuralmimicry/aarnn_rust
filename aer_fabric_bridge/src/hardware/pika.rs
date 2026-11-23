@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use crate::aer::AerEvent;
 use crate::hardware::gpio::GpioBackend;
 use crate::hardware::software_kernel::{SoftwareKernel, SoftwareKernelEngine};

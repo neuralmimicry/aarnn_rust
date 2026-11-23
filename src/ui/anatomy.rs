@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Read-only anatomical projection and bounded mesh construction.
 //! No PID state, simulation clock or mutable topology participates in a frame.
 use crate::morphology_contract::{DisplaySnapshot, Vec3};
@@ -18,6 +22,7 @@ impl Frame {
         scale: Vec2,
         yaw: f32,
         pitch: f32,
+        roll: f32,
     ) -> Self {
         let pivot = snapshot
             .coverage
@@ -37,15 +42,16 @@ impl Frame {
             });
         let (sy, cy) = (yaw as f64).sin_cos();
         let (sp, cp) = (pitch as f64).sin_cos();
+        // Unscaled screen axes after yaw and pitch, then rolled about the
+        // view axis: (u, v) -> (cr u - sr v, sr u + cr v).
+        let ex = [cy, 0.0, sy];
+        let ey = [-sy * sp, -cp, cy * sp];
+        let (sr, cr) = (roll as f64).sin_cos();
         let mut frame = Self {
             pivot,
             origin,
-            x: [cy * scale.x as f64, 0.0, sy * scale.x as f64],
-            y: [
-                -sy * sp * scale.y as f64,
-                -cp * scale.y as f64,
-                cy * sp * scale.y as f64,
-            ],
+            x: std::array::from_fn(|i| (cr * ex[i] - sr * ey[i]) * scale.x as f64),
+            y: std::array::from_fn(|i| (sr * ex[i] + cr * ey[i]) * scale.y as f64),
             boundary: Vec::new(),
         };
         if let Some(m) = snapshot.coverage.membrane {
@@ -364,6 +370,7 @@ mod tests {
             egui::vec2(300.0, 300.0),
             -0.77,
             -0.18,
+            0.0,
         );
         let mut svg = String::from(
             "<svg xmlns='http://www.w3.org/2000/svg' width='800' height='600'><rect width='800' height='600' fill='#181818'/>",
@@ -441,6 +448,7 @@ mod tests {
             egui::vec2(300.0, 0.0),
             0.0,
             0.0,
+            0.0,
         );
         let points = [
             Vec3 {
@@ -471,6 +479,7 @@ mod tests {
                 &snapshot,
                 egui::pos2(400.0, 300.0),
                 egui::vec2(190.0, 190.0),
+                0.0,
                 0.0,
                 0.0,
             );
@@ -575,6 +584,7 @@ mod tests {
                     egui::vec2(310.0, 205.0),
                     yaw,
                     pitch,
+                    0.0,
                 );
                 let mut mesh = frame.tube(&points, 0.02, Color32::GREEN);
                 frame.disc(&mut mesh, frame.boundary[0], 12.0, Color32::WHITE);
@@ -605,6 +615,7 @@ mod tests {
             &snapshot,
             egui::pos2(0.0, 0.0),
             egui::vec2(100.0, 100.0),
+            0.0,
             0.0,
             0.0,
         );
@@ -645,6 +656,7 @@ mod tests {
             egui::vec2(300.0, 200.0),
             -0.77,
             -0.18,
+            0.0,
         );
         let points = [
             Vec3 {
@@ -666,6 +678,7 @@ mod tests {
                 egui::vec2(300.0, 200.0),
                 -0.77,
                 -0.18,
+                0.0,
             );
             assert_eq!(reference, current.tube(&points, 0.01, Color32::GREEN));
             assert_eq!(

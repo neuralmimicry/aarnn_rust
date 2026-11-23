@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "profile_id": "zebrafish",
-  "model_digest": "fc28553be4639c7912f2b258a4e45d222972a4205cdf240068165046eb0ee469",
-  "io_digest": "e5127570f8af5951858ae0569e8b2ac9403b447c79a21d9d419321b0b1f7e596",
+  "model_digest": "9b921c8f6a61ac4f44b4ed3f0618e87e83702d1ff56a8dfa6c74082e22b40826",
+  "io_digest": "faab8e4c02b41b5556d5cd6f146174546e8088a7a011c62dd7853aa1ec2fddf2",
   "targets": [
     {
       "joint": "tail_joint_0",
@@ -22,8 +22,9 @@
         -0.0002,
         0.0002
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "tail_joint_1",
@@ -43,8 +44,9 @@
         -0.0002,
         0.0002
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "tail_joint_2",
@@ -64,8 +66,9 @@
         -0.0002,
         0.0002
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "tail_joint_3",
@@ -85,8 +88,9 @@
         -0.0002,
         0.0002
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "tail_joint_4",
@@ -106,8 +110,9 @@
         -5e-05,
         5e-05
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "tail_joint_5",
@@ -127,8 +132,9 @@
         -5e-05,
         5e-05
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "tail_joint_6",
@@ -148,8 +154,9 @@
         -5e-05,
         5e-05
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "tail_joint_7",
@@ -169,8 +176,9 @@
         -5e-05,
         5e-05
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "caudal_fin_joint",
@@ -190,98 +198,15 @@
         -5e-05,
         5e-05
       ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "left_pectoral_pitch",
-      "device": "left_pectoral_pitch",
-      "sensor": "left_pectoral_pitch_position",
-      "body": 11,
-      "kind": "rotational",
-      "actuator": 8,
-      "gain": 0.002,
-      "bias": [
-        0.0,
-        -0.002,
-        -0.0001
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -5e-05,
-        5e-05
-      ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "left_pectoral_roll",
-      "device": "left_pectoral_roll",
-      "sensor": "left_pectoral_roll_position",
-      "body": 12,
-      "kind": "rotational",
-      "actuator": 9,
-      "gain": 0.002,
-      "bias": [
-        0.0,
-        -0.002,
-        -0.0001
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -5e-05,
-        5e-05
-      ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "right_pectoral_pitch",
-      "device": "right_pectoral_pitch",
-      "sensor": "right_pectoral_pitch_position",
-      "body": 13,
-      "kind": "rotational",
-      "actuator": 10,
-      "gain": 0.002,
-      "bias": [
-        0.0,
-        -0.002,
-        -0.0001
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -5e-05,
-        5e-05
-      ],
-      "damping": 0.02,
-      "driven": true
-    },
-    {
-      "joint": "right_pectoral_roll",
-      "device": "right_pectoral_roll",
-      "sensor": "right_pectoral_roll_position",
-      "body": 14,
-      "kind": "rotational",
-      "actuator": 11,
-      "gain": 0.002,
-      "bias": [
-        0.0,
-        -0.002,
-        -0.0001
-      ],
-      "gear": 1.0,
-      "force_range": [
-        -5e-05,
-        5e-05
-      ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "dorsal_fin_joint",
       "device": "dorsal_fin_joint",
       "sensor": "dorsal_fin_joint_position",
-      "body": 15,
+      "body": 11,
       "kind": "rotational",
       "actuator": 12,
       "gain": 0.002,
@@ -295,8 +220,97 @@
         -5e-05,
         5e-05
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "left_pectoral_pitch",
+      "device": "left_pectoral_pitch",
+      "sensor": "left_pectoral_pitch_position",
+      "body": 12,
+      "kind": "rotational",
+      "actuator": 8,
+      "gain": 0.002,
+      "bias": [
+        0.0,
+        -0.002,
+        -0.0001
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -5e-05,
+        5e-05
+      ],
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "left_pectoral_roll",
+      "device": "left_pectoral_roll",
+      "sensor": "left_pectoral_roll_position",
+      "body": 13,
+      "kind": "rotational",
+      "actuator": 9,
+      "gain": 0.002,
+      "bias": [
+        0.0,
+        -0.002,
+        -0.0001
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -5e-05,
+        5e-05
+      ],
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "right_pectoral_pitch",
+      "device": "right_pectoral_pitch",
+      "sensor": "right_pectoral_pitch_position",
+      "body": 14,
+      "kind": "rotational",
+      "actuator": 10,
+      "gain": 0.002,
+      "bias": [
+        0.0,
+        -0.002,
+        -0.0001
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -5e-05,
+        5e-05
+      ],
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "right_pectoral_roll",
+      "device": "right_pectoral_roll",
+      "sensor": "right_pectoral_roll_position",
+      "body": 15,
+      "kind": "rotational",
+      "actuator": 11,
+      "gain": 0.002,
+      "bias": [
+        0.0,
+        -0.002,
+        -0.0001
+      ],
+      "gear": 1.0,
+      "force_range": [
+        -5e-05,
+        5e-05
+      ],
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "pelvic_fin_joint",
@@ -316,8 +330,9 @@
         -5e-05,
         5e-05
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "pelvic2_fin_joint",
@@ -337,8 +352,9 @@
         -5e-05,
         5e-05
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "zebrafish_o_28_jaw",
@@ -358,8 +374,9 @@
         -5e-05,
         5e-05
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "zebrafish_o_29_operculum_l",
@@ -379,8 +396,9 @@
         -5e-05,
         5e-05
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "zebrafish_o_30_operculum_r",
@@ -400,13 +418,14 @@
         -5e-05,
         5e-05
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 1e-05,
+      "driven": true,
+      "qpos0": 0.0
     }
   ],
   "constraints": [],
   "fixed_world_bodies": [],
-  "composite_mass_kg": 0.0014709999999999999,
+  "composite_mass_kg": 0.004149113983966654,
   "controller_transfer": "legacy-native-projections-v1; native MuJoCo engineering adapter; calibration unvalidated",
   "calibration": "ODE contact/constraint response not calibrated; all self-collision suppressed; mesh collisions use Webots dynamic convex policy; fixed-link masses merged exactly",
   "coordinates": "X-forward Y-left Z-up; SI",
@@ -436,12 +455,12 @@
         "position": [
           0.0,
           0.375,
-          0.12187500000000001
+          0.21
         ],
         "size": [
           0.75,
           0.009375000000000001,
-          0.24375000000000002
+          0.42
         ],
         "colour": [
           0.42,
@@ -463,12 +482,12 @@
         "position": [
           0.0,
           -0.375,
-          0.013125000000000001
+          0.21
         ],
         "size": [
           0.75,
           0.009375000000000001,
-          0.026250000000000002
+          0.42
         ],
         "colour": [
           0.42,
@@ -477,7 +496,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -490,12 +509,12 @@
         "position": [
           0.375,
           0.0,
-          0.12187500000000001
+          0.21
         ],
         "size": [
           0.009375000000000001,
           0.75,
-          0.24375000000000002
+          0.42
         ],
         "colour": [
           0.42,
@@ -517,12 +536,12 @@
         "position": [
           -0.375,
           0.0,
-          0.12187500000000001
+          0.21
         ],
         "size": [
           0.009375000000000001,
           0.75,
-          0.24375000000000002
+          0.42
         ],
         "colour": [
           0.42,
@@ -4373,8 +4392,289 @@
         "internal": false
       }
     ],
-    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
+    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model; resistive ellipsoid hydrodynamics (engineering fluid model, not CFD)",
+    "hydrodynamics": {
+      "model": "resistive-ellipsoid-v1",
+      "density_kg_m3": 1000.0,
+      "surface_z_m": 0.4,
+      "bottom_z_m": 0.0,
+      "submergence_band_m": 0.012,
+      "drag_coefficients": [
+        0.1,
+        1.0,
+        1.0
+      ],
+      "rotational_coefficient": 1.0,
+      "buoyancy_offset_m": [
+        0.0,
+        0.0,
+        0.0005
+      ],
+      "bodies": [
+        {
+          "body": "segment_00",
+          "half_size_m": [
+            0.0044,
+            0.0045,
+            0.006
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "segment_01",
+          "half_size_m": [
+            0.0044,
+            0.0045,
+            0.0078
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "segment_02",
+          "half_size_m": [
+            0.0044,
+            0.0045,
+            0.0082
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "segment_03",
+          "half_size_m": [
+            0.0044,
+            0.0042,
+            0.0078
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "segment_04",
+          "half_size_m": [
+            0.0044,
+            0.0036,
+            0.0068
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "segment_05",
+          "half_size_m": [
+            0.0044,
+            0.003,
+            0.0055
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "segment_06",
+          "half_size_m": [
+            0.0044,
+            0.0024,
+            0.0042
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "segment_07",
+          "half_size_m": [
+            0.0044,
+            0.0018,
+            0.0032
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "segment_08",
+          "half_size_m": [
+            0.0044,
+            0.0014,
+            0.0026
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "caudal_fin",
+          "half_size_m": [
+            0.008,
+            0.0006,
+            0.0122
+          ],
+          "offset_m": [
+            -0.0057,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "dorsal_fin",
+          "half_size_m": [
+            0.007,
+            0.0005,
+            0.006
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.00864
+          ]
+        },
+        {
+          "body": "left_pectoral",
+          "half_size_m": [
+            0.006,
+            0.007,
+            0.0004
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "left_pectoral_roll",
+          "half_size_m": [
+            0.004,
+            0.005,
+            0.0004
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "right_pectoral",
+          "half_size_m": [
+            0.006,
+            0.007,
+            0.0004
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "right_pectoral_roll",
+          "half_size_m": [
+            0.004,
+            0.005,
+            0.0004
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "pelvic_fin",
+          "half_size_m": [
+            0.004,
+            0.003,
+            0.0004
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "pelvic2_fin",
+          "half_size_m": [
+            0.004,
+            0.003,
+            0.0004
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "zebrafish_o_28_jaw_link",
+          "half_size_m": [
+            0.002,
+            0.001,
+            0.001
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "zebrafish_o_29_operculum_l_link",
+          "half_size_m": [
+            0.002,
+            0.001,
+            0.001
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "zebrafish_o_30_operculum_r_link",
+          "half_size_m": [
+            0.002,
+            0.001,
+            0.001
+          ],
+          "offset_m": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "note": "quasi-steady resistive hydrodynamics, no added mass or vortex wake; buoyancy is neutral by construction (mass = rho x ellipsoid volume)"
+    }
   },
   "world_geometry_count": 146,
-  "digest": "f4f6e3072702c192e8c64d3f877b063b31e1ca5f704822b82686c168cf4189ca"
+  "digest": "667d208a91067987f0b90832c2ccbbc44e0bbd66cda7b022f4db9036b4291be4"
 }

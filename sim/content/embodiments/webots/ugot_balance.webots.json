@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "profile_id": "ugot_balance",
-  "model_digest": "62922d2fa46382d4a16e936548b71c14d5aed46194b2a1f2e641b7322785dc0e",
-  "io_digest": "1ff69274587c023d26c45273f0360c1f0c51db30d2a9030474160e5c242288d5",
+  "model_digest": "616cbad09652ce7125413785a4e505a57742f988798578e14c41ed2b8da7fe00",
+  "io_digest": "1f9326e45cc89adabacf44a9bb6c271610f443570f00c79827fe3e19f20d345f",
   "targets": [
     {
       "joint": "wheel_-1",
@@ -22,8 +22,9 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.005202589408907118,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_1",
@@ -43,8 +44,9 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.005202589408907118,
+      "driven": true,
+      "qpos0": 0.0
     }
   ],
   "constraints": [],
@@ -79,12 +81,12 @@
         "position": [
           0.0,
           1.3,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -106,12 +108,12 @@
         "position": [
           0.0,
           -1.3,
-          0.045500000000000006
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.09100000000000001
+          0.42
         ],
         "colour": [
           0.42,
@@ -120,7 +122,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -133,12 +135,12 @@
         "position": [
           1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -160,12 +162,12 @@
         "position": [
           -1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -3020,5 +3022,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 109,
-  "digest": "a1d97b3aa21fe16aff6fbd3b1985df669f5242ce6caec4bfaa050bf44a9815dd"
+  "digest": "3733a77acce6a3bf22aad0fb4e1bb25dde944f98ff48f4c521f53400df8ee84e"
 }

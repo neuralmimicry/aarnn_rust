@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Crash-safe immutable storage for complete stable-executor cuts.
 //!
 //! The generic checkpoint store already provides atomic publication and

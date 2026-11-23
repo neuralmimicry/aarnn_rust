@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! # Remote Direct Memory Access (RDMA) Backend
 //!
 //! This module provides a low-latency data transfer backend using InfiniBand RDMA.

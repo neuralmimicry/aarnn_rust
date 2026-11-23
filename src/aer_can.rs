@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Minimal AER <-> CAN frame helpers for robotic endpoints.
 //!
 //! This module defines a compact mapping that fits a single AER event into a

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Versioned, bounded simulator transducer/decoder; neural execution stays in Rust.
 
 Time here is a named legacy reference-frame mapping. It is not a production

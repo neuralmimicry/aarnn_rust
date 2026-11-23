@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "keenon_t8",
-  "model_digest": "d0bb58b5e4737d95456a49b6341c6117898ce0c33a9276a9efca3c013abeadc1",
+  "model_digest": "c4e228ba32b0be17bb5f8a3f8346d55440e15134a2a4f887e64c417d5ab6c234",
   "io_digest": "23d77c7603f4ee8f9c32130a78518d2237d792215df409c126674a2d04ad1192",
   "targets": [
     {
@@ -22,8 +22,9 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.054400000000000004,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_rear_left",
@@ -43,8 +44,9 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.054400000000000004,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_front_right",
@@ -64,8 +66,9 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.054400000000000004,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_front_left",
@@ -85,8 +88,9 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.054400000000000004,
+      "driven": true,
+      "qpos0": 0.0
     }
   ],
   "constraints": [],
@@ -119,7 +123,7 @@
         "id": "rim_0",
         "shape": "box",
         "position": [
-          0.75,
+          0.0,
           3.0,
           1.2000000000000002
         ],
@@ -146,14 +150,14 @@
         "id": "rim_1",
         "shape": "box",
         "position": [
-          0.75,
+          0.0,
           -3.0,
-          0.10500000000000001
+          1.2000000000000002
         ],
         "size": [
           6.0,
           0.07500000000000001,
-          0.21000000000000002
+          2.4000000000000004
         ],
         "colour": [
           0.42,
@@ -162,7 +166,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -173,7 +177,7 @@
         "id": "rim_2",
         "shape": "box",
         "position": [
-          3.75,
+          3.0,
           0.0,
           1.2000000000000002
         ],
@@ -200,7 +204,7 @@
         "id": "rim_3",
         "shape": "box",
         "position": [
-          -3.75,
+          -3.0,
           0.0,
           1.2000000000000002
         ],
@@ -2603,5 +2607,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 92,
-  "digest": "ac3db6a1127dd66bef24bebe7be8e13bb5b4b97477675a0193f0f6f76ef67f59"
+  "digest": "2cc54a84858bc7e12ec59f3f34ce6894cef67784aaed32999696acd3af5a7d65"
 }

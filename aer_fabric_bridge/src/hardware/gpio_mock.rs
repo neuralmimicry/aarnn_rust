@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use crate::hardware::gpio::{GpioBackend, GpioEdge};
 use crate::time::unix_time_ns;
 use async_trait::async_trait;

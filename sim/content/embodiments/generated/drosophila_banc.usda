@@ -8,8 +8,8 @@
 def Xform "Robot" (
     prepend apiSchemas = ["PhysicsArticulationRootAPI"]
     customData = {
-        string aarnnIODigest = "873f9123c39ee3a94b2e75ab1a982d134df9e73971d9423d79276dbdfc53a8df"
-        string aarnnModelDigest = "d0ef1676345636fb0a8d67e05c2bd135d40d20d04191c916e7fc7dce8a8b8b40"
+        string aarnnIODigest = "ebf5b2e60cfcd2adc49752be39c709798692764f91dcf5f91881dfae447a8fcf"
+        string aarnnModelDigest = "55cb6ef7d354aff50d385af474d10707fa32a12c9818f9de1436d848ef9919ce"
     }
 )
 {
@@ -1606,24 +1606,81 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (1.252e-8, 1.252e-8, 2.5e-8)
-        float physics:mass = 0.0001
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        point3f physics:centerOfMass = (0, 0.003, 0)
+        float3 physics:diagonalInertia = (4.7772727e-11, 4.7772727e-11, 4.818182e-12)
+        float physics:mass = 0.00001
+        quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.025, 0.09999999999999999)
+        double3 xformOp:translate = (0, 0.02, 0.102)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Sphere "left_wing_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
+        def Capsule "left_wing_hub"
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.006
+            color3f[] primvars:displayColor = [(0.45, 0.35, 0.2)]
             float[] primvars:displayOpacity = [1]
+            double radius = 0.001
+            quatf xformOp:orient = (0.70710677, 0.70710677, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0.003, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "left_wing_blade" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0.03, 0)
+        float3 physics:diagonalInertia = (7.20128e-9, 1.25128e-9, 8.45e-9)
+        float physics:mass = 0.00004
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, 0.026000000000000002, 0.102)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Sphere "left_wing_membrane"
+        {
+            color3f[] primvars:displayColor = [(0.75, 0.8, 0.85)]
+            float[] primvars:displayOpacity = [0.45]
             double radius = 1
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.025, 0.025, 0.001)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.0125, 0.03, 0.0004)
+            double3 xformOp:translate = (0, 0.03, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Cube "left_wing_vein_0"
+        {
+            color3f[] primvars:displayColor = [(0.38, 0.33, 0.25)]
+            float[] primvars:displayOpacity = [0.8]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.0004, 0.026496, 0.0002)
+            double3 xformOp:translate = (0.006, 0.0276, 0.0005)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Cube "left_wing_vein_1"
+        {
+            color3f[] primvars:displayColor = [(0.38, 0.33, 0.25)]
+            float[] primvars:displayOpacity = [0.8]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.0004, 0.028224, 0.0002)
+            double3 xformOp:translate = (0, 0.0294, 0.0005)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Cube "left_wing_vein_2"
+        {
+            color3f[] primvars:displayColor = [(0.38, 0.33, 0.25)]
+            float[] primvars:displayOpacity = [0.8]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.0004, 0.02448, 0.0002)
+            double3 xformOp:translate = (-0.006, 0.0255, 0.0005)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -1632,24 +1689,81 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (1.252e-8, 1.252e-8, 2.5e-8)
-        float physics:mass = 0.0001
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        point3f physics:centerOfMass = (0, -0.003, 0)
+        float3 physics:diagonalInertia = (4.7772727e-11, 4.7772727e-11, 4.818182e-12)
+        float physics:mass = 0.00001
+        quatf physics:principalAxes = (0.70710677, -0.70710677, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.025, 0.09999999999999999)
+        double3 xformOp:translate = (0, -0.02, 0.102)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Sphere "right_wing_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
+        def Capsule "right_wing_hub"
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.006
+            color3f[] primvars:displayColor = [(0.45, 0.35, 0.2)]
             float[] primvars:displayOpacity = [1]
+            double radius = 0.001
+            quatf xformOp:orient = (0.70710677, -0.70710677, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, -0.003, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "right_wing_blade" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, -0.03, 0)
+        float3 physics:diagonalInertia = (7.20128e-9, 1.25128e-9, 8.45e-9)
+        float physics:mass = 0.00004
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, -0.026000000000000002, 0.102)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Sphere "right_wing_membrane"
+        {
+            color3f[] primvars:displayColor = [(0.75, 0.8, 0.85)]
+            float[] primvars:displayOpacity = [0.45]
             double radius = 1
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.025, 0.025, 0.001)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.0125, 0.03, 0.0004)
+            double3 xformOp:translate = (0, -0.03, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Cube "right_wing_vein_0"
+        {
+            color3f[] primvars:displayColor = [(0.38, 0.33, 0.25)]
+            float[] primvars:displayOpacity = [0.8]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.0004, 0.026496, 0.0002)
+            double3 xformOp:translate = (0.006, -0.0276, 0.0005)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Cube "right_wing_vein_1"
+        {
+            color3f[] primvars:displayColor = [(0.38, 0.33, 0.25)]
+            float[] primvars:displayOpacity = [0.8]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.0004, 0.028224, 0.0002)
+            double3 xformOp:translate = (0, -0.0294, 0.0005)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Cube "right_wing_vein_2"
+        {
+            color3f[] primvars:displayColor = [(0.38, 0.33, 0.25)]
+            float[] primvars:displayOpacity = [0.8]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.0004, 0.02448, 0.0002)
+            double3 xformOp:translate = (-0.006, -0.0255, 0.0005)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -1658,6 +1772,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "lf_coxa"
+            double aarnnJointRef = -0.35
         }
     )
     {
@@ -1672,14 +1787,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
         quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
-        float physics:lowerLimit = -51.5662
-        float physics:upperLimit = 11.459156
+        float physics:lowerLimit = -31.512678
+        float physics:upperLimit = 31.512678
     }
 
     def PhysicsRevoluteJoint "joint_lf_femur" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "lf_femur"
+            double aarnnJointRef = -0.55
         }
     )
     {
@@ -1694,14 +1810,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -74.48451
-        float physics:upperLimit = 11.459156
+        float physics:lowerLimit = -42.971836
+        float physics:upperLimit = 42.971836
     }
 
     def PhysicsRevoluteJoint "joint_lf_tibia" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "lf_tibia"
+            double aarnnJointRef = -0.625
         }
     )
     {
@@ -1716,14 +1833,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -80.21409
-        float physics:upperLimit = 8.594367
+        float physics:lowerLimit = -44.40423
+        float physics:upperLimit = 44.40423
     }
 
     def PhysicsRevoluteJoint "joint_lf_tarsus" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "lf_tarsus"
+            double aarnnJointRef = -0.375
         }
     )
     {
@@ -1738,14 +1856,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -51.5662
-        float physics:upperLimit = 8.594367
+        float physics:lowerLimit = -30.080284
+        float physics:upperLimit = 30.080284
     }
 
     def PhysicsRevoluteJoint "joint_lm_coxa" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "lm_coxa"
+            double aarnnJointRef = -0.35
         }
     )
     {
@@ -1760,14 +1879,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
         quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
-        float physics:lowerLimit = -51.5662
-        float physics:upperLimit = 11.459156
+        float physics:lowerLimit = -31.512678
+        float physics:upperLimit = 31.512678
     }
 
     def PhysicsRevoluteJoint "joint_lm_femur" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "lm_femur"
+            double aarnnJointRef = -0.55
         }
     )
     {
@@ -1782,14 +1902,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -74.48451
-        float physics:upperLimit = 11.459156
+        float physics:lowerLimit = -42.971836
+        float physics:upperLimit = 42.971836
     }
 
     def PhysicsRevoluteJoint "joint_lm_tibia" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "lm_tibia"
+            double aarnnJointRef = -0.625
         }
     )
     {
@@ -1804,14 +1925,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -80.21409
-        float physics:upperLimit = 8.594367
+        float physics:lowerLimit = -44.40423
+        float physics:upperLimit = 44.40423
     }
 
     def PhysicsRevoluteJoint "joint_lm_tarsus" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "lm_tarsus"
+            double aarnnJointRef = -0.375
         }
     )
     {
@@ -1826,14 +1948,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -51.5662
-        float physics:upperLimit = 8.594367
+        float physics:lowerLimit = -30.080284
+        float physics:upperLimit = 30.080284
     }
 
     def PhysicsRevoluteJoint "joint_lr_coxa" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "lr_coxa"
+            double aarnnJointRef = -0.35
         }
     )
     {
@@ -1848,14 +1971,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
         quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
-        float physics:lowerLimit = -51.5662
-        float physics:upperLimit = 11.459156
+        float physics:lowerLimit = -31.512678
+        float physics:upperLimit = 31.512678
     }
 
     def PhysicsRevoluteJoint "joint_lr_femur" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "lr_femur"
+            double aarnnJointRef = -0.55
         }
     )
     {
@@ -1870,14 +1994,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -74.48451
-        float physics:upperLimit = 11.459156
+        float physics:lowerLimit = -42.971836
+        float physics:upperLimit = 42.971836
     }
 
     def PhysicsRevoluteJoint "joint_lr_tibia" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "lr_tibia"
+            double aarnnJointRef = -0.625
         }
     )
     {
@@ -1892,14 +2017,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -80.21409
-        float physics:upperLimit = 8.594367
+        float physics:lowerLimit = -44.40423
+        float physics:upperLimit = 44.40423
     }
 
     def PhysicsRevoluteJoint "joint_lr_tarsus" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "lr_tarsus"
+            double aarnnJointRef = -0.375
         }
     )
     {
@@ -1914,14 +2040,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -51.5662
-        float physics:upperLimit = 8.594367
+        float physics:lowerLimit = -30.080284
+        float physics:upperLimit = 30.080284
     }
 
     def PhysicsRevoluteJoint "joint_rf_coxa" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "rf_coxa"
+            double aarnnJointRef = 0.35
         }
     )
     {
@@ -1936,14 +2063,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
         quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
-        float physics:lowerLimit = -11.459156
-        float physics:upperLimit = 51.5662
+        float physics:lowerLimit = -31.512678
+        float physics:upperLimit = 31.512678
     }
 
     def PhysicsRevoluteJoint "joint_rf_femur" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "rf_femur"
+            double aarnnJointRef = 0.55
         }
     )
     {
@@ -1958,14 +2086,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -11.459156
-        float physics:upperLimit = 74.48451
+        float physics:lowerLimit = -42.971836
+        float physics:upperLimit = 42.971836
     }
 
     def PhysicsRevoluteJoint "joint_rf_tibia" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "rf_tibia"
+            double aarnnJointRef = 0.625
         }
     )
     {
@@ -1980,14 +2109,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -8.594367
-        float physics:upperLimit = 80.21409
+        float physics:lowerLimit = -44.40423
+        float physics:upperLimit = 44.40423
     }
 
     def PhysicsRevoluteJoint "joint_rf_tarsus" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "rf_tarsus"
+            double aarnnJointRef = 0.375
         }
     )
     {
@@ -2002,14 +2132,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -8.594367
-        float physics:upperLimit = 51.5662
+        float physics:lowerLimit = -30.080284
+        float physics:upperLimit = 30.080284
     }
 
     def PhysicsRevoluteJoint "joint_rm_coxa" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "rm_coxa"
+            double aarnnJointRef = 0.35
         }
     )
     {
@@ -2024,14 +2155,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
         quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
-        float physics:lowerLimit = -11.459156
-        float physics:upperLimit = 51.5662
+        float physics:lowerLimit = -31.512678
+        float physics:upperLimit = 31.512678
     }
 
     def PhysicsRevoluteJoint "joint_rm_femur" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "rm_femur"
+            double aarnnJointRef = 0.55
         }
     )
     {
@@ -2046,14 +2178,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -11.459156
-        float physics:upperLimit = 74.48451
+        float physics:lowerLimit = -42.971836
+        float physics:upperLimit = 42.971836
     }
 
     def PhysicsRevoluteJoint "joint_rm_tibia" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "rm_tibia"
+            double aarnnJointRef = 0.625
         }
     )
     {
@@ -2068,14 +2201,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -8.594367
-        float physics:upperLimit = 80.21409
+        float physics:lowerLimit = -44.40423
+        float physics:upperLimit = 44.40423
     }
 
     def PhysicsRevoluteJoint "joint_rm_tarsus" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "rm_tarsus"
+            double aarnnJointRef = 0.375
         }
     )
     {
@@ -2090,14 +2224,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -8.594367
-        float physics:upperLimit = 51.5662
+        float physics:lowerLimit = -30.080284
+        float physics:upperLimit = 30.080284
     }
 
     def PhysicsRevoluteJoint "joint_rr_coxa" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "rr_coxa"
+            double aarnnJointRef = 0.35
         }
     )
     {
@@ -2112,14 +2247,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
         quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
-        float physics:lowerLimit = -11.459156
-        float physics:upperLimit = 51.5662
+        float physics:lowerLimit = -31.512678
+        float physics:upperLimit = 31.512678
     }
 
     def PhysicsRevoluteJoint "joint_rr_femur" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "rr_femur"
+            double aarnnJointRef = 0.55
         }
     )
     {
@@ -2134,14 +2270,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -11.459156
-        float physics:upperLimit = 74.48451
+        float physics:lowerLimit = -42.971836
+        float physics:upperLimit = 42.971836
     }
 
     def PhysicsRevoluteJoint "joint_rr_tibia" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "rr_tibia"
+            double aarnnJointRef = 0.625
         }
     )
     {
@@ -2156,14 +2293,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -8.594367
-        float physics:upperLimit = 80.21409
+        float physics:lowerLimit = -44.40423
+        float physics:upperLimit = 44.40423
     }
 
     def PhysicsRevoluteJoint "joint_rr_tarsus" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "rr_tarsus"
+            double aarnnJointRef = 0.375
         }
     )
     {
@@ -2178,52 +2316,80 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -8.594367
-        float physics:upperLimit = 51.5662
+        float physics:lowerLimit = -30.080284
+        float physics:upperLimit = 30.080284
     }
 
     def PhysicsRevoluteJoint "joint_left_wing_flap" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "left_wing_flap"
+            double aarnnJointRef = 0
         }
     )
     {
-        float drive:angular:physics:damping = 0
-        float drive:angular:physics:maxForce = 0
-        float drive:angular:physics:stiffness = 0
-        uniform token drive:angular:physics:type = "force"
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/thorax>
         rel physics:body1 = </Robot/left_wing>
-        point3f physics:localPos0 = (0, 0.025, 0.01)
+        point3f physics:localPos0 = (0, 0.02, 0.012)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (1, 0, 0, 0)
-        quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -29.793806
-        float physics:upperLimit = 29.793806
+        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
+        float physics:lowerLimit = -91.67325
+        float physics:upperLimit = 91.67325
     }
 
-    def PhysicsRevoluteJoint "joint_right_wing_flap" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+    def PhysicsRevoluteJoint "joint_left_wing_pitch" (
         customData = {
-            string aarnnJointName = "right_wing_flap"
+            string aarnnJointName = "left_wing_pitch"
+            double aarnnJointRef = 0
         }
     )
     {
-        float drive:angular:physics:damping = 0
-        float drive:angular:physics:maxForce = 0
-        float drive:angular:physics:stiffness = 0
-        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/left_wing>
+        rel physics:body1 = </Robot/left_wing_blade>
+        point3f physics:localPos0 = (0, 0.006, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -80.21409
+        float physics:upperLimit = 80.21409
+    }
+
+    def PhysicsRevoluteJoint "joint_right_wing_flap" (
+        customData = {
+            string aarnnJointName = "right_wing_flap"
+            double aarnnJointRef = 0
+        }
+    )
+    {
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/thorax>
         rel physics:body1 = </Robot/right_wing>
-        point3f physics:localPos0 = (0, -0.025, 0.01)
+        point3f physics:localPos0 = (0, -0.02, 0.012)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (1, 0, 0, 0)
-        quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -29.793806
-        float physics:upperLimit = 29.793806
+        quatf physics:localRot0 = (0.70710677, 0, 0.70710677, 0)
+        quatf physics:localRot1 = (0.70710677, -0, 0.70710677, 0)
+        float physics:lowerLimit = -91.67325
+        float physics:upperLimit = 91.67325
+    }
+
+    def PhysicsRevoluteJoint "joint_right_wing_pitch" (
+        customData = {
+            string aarnnJointName = "right_wing_pitch"
+            double aarnnJointRef = 0
+        }
+    )
+    {
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/right_wing>
+        rel physics:body1 = </Robot/right_wing_blade>
+        point3f physics:localPos0 = (0, -0.006, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -80.21409
+        float physics:upperLimit = 80.21409
     }
 }
 
@@ -2260,11 +2426,11 @@ def Xform "Habitat"
     )
     {
         color3f[] primvars:displayColor = [(0.42, 0.5, 0.47)]
-        float[] primvars:displayOpacity = [1]
+        float[] primvars:displayOpacity = [0.2]
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
-        float3 xformOp:scale = (0.55, 0.006875, 0.01925)
-        double3 xformOp:translate = (0, -0.55, 0.019250000000000003)
+        float3 xformOp:scale = (0.55, 0.006875, 0.22)
+        double3 xformOp:translate = (0, -0.55, 0.22000000000000003)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 

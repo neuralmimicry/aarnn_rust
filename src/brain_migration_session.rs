@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Whole-brain migration session for the stable reference executor.
 //!
 //! [`crate::stable_executor_durable::StableExecutorDurableBridge`] owns the

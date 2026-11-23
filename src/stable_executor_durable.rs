@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Durable handoff for the stable multi-shard reference executor.
 //!
 //! [`StableExecutorAuthority`](crate::stable_executor_authority::StableExecutorAuthority)

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Proposed versioned sensory projection. Native engines supply measurements;
 //! this module owns ordering, scaling and retinal history. No measured crow
 //! connectome or calibrated transducer adequacy is asserted.

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Bounded JNI control surface for the Android application.
 //!
 //! Only versioned control/checkpoint operations cross this boundary. High-rate

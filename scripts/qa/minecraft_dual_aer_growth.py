@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Bounded two-brain AER1 proxy for the Minecraft hexapod sandbox.
 
 The Java companion accepts one Rust TCP route for a profile. This proxy makes
@@ -36,11 +40,15 @@ def read_frame(stream: socket.socket) -> bytes:
     return read_exact(stream, length)
 
 
-def send_handshake(stream: socket.socket) -> None:
+def send_handshake(stream: socket.socket) -> str:
+    """Return the brain's advertised output code (absent: spikes)."""
     write_frame(stream, json.dumps({"sensory": SENSORY, "output": OUTPUT, "dt_ms": 1}).encode())
     reply = json.loads(read_frame(stream))
-    if reply != {"expected_s": SENSORY, "expected_o": OUTPUT}:
-        raise RuntimeError(f"unexpected brain handshake: {reply}")
+    code = reply.pop("output_code", None)
+    code = "spikes" if code is None else code
+    if reply != {"expected_s": SENSORY, "expected_o": OUTPUT} or code not in ("spikes", "pulse_density"):
+        raise RuntimeError(f"unexpected brain handshake: {reply} output_code={code!r}")
+    return code
 
 
 class Brain:
@@ -49,7 +57,7 @@ class Brain:
         self.stream = socket.create_connection(address, timeout=10)
         self.stream.settimeout(60)
         self.stream.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        send_handshake(self.stream)
+        self.output_code = send_handshake(self.stream)
 
     def step(self, timestamp_us: int, values: list[float]) -> tuple[int, list[int]]:
         if len(values) != SENSORY:
@@ -197,11 +205,16 @@ def serve(args: argparse.Namespace) -> int:
             a = Brain((args.brain_host, args.brain_a), "brain-a")
             b = Brain((args.brain_host, args.brain_b), "brain-b")
             fabric = Fabric(a, b, Path(args.stats))
-            write_frame(frontend, json.dumps({"expected_s": SENSORY, "expected_o": OUTPUT}).encode())
+            if a.output_code != b.output_code:
+                raise ValueError(f"brains advertise different output codes: {a.output_code}/{b.output_code}")
+            # Each coupled frame still carries at most one event per channel, so
+            # the brains' shared output code is forwarded to the companion.
+            ack = json.dumps({"expected_s": SENSORY, "expected_o": OUTPUT, "output_code": a.output_code}).encode()
+            write_frame(frontend, ack)
             while not stopping.is_set():
                 payload = read_frame(frontend)
                 if payload.startswith(b"{"):
-                    write_frame(frontend, json.dumps({"expected_s": SENSORY, "expected_o": OUTPUT}).encode())
+                    write_frame(frontend, ack)
                     continue
                 timestamp_us, indices = decode_aer(payload, INPUT_BASE, SENSORY, input_amplitude=True)
                 environment = [0.0] * SENSORY

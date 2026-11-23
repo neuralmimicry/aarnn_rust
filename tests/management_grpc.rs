@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use aarnn_rust::deterministic::{BrainId, LeaseTerm, LogicalTag, ShardId};
 use aarnn_rust::generated_management::proto::management_client::ManagementClient;
 use aarnn_rust::generated_management::proto::management_server::ManagementServer;

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 /* Produce independent Java adapter oracles using the maintained WebGL adapter. */
 const fs = require('node:fs');
 require('../../web_ui/sim-content.generated.js');

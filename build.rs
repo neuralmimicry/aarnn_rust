@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 fn locked_package_version(lockfile: &str, package_name: &str) -> Option<String> {
     let mut current_package_matches = false;
     for line in lockfile.lines() {

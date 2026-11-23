@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // AARNN adaptive threshold + slow homeostasis demo.
 // Mirrors the threshold-offset and rate-EMA updates in src/sim.rs and src/runner.rs.
 

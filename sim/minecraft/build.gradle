@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 AARNN contributors
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See sim/minecraft/LICENSE in the project root.
 buildscript {
     repositories {
         maven { url = 'https://maven.fabricmc.net/' }
@@ -103,6 +107,7 @@ tasks.register('bridgeJar', Jar) {
         include 'org/neuralmimicry/minecraft/BridgeMain*.class'
         include 'org/neuralmimicry/minecraft/Content*.class'
         include 'org/neuralmimicry/minecraft/AerCodec*.class'
+        include 'org/neuralmimicry/minecraft/OutputDecoder*.class'
         include 'aarnn/content.generated.json'
     }
     from({ configurations.bridgeLibraries.collect { zipTree(it) } }) {

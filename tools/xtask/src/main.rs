@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Repository QA/build orchestration.
 //!
 //! This binary intentionally stays dependency-light. It is the single place
@@ -395,6 +399,7 @@ fn qa_suite(root: &Path, suite: &str) -> bool {
         | "lec-crow-mujoco-managed"
         | "lec-crow-mujoco-viewer"
         | "lec-crow-mujoco-population"
+        | "lec-crow-mujoco-behaviour"
         | "lec-crow-habitats"
         | "lec-crow-legacy-neural"
         | "lec-crow-neural"
@@ -433,6 +438,7 @@ fn qa_suite(root: &Path, suite: &str) -> bool {
                 "lec-crow-mujoco-managed" => "mujoco-managed",
                 "lec-crow-mujoco-viewer" => "mujoco-viewer",
                 "lec-crow-mujoco-population" => "mujoco-population",
+                "lec-crow-mujoco-behaviour" => "mujoco-behaviour",
                 "lec-crow-habitats" => "habitats",
                 "lec-crow-legacy-neural" => "legacy-neural",
                 "lec-crow-neural" => "neural",

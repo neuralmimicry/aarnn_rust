@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 # Use full tensorflow on aarch64 because tensorflow-cpu wheels are missing for cp39.
 # On other platforms, tensorflow-cpu is used to reduce image size.
 tensorflow; platform_machine == "aarch64"

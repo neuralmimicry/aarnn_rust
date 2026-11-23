@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Asynchronous TCP-to-Unix-datagram bridge for simulator brain endpoints.
 //!
 //! The simulator adapters speak the existing length-prefixed TCP/AER1

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! `aarnn-knowledge-run <mesh.json> <inputs.f32> <count> <outputs.f32> [shards]`
 //!
 //! Executes an Evelyn knowledge region on AARNN neurons. It reads `count`

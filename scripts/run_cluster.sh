@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 set -Eeuo pipefail
 
 # Run a local AARNN instance or a local orchestrator plus one or more workers.

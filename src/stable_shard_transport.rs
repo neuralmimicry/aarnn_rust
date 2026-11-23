@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Versioned, durable transport for physically distributed stable shards.
 //!
 //! The stable executor produces a [`StableOutboundRecord`] only after the

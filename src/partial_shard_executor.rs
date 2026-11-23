@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Bounded execution of only the virtual shards assigned to one worker.
 //!
 //! [`crate::shard_executor::StableShardExecutor`] is the deterministic

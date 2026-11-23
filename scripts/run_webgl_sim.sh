@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 # Browser WebGL simulator launcher. The browser uses the authenticated web_ui
 # gateway; the Rust cluster remains the only neural executor.
 # --physics-service --robots <profile>=1 selects native MuJoCo authority;

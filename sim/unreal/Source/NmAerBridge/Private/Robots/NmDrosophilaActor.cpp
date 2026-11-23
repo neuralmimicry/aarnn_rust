@@ -1,4 +1,7 @@
-// Copyright NeuralMimicry. All Rights Reserved.
+// SPDX-FileCopyrightText: NEURALMIMICRY LTD
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 
 #include "Robots/NmDrosophilaActor.h"
 
@@ -175,13 +178,28 @@ void UNmDrosophilaComponent::ApplyActuators(const TArray<float>& Actuators)
     constexpr float MaxLegAngleDeg  = 60.f;
     constexpr float MaxWingAngleDeg = 90.f;
 
+    // A pulse-density brain: reference linear decode (actuation.rs) of this
+    // body's own channel map onto its own +-command ranges. The generated
+    // drosophila_banc readouts (26 weighted, mixed-sign actuators) differ.
+    const bool bGraded = IsGraded();
+    if (bGraded && IsFreshFrame())
+    {
+        GradedJoints.Accept(Actuators.GetData(), static_cast<size_t>(Actuators.Num()));
+        GradedJoints.Advance();
+    }
+    auto JointTarget = [&](int32 Channel, float MaxDeg)
+    {
+        return bGraded ? static_cast<float>(GradedJoints.Target(static_cast<size_t>(Channel), -MaxDeg, MaxDeg))
+                       : FMath::Clamp(Actuators[Channel], -1.f, 1.f) * MaxDeg;
+    };
+
     // Leg joints [0..23]
     for (int32 j = 0; j < LegJoints.Num() && j < NumLegJoints; ++j)
     {
         UPhysicsConstraintComponent* Joint = LegJoints[j];
         if (Joint)
         {
-            const float Target = FMath::Clamp(Actuators[j], -1.f, 1.f) * MaxLegAngleDeg;
+            const float Target = JointTarget(j, MaxLegAngleDeg);
             Joint->SetAngularOrientationTarget(FRotator(Target, 0.f, 0.f));
         }
     }
@@ -192,7 +210,7 @@ void UNmDrosophilaComponent::ApplyActuators(const TArray<float>& Actuators)
         UPhysicsConstraintComponent* Joint = WingJointComps[w];
         if (Joint)
         {
-            const float Target = FMath::Clamp(Actuators[24 + w], -1.f, 1.f) * MaxWingAngleDeg;
+            const float Target = JointTarget(24 + w, MaxWingAngleDeg);
             Joint->SetAngularOrientationTarget(FRotator(Target, 0.f, 0.f));
         }
     }

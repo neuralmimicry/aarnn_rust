@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 AARNN contributors
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See sim/minecraft/LICENSE in the project root.
 package org.neuralmimicry.minecraft;
 
 import net.minecraft.nbt.CompoundTag;
@@ -78,9 +82,10 @@ public final class SceneEntity extends Entity {
         if(session==null) return "frames in/out=0/0 last steps=-1/-1 spikes=0 input mean=0.0000";
         var m=session.metrics();
         return String.format(java.util.Locale.ROOT,
-                "frames in/out=%d/%d last steps=%d/%d spikes=%d input mean=%.4f",
+                "frames in/out=%d/%d last steps=%d/%d spikes=%d input mean=%.4f output code=%s",
                 m.inputFrames(),m.outputFrames(),m.lastInputStep(),m.lastOutputStep(),
-                m.lastOutputSpikes(),m.lastInputMean());
+                m.lastOutputSpikes(),m.lastInputMean(),
+                session.outputCode()==null?"pending":session.outputCode().wire());
     }
     public void connect(AdapterConfig config) {
         stop("disarmed");
@@ -108,8 +113,8 @@ public final class SceneEntity extends Entity {
         if(!habitatEntity()) setCustomName(Component.literal(profile().id()+" · "+reason));
     }
     public void apply(Gateway.Reply reply) {
-        for(int i=0;i<actuators.length;i++) actuators[i]*=.82;
-        for(int i:reply.spikes()) actuators[i]=1;
+        // Each reply is one negotiated brain step; decode follows its output code.
+        OutputDecoder.advance(profile(),actuators,reply.spikes(),reply.code(),Gateway.DT_MS);
         var motion=Senses.motion(profile(),actuators);
         heading+=motion.turn()*.08;
         var pose=pose();

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Independently governed workstation/peripheral reference boundaries.
 //!
 //! Samples enter the neural system only through an admitted channel carrying

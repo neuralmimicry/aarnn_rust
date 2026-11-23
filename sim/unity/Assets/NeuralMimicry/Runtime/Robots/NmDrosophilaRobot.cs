@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // NmDrosophilaRobot.cs — Unity C# MonoBehaviour for Drosophila melanogaster fruit fly.
 // Compatible with Unity 2022.3 LTS+.
 //
@@ -126,6 +130,8 @@ namespace NeuralMimicry
         private bool _bodyBuilt;
         private float _flightActivity;
         private float _lastFlightDrive;
+        // Graded (pulse-density) brain: leg/wing joint i reads channel i.
+        private readonly NmGradedJoints _graded = NmGradedJoints.Identity(NumLegJoints + 4);
         private float _lastFlightSpikeTime = -1f;
         private float _flightMassRatio = 1f;
         private float _flightHeightIntegral;
@@ -488,6 +494,26 @@ namespace NeuralMimicry
 
             int idx = 0;
 
+            if (IsGraded)
+            {
+                // Reference linear decode (actuation.rs) of this body's own
+                // channel map onto its own drive limits. Note the generated
+                // drosophila_banc readouts (26 weighted, mixed-sign actuators
+                // over 48 channels) are a different map.
+                if (FreshFrame)
+                {
+                    _graded.Accept(outputs);
+                    _graded.Advance();
+                }
+                for (int l = 0; l < NumLegs; l++)
+                    for (int j = 0; j < JointsPerLeg; j++, idx++)
+                        DriveArticulationNorm(_legJoints[l, j], (float)_graded.Normalized(idx), 0);
+                for (int w = 0; w < 2; w++)
+                    for (int d = 0; d < 2; d++, idx++)
+                        DriveArticulationNorm(_wingJoints[w, d], (float)_graded.Normalized(idx), 0);
+            }
+            else
+            {
             // --- Leg joints [0..23].
             for (int l = 0; l < NumLegs; l++)
                 for (int j = 0; j < JointsPerLeg; j++, idx++)
@@ -503,6 +529,7 @@ namespace NeuralMimicry
                     if (idx >= outputs.Length) return;
                     DriveArticulationActivation(_wingJoints[w, d], outputs[idx], 0);
                 }
+            }
 
             // Channels 28..47 are reserved and not applied.
             // Webots uses the mean sparse output activity for bounded wing lift;
@@ -543,5 +570,8 @@ namespace NeuralMimicry
                 _thorax.AddForce(Vector3.up * (_flightActivity * acceleration), ForceMode.Acceleration);
             }
         }
+
+        /// <inheritdoc/>
+        protected override void ResetGradedDecode() => _graded.Reset();
     }
 }

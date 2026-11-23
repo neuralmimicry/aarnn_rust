@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Bounded numerical/AER ABI for native simulation engines, not management or
 //! a production peripheral authority. Buffers are caller-owned only for a call;
 //! handles are registry IDs rather than Rust pointers. No panic crosses C.
@@ -35,6 +39,12 @@ struct Session {
     reset_epoch: u64,
     closed: bool,
     npc_enabled: bool,
+    /// Split boundary clocks of `nm_reference_apply`/`nm_reference_submit`.
+    apply_step: Option<u64>,
+    submit_step: Option<u64>,
+    /// Cumulative output spikes per channel of replies the motor state
+    /// machine applied (expired/inhibited replies excluded), as in MuJoCo.
+    applied_spikes: Vec<u64>,
 }
 static SESSIONS: OnceLock<Mutex<HashMap<u64, Arc<Mutex<Session>>>>> = OnceLock::new();
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -179,6 +189,9 @@ pub unsafe extern "C" fn nm_reference_open(
         let state = Session {
             actuation: Actuation::new(&model),
             projection: Projection::default(),
+            applied_spikes: vec![0; model.io.output_names.len()],
+            apply_step: None,
+            submit_step: None,
             model,
             binding,
             client,
@@ -266,6 +279,8 @@ pub unsafe extern "C" fn nm_reference_reset(handle: u64) -> i32 {
                 .checked_add(1)
                 .ok_or("reset epoch exhausted")?;
             s.last_step = 0;
+            s.apply_step = None;
+            s.submit_step = None;
             s.projection = Projection::default();
             s.binding = None;
             s.client.take()
@@ -370,6 +385,161 @@ pub unsafe extern "C" fn nm_reference_step(
         result
     })
 }
+/// Lock-step half of `nm_reference_step` at an owner physics boundary, in the
+/// native MuJoCo owner's order: consume the reply available now and select
+/// this step's controls, without submitting a capture (see
+/// `nm_reference_submit`). The first call may use step 0; later calls must
+/// advance. Sensors are the latest normalized measurement, read only by the
+/// programmed-NPC fallback. Output and return codes match `nm_reference_step`.
+///
+/// # Safety
+/// Every non-null pointer must reference a live, aligned allocation of at least
+/// its declared element count for this call. Input and output allocations must
+/// not overlap; no other thread may mutate them during the call. Handles are
+/// integer IDs and are validated; they are never dereferenced as pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nm_reference_apply(
+    handle: u64,
+    source_step: u64,
+    sensors: *const f64,
+    sensor_count: u32,
+    controls: *mut f64,
+    control_capacity: u32,
+) -> i32 {
+    guarded(|| {
+        if !controls.is_null() && control_capacity <= NM_MAX_CHANNELS {
+            unsafe { std::ptr::write_bytes(controls, 0, control_capacity as usize) };
+        }
+        let state = session(handle)?;
+        let mut s = state.lock().map_err(|_| "session unavailable")?;
+        let result = (|| -> Result<i32, String> {
+            if s.closed
+                || sensors.is_null()
+                || controls.is_null()
+                || sensor_count > NM_MAX_CHANNELS
+                || control_capacity > NM_MAX_CHANNELS
+            {
+                return Err("invalid session/bounded numerical buffer".into());
+            }
+            if sensor_count as usize != s.model.io.sensors.len()
+                || control_capacity as usize != s.model.actuators.len() + 2
+                || s.apply_step.is_some_and(|last| source_step <= last)
+                || source_step.checked_mul(2000).is_none()
+            {
+                return Err("source clock or mapping contract mismatch".into());
+            }
+            let values = unsafe { std::slice::from_raw_parts(sensors, sensor_count as usize) };
+            if !values
+                .iter()
+                .all(|v| v.is_finite() && (0. ..=1.).contains(v))
+            {
+                return Err("invalid normalized measurement".into());
+            }
+            let neural_ready = s.client.as_ref().is_some_and(|c| {
+                let status = c.status();
+                status.ready && status.fault.is_none()
+            });
+            let reply = s.client.as_ref().and_then(Client::receive);
+            let applied = s.actuation.applied;
+            let Session {
+                model,
+                actuation,
+                npc_enabled,
+                applied_spikes,
+                ..
+            } = &mut *s;
+            actuation.select(
+                model,
+                source_step,
+                *npc_enabled,
+                neural_ready,
+                reply.as_ref(),
+                Some(values),
+            )?;
+            if actuation.applied > applied
+                && let Some(reply) = &reply
+            {
+                for (total, spikes) in applied_spikes.iter_mut().zip(&reply.spikes) {
+                    *total += u64::from(*spikes);
+                }
+            }
+            let output = s.actuation.controls(&s.model);
+            unsafe {
+                std::ptr::copy_nonoverlapping(output.as_ptr(), controls, output.len());
+            }
+            s.apply_step = Some(source_step);
+            s.last_step = source_step;
+            Ok(if s.actuation.disarmed {
+                0
+            } else if s.actuation.npc_control {
+                2
+            } else {
+                1
+            })
+        })();
+        if result.is_err() {
+            s.actuation.stop();
+        }
+        result
+    })
+}
+/// Lock-step capture half: submit one normalized measurement of the state at
+/// `source_step` (timestamp step x 2ms) to a ready reference client. Returns 1
+/// when admitted, 0 when the client is not ready or its bounded queue is full
+/// (a counted pre-admission gap), negative on contract failure. Steps must
+/// strictly increase; the first may be 0. Never blocks on network exchange.
+///
+/// # Safety
+/// Every non-null pointer must reference a live, aligned allocation of at least
+/// its declared element count for this call. Input and output allocations must
+/// not overlap; no other thread may mutate them during the call. Handles are
+/// integer IDs and are validated; they are never dereferenced as pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nm_reference_submit(
+    handle: u64,
+    source_step: u64,
+    sensors: *const f64,
+    sensor_count: u32,
+) -> i32 {
+    guarded(|| {
+        let state = session(handle)?;
+        let mut s = state.lock().map_err(|_| "session unavailable")?;
+        let result = (|| -> Result<i32, String> {
+            if s.closed || sensors.is_null() || sensor_count > NM_MAX_CHANNELS {
+                return Err("invalid session/bounded numerical buffer".into());
+            }
+            if sensor_count as usize != s.model.io.sensors.len()
+                || s.submit_step.is_some_and(|last| source_step <= last)
+            {
+                return Err("source clock or mapping contract mismatch".into());
+            }
+            let timestamp_us = source_step
+                .checked_mul(2000)
+                .ok_or("source clock overflow")?;
+            let values = unsafe { std::slice::from_raw_parts(sensors, sensor_count as usize) };
+            if !values
+                .iter()
+                .all(|v| v.is_finite() && (0. ..=1.).contains(v))
+            {
+                return Err("invalid normalized measurement".into());
+            }
+            let Some(client) = s.client.as_ref().filter(|c| c.status().ready) else {
+                return Ok(0);
+            };
+            let admitted = client.submit(Capture {
+                step: source_step,
+                timestamp_us,
+                values: values.to_vec(),
+            });
+            s.submit_step = Some(source_step);
+            Ok(i32::from(admitted))
+        })();
+        if result.is_err() {
+            s.actuation.stop();
+        }
+        result
+    })
+}
 /// Copy a versioned JSON status record for evidence. Returns byte length, no
 /// NUL. Capacity is bounded; undersized buffers fail without partial JSON.
 /// This operation never advances physics or waits for network exchange.
@@ -398,7 +568,10 @@ pub unsafe extern "C" fn nm_reference_status(handle: u64, output: *mut u8, capac
             "brain_generation": s.binding.as_ref().map(|b| b.brain_generation),
             "disarmed": s.actuation.disarmed, "inhibited": s.actuation.actuation_inhibited,
             "applied": s.actuation.applied, "expired": s.actuation.expired,
-            "npc_steps":s.actuation.npc_steps,"npc_policy":aarnn_embodiment::npc::POLICY,
+            "npc_steps":s.actuation.npc_steps,"applied_spikes":s.applied_spikes,"submitted_step":s.submit_step,
+            "motor_rates":s.actuation.rates(),"process_rates":s.actuation.process(),
+            "muscle_activation":s.actuation.muscle_activations().map(|rows| rows.iter().flatten().copied().collect::<Vec<_>>()),
+            "output_code":s.client.as_ref().map(|c| c.status().output_code),"npc_policy":aarnn_embodiment::npc::POLICY,
             "controller_mode":if s.actuation.npc_control{"programmed-NPC"}else if s.client.is_some(){"AER1-reference"}else{"silent-mechanics"},
             "transport": s.client.as_ref().map(Client::status),
         })).map_err(|e| e.to_string())?;
@@ -517,6 +690,77 @@ pub unsafe extern "C" fn nm_reference_project(
         result
     })
 }
+/// Width of one `nm_reference_hydro` input row: kind (0 buoyancy, 1 drag),
+/// mass kg, centre z m, ellipsoid semi-axes (3), row-major body-to-world
+/// rotation (9), centre velocity (3), world angular velocity (3).
+pub const NM_HYDRO_INPUT_WIDTH: u32 = 21;
+/// Batched `resistive-ellipsoid-v1` water of the session model's scene: the
+/// same `aarnn_embodiment::force` buoyancy and ellipsoid drag the native
+/// MuJoCo owner applies, for engines without fluids. Each output row is world
+/// force XYZ then torque XYZ (N, N m), applied at that row's centre. At most
+/// 256 rows. Fails for a model without scene hydrodynamics.
+///
+/// # Safety
+/// Buffers must be aligned, live, sized by their element counts and nonoverlapping.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nm_reference_hydro(
+    handle: u64,
+    inputs: *const f64,
+    row_count: u32,
+    outputs: *mut f64,
+    output_capacity: u32,
+) -> i32 {
+    guarded(|| {
+        if inputs.is_null() || outputs.is_null() || row_count > 256 || output_capacity != row_count * 6 {
+            return Err("invalid hydrodynamic batch".into());
+        }
+        let state = session(handle)?;
+        let s = state.lock().map_err(|_| "session unavailable")?;
+        let water = s
+            .model
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.hydrodynamics.as_ref())
+            .ok_or("model declares no scene hydrodynamics")?;
+        if water.model != "resistive-ellipsoid-v1" {
+            return Err(format!("unsupported hydrodynamics model {}", water.model));
+        }
+        let water = water.water();
+        let width = NM_HYDRO_INPUT_WIDTH as usize;
+        let rows = unsafe { std::slice::from_raw_parts(inputs, row_count as usize * width) };
+        let mut result = Vec::with_capacity(output_capacity as usize);
+        for p in rows.chunks_exact(width) {
+            if !p.iter().all(|v| v.is_finite()) {
+                return Err("nonfinite hydrodynamic input".into());
+            }
+            match p[0] as i64 {
+                0 => {
+                    result.extend(water.buoyancy(p[1], p[2]));
+                    result.extend([0.; 3]);
+                }
+                1 => {
+                    let r = std::array::from_fn(|i| std::array::from_fn(|j| p[6 + i * 3 + j]));
+                    let (force, torque) = force::ellipsoid_drag(
+                        &water,
+                        [p[3], p[4], p[5]],
+                        r,
+                        [p[15], p[16], p[17]],
+                        [p[18], p[19], p[20]],
+                        water.submersion(p[2]),
+                    )
+                    .map_err(str::to_string)?;
+                    result.extend(force);
+                    result.extend(torque);
+                }
+                _ => return Err("unknown hydrodynamic row kind".into()),
+            }
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(result.as_ptr(), outputs, result.len());
+        }
+        Ok(0)
+    })
+}
 /// Batched dissipative panel forces. Each panel input is velocity XYZ (m/s),
 /// row-major local-to-world rotation (nine doubles), area (m²). Output is world
 /// force XYZ (N). At most 32 panels; no engine- or spike-specific lift shortcut.
@@ -595,6 +839,69 @@ mod tests {
             );
             assert_eq!(out, [0.; 6]);
             assert_eq!(nm_reference_close(h), 0);
+        }
+    }
+    #[test]
+    fn split_apply_submit_clock_is_strict_and_silent_without_client() {
+        unsafe {
+            let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../sim/content/embodiments/generated/ugot_mecanum.xml");
+            let p = p.to_str().unwrap().as_bytes();
+            let mut h = 0;
+            assert_eq!(
+                nm_reference_open(p.as_ptr(), p.len() as u32, std::ptr::null(), 0, &mut h),
+                0
+            );
+            let sensors = [0.5; 19];
+            let mut out = [1.; 6];
+            // No client: never admitted, step 0 accepted once.
+            assert_eq!(nm_reference_submit(h, 0, sensors.as_ptr(), 19), 0);
+            assert_eq!(
+                nm_reference_apply(h, 0, sensors.as_ptr(), 19, out.as_mut_ptr(), 6),
+                0
+            );
+            assert_eq!(out, [0.; 6]);
+            assert!(nm_reference_apply(h, 0, sensors.as_ptr(), 19, out.as_mut_ptr(), 6) < 0);
+            let bad = [2.; 19];
+            assert!(nm_reference_submit(h, 1, bad.as_ptr(), 19) < 0);
+            let mut buffer = [0u8; 8192];
+            let len = nm_reference_status(h, buffer.as_mut_ptr(), 8192);
+            let status: serde_json::Value =
+                serde_json::from_slice(&buffer[..len as usize]).unwrap();
+            assert_eq!(status["applied_spikes"].as_array().unwrap().len(), 8);
+            assert_eq!(status["inhibited"], true);
+            assert_eq!(nm_reference_close(h), 0);
+        }
+    }
+    #[test]
+    fn hydro_batch_is_neutral_dissipative_and_requires_water() {
+        unsafe {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sim/content/embodiments/generated");
+            let open = |name: &str| {
+                let p = root.join(name);
+                let p = p.to_str().unwrap().as_bytes();
+                let mut h = 0;
+                assert_eq!(nm_reference_open(p.as_ptr(), p.len() as u32, std::ptr::null(), 0, &mut h), 0);
+                h
+            };
+            let fish = open("zebrafish.xml");
+            let mut rows = [0.; 42];
+            rows[..3].copy_from_slice(&[0., 0.002, 0.2]);
+            let drag = &mut rows[21..];
+            drag[..6].copy_from_slice(&[1., 0., 0.2, 0.004, 0.0045, 0.006]);
+            for i in 0..3 {
+                drag[6 + 4 * i] = 1.;
+            }
+            drag[15..21].copy_from_slice(&[0., 0.1, 0., 0., 0., 2.]);
+            let mut out = [0.; 12];
+            assert_eq!(nm_reference_hydro(fish, rows.as_ptr(), 2, out.as_mut_ptr(), 12), 0);
+            assert!((out[2] - 0.002 * 9.81).abs() < 1e-12);
+            assert!(out[7] < 0. && out[11] < 0.);
+            assert!(nm_reference_hydro(fish, rows.as_ptr(), 2, out.as_mut_ptr(), 6) < 0);
+            assert_eq!(nm_reference_close(fish), 0);
+            let dry = open("ugot_mecanum.xml");
+            assert!(nm_reference_hydro(dry, rows.as_ptr(), 2, out.as_mut_ptr(), 12) < 0);
+            assert_eq!(nm_reference_close(dry), 0);
         }
     }
     #[test]

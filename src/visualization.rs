@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Shared, presentation-only complexity policy for dashboard and FPV views.
 //!
 //! These stages select how an immutable display snapshot is drawn. They never

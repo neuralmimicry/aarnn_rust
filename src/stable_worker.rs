@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Stable executor worker registration and admission rules.
 //!
 //! A registration is a capability observation sent by a worker during join and

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! # Shared Memory (SHM) Communication
 //!
 //! This module provides a high-performance, zero-copy inter-process communication (IPC)

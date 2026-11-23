@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use crate::config::{GcodeDialect, MachineProfile};
 use crate::model::{ToolpathBundle, ToolpathOperation};
 use anyhow::{anyhow, Result};

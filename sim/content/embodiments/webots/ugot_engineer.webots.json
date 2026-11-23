@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "ugot_engineer",
-  "model_digest": "c47ea425ade6bc7a8e68bb075b429bd1ffcef3d487320f688689e84279142d33",
+  "model_digest": "aef5438935f081ceaa3e7780eed84887b5fa641285dbabb7a744315c763bf6a3",
   "io_digest": "61666f3b50e5417bd6e6300c741ba96b9ec5e05392479051d36c8784685847b8",
   "targets": [
     {
@@ -17,13 +17,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.1,
+      "gear": 0.196133,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.005202589408907118,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_rear_left",
@@ -38,13 +39,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.1,
+      "gear": 0.196133,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.005202589408907118,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_front_right",
@@ -59,13 +61,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.1,
+      "gear": 0.196133,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.005202589408907118,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_front_left",
@@ -80,13 +83,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.1,
+      "gear": 0.196133,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.005202589408907118,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "engineer_joint1",
@@ -101,13 +105,14 @@
         0.0,
         0.0
       ],
-      "gear": 2.0,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "engineer_joint2",
@@ -122,13 +127,14 @@
         0.0,
         0.0
       ],
-      "gear": 2.0,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "engineer_joint3",
@@ -143,13 +149,14 @@
         0.0,
         0.0
       ],
-      "gear": 2.0,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "engineer_grip_-1",
@@ -170,7 +177,8 @@
         0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "engineer_grip_1",
@@ -191,7 +199,8 @@
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     }
   ],
   "constraints": [
@@ -236,12 +245,12 @@
         "position": [
           0.0,
           1.3,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -263,12 +272,12 @@
         "position": [
           0.0,
           -1.3,
-          0.045500000000000006
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.09100000000000001
+          0.42
         ],
         "colour": [
           0.42,
@@ -277,7 +286,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -290,12 +299,12 @@
         "position": [
           1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -317,12 +326,12 @@
         "position": [
           -1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -3177,5 +3186,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 109,
-  "digest": "f2c07eef1eb6908bf289cdd7bc064b8732ad01333876cb6fc54e02508d5e8a97"
+  "digest": "a6f7d235ee34abb61ba4507b2a30f9d951191ad49007352fac050ca1ea4db025"
 }

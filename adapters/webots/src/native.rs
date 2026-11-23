@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Minimal audited Webots R2025a C boundary, confined to its controller thread.
 use std::{
     ffi::{CString, c_char, c_void},
@@ -12,6 +16,7 @@ unsafe extern "C" {
     fn wb_robot_init() -> i32;
     fn wb_robot_cleanup();
     fn wb_robot_step(ms: i32) -> i32;
+    fn wb_robot_get_time() -> f64;
     fn wb_robot_get_device(name: *const c_char) -> Tag;
     fn wb_position_sensor_enable(tag: Tag, ms: i32);
     fn wb_position_sensor_get_value(tag: Tag) -> f64;
@@ -27,6 +32,7 @@ unsafe extern "C" {
     fn wb_camera_get_image(tag: Tag) -> *const u8;
     fn wb_camera_get_width(tag: Tag) -> i32;
     fn wb_camera_get_height(tag: Tag) -> i32;
+    fn wb_camera_get_fov(tag: Tag) -> f64;
     fn wb_supervisor_node_get_from_def(name: *const c_char) -> *mut c_void;
     fn wb_supervisor_node_get_position(node: *mut c_void) -> *const f64;
     fn wb_supervisor_node_get_orientation(node: *mut c_void) -> *const f64;
@@ -48,9 +54,17 @@ unsafe extern "C" {
         offset: *const f64,
         relative: c_char,
     );
+    fn wb_supervisor_node_add_torque(node: *mut c_void, torque: *const f64, relative: c_char);
     fn wb_supervisor_node_save_state(node: *mut c_void, name: *const c_char);
     fn wb_supervisor_node_load_state(node: *mut c_void, name: *const c_char);
     fn wb_supervisor_simulation_quit(status: i32);
+}
+/// Webots R2025a `WbContactPoint` (contact_point.h): world point, node id.
+#[repr(C)]
+struct ContactPoint {
+    point: [f64; 3],
+    node_id: i32,
+    padding: i32,
 }
 #[derive(Clone, Copy)]
 pub struct Node(NonNull<c_void>, PhantomData<Rc<()>>);
@@ -73,6 +87,11 @@ impl Controller {
         // SAFETY: Initialized, live thread-affine controller session; 2ms equals
         // the generated world's basicTimeStep and never advances neural time.
         unsafe { wb_robot_step(2) != -1 }
+    }
+    /// Simulation time (s) of the current physics state.
+    pub fn time(&self) -> f64 {
+        // SAFETY: initialized controller session on its owner thread.
+        unsafe { wb_robot_get_time() }
     }
     pub fn device(&self, name: &str) -> Result<Tag, String> {
         let name = CString::new(name).map_err(|_| "invalid device name")?;
@@ -182,6 +201,53 @@ impl Controller {
                 .collect())
         }
     }
+    /// Full BGRA camera frame as luminance rows (width, height, row-major).
+    pub fn luminance(&self, tag: Tag) -> Result<(usize, usize, Vec<f64>), String> {
+        // SAFETY: dimensions are read before the native width*height*4 BGRA
+        // buffer, which is copied before the next simulation step.
+        unsafe {
+            let (w, h) = (wb_camera_get_width(tag), wb_camera_get_height(tag));
+            if w <= 0 || h <= 0 || w * h > 1 << 20 {
+                return Err("invalid camera dimensions".into());
+            }
+            let ptr = wb_camera_get_image(tag);
+            if ptr.is_null() {
+                return Err("camera frame unavailable".into());
+            }
+            let data = std::slice::from_raw_parts(ptr, (w * h * 4) as usize);
+            Ok((
+                w as usize,
+                h as usize,
+                data.chunks_exact(4)
+                    .map(|p| {
+                        (0.2126 * f64::from(p[2])
+                            + 0.7152 * f64::from(p[1])
+                            + 0.0722 * f64::from(p[0]))
+                            / 255.
+                    })
+                    .collect(),
+            ))
+        }
+    }
+    /// Horizontal field of view (rad) of an enabled camera.
+    pub fn fov(&self, tag: Tag) -> f64 {
+        // SAFETY: caller passes an initialized camera tag.
+        unsafe { wb_camera_get_fov(tag) }
+    }
+    /// Named node without contact tracking (pose-only trace of any body,
+    /// including merged fixed-link Pose nodes).
+    pub fn pose_node(&self, name: &str) -> Result<Node, String> {
+        let name = CString::new(name).map_err(|_| "invalid body name")?;
+        // SAFETY: as `node`; no tracking is enabled on non-Solid nodes.
+        let node = NonNull::new(unsafe { wb_supervisor_node_get_from_def(name.as_ptr()) })
+            .ok_or("missing named body")?;
+        Ok(Node(node, PhantomData))
+    }
+    /// World position of a node origin.
+    pub fn origin(&self, node: Node) -> Result<[f64; 3], String> {
+        // SAFETY: live generated node; fixed 3-vector copied.
+        unsafe { copy(wb_supervisor_node_get_position(node.0.as_ptr())) }
+    }
     pub fn node(&self, name: &str) -> Result<Node, String> {
         let name = CString::new(name).map_err(|_| "invalid body name")?;
         // SAFETY: Named generated Solid exists throughout the controller; no
@@ -212,6 +278,38 @@ impl Controller {
             wb_supervisor_node_get_contact_points(node.0.as_ptr(), 1, &mut count);
         }
         count > 0
+    }
+    /// World positions of the node's (and descendants') external contacts.
+    pub fn contact_points(&self, node: Node) -> Vec<[f64; 3]> {
+        let mut count = 0;
+        // SAFETY: live tracked node; the native array holds `count` records
+        // of the documented R2025a layout and is copied before the next step.
+        unsafe {
+            let ptr = wb_supervisor_node_get_contact_points(node.0.as_ptr(), 1, &mut count)
+                as *const ContactPoint;
+            if ptr.is_null() || count <= 0 {
+                return Vec::new();
+            }
+            std::slice::from_raw_parts(ptr, count as usize)
+                .iter()
+                .map(|c| {
+                    let _ = (c.node_id, c.padding);
+                    c.point
+                })
+                .filter(|p| p.iter().all(|v| v.is_finite()))
+                .collect()
+        }
+    }
+    /// World-frame torque on a Solid for the next physics step.
+    pub fn torque(&mut self, node: Node, torque: [f64; 3]) -> Result<(), String> {
+        if !torque.iter().all(|v| v.is_finite()) {
+            return Err("nonfinite torque".into());
+        }
+        // SAFETY: live Solid; world-relative (relative=false) 3-vector.
+        unsafe {
+            wb_supervisor_node_add_torque(node.0.as_ptr(), torque.as_ptr(), 0);
+        }
+        Ok(())
     }
     pub fn force(
         &mut self,

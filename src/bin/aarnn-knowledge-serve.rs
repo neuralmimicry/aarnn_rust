@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! `aarnn-knowledge-serve <mesh.json> <listen-addr> [shards]`
 //!
 //! Hosts one Evelyn knowledge region as a network service, so regions can be

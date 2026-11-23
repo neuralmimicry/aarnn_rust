@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Platform-neutral mobile runtime and capability contracts.
 //!
 //! This module is the Rust-facing seam for the future iOS and Android shells.

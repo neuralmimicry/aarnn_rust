@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Versioned, bounded global-field events for the local causal executor.
 //!
 //! A field event is an explicit causal input.  It carries the effective

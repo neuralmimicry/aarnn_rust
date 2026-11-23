@@ -246,6 +246,21 @@ profiles and sends bounded sensory frames to the selected brain through
 adapter. The neural runtime remains authoritative; the browser body and transducers
 are explicitly bounded kinematic/spatial proxies.
 
+Each reply is decoded as one output frame by `NmWorld.decodeOutputs`
+(`web_ui/webgl-world.js`, shared verbatim with the Bedrock packs) into one
+activation in [0, 1] per output channel. A reply without `output_code`, or with
+`"spikes"`, keeps the preview spike display: activity × 0.82 per reply, 1 on an
+event. `"pulse_density"` decodes the event fraction linearly with the MuJoCo
+reference filters (20 ms readout, 55 ms C. elegans muscle; `crates/aarnn-embodiment`);
+other codes disconnect. The activations only set a heading change
+(0.08 × right−left mean) and a forward step (0.008 × mean activity, in habitat
+half extents) per reply, blocked by catalogue rays, and pose the drawn legs and
+segments. There are no joint targets, contacts, gravity, substrate or water
+forces. The cluster gateway currently sends no `output_code` and returns the
+newest non-empty output frame after admission from a free-running brain rather
+than every brain step, so this route cannot carry a pulse-density code
+faithfully. Use `--physics-service` for the MuJoCo-backed decode and dynamics.
+
 Start it with:
 
 ```bash

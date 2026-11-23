@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // The service owns dynamics. Projection/interpolation never becomes sensed state.
 const $=id=>document.getElementById(id);
 let running=false, state=null, model=null, generation=0;

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! UDS-based NN server: hosts the Runner out-of-process and exchanges frames with a client
 //! (e.g., a Webots controller) over a Unix datagram socket.
 //!

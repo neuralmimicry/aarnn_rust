@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! TCP-based NN server: hosts the Runner out-of-process and exchanges length-prefixed frames
 //! with a client over TCP — enabling cross-platform clients (Unity C#, Unreal Engine C++,
 //! Python, etc.) that cannot use Unix domain sockets.
@@ -10,7 +14,7 @@
 //! The payload is one of:
 //! - JSON handshake  (payload[0] == b'{'):
 //!     { "s_names": [...], "o_names": [...], "sensory": N, "output": M, ... }
-//!     Server echoes: {"expected_s": N, "expected_o": M}
+//!     Server echoes: {"expected_s": N, "expected_o": M[, "output_code": "pulse_density"]}
 //! - AER1 packet  (payload[0..4] == b"AER1"):
 //!     Preferred spike exchange.  Decode → step runner → encode AER response.
 //! - Raw float packet (anything else):
@@ -701,6 +705,12 @@ fn handle_client(
                     let mut hint = serde_json::json!({
                         "expected_s": io_mapping.sensory_size, "expected_o": io_mapping.output_size
                     });
+                    // Output encoding (`pulse_density` when every output cell is
+                    // graded), as the IPC runtime advertises in its size hint;
+                    // bodies select their linear or spike decoder by it.
+                    if let Some(code) = shared_runner.lock().ok().and_then(|r| r.output_code()) {
+                        hint["output_code"] = serde_json::json!(code);
+                    }
                     if let Some(pinned) = contract.as_ref() {
                         hint["brain_id"] = serde_json::json!(pinned.brain_id);
                         hint["brain_generation"] = serde_json::json!(pinned.brain_generation);

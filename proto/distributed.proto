@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 syntax = "proto3";
 
 package distributed;
@@ -456,6 +460,10 @@ message SpikeBatch {
   bytes aer_payload = 6;
   // Base address for decoding (0 means addresses are relative)
   uint32 aer_base = 7;
+  // Post-step membrane voltages of the source layer (little-endian f64 per
+  // neuron), present when the layer contains graded (non-spiking) cells whose
+  // transmitter release is a continuous function of voltage. Empty otherwise.
+  bytes membrane_v = 8;
 }
 
 message SensoryInputFrame {

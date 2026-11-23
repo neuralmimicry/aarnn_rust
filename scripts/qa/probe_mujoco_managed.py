@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Real preserved-network one/three-worker MuJoCo launcher acceptance.
 
 Uses private local ports and task-owned processes only. Viewer evidence is

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Probe each Webots robot's motors in a separate, sequential Webots process.
 
 This uses a generated, disposable world and synthetic commands. It does not

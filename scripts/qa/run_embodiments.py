@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Authoritative xtask lane runner with unique retained results and 224 rows."""
 import argparse
 from datetime import datetime,timezone
@@ -131,7 +135,7 @@ def matrix(results,output,write=True):
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--lane',choices=['contract','mujoco','neural','usd','rust','rust-neural','rust-service','webots','webots-neural','shared','unreal','unreal-neural','unity','launchers','minecraft-service','npc','fleet','unreal-passive','unreal-render','unreal-lifecycle','capabilities','mujoco-managed','mujoco-viewer','mujoco-population','habitats','legacy-neural'],default='contract');args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--lane',choices=['contract','mujoco','neural','usd','rust','rust-neural','rust-service','webots','webots-neural','shared','unreal','unreal-neural','unity','launchers','minecraft-service','npc','fleet','unreal-passive','unreal-render','unreal-lifecycle','capabilities','mujoco-managed','mujoco-viewer','mujoco-population','mujoco-behaviour','habitats','legacy-neural'],default='contract');args=parser.parse_args()
     started=time.monotonic()
     base=ROOT/'target/qa/lec-crow';base.mkdir(parents=True,exist_ok=True)
     output=Path(tempfile.mkdtemp(prefix=args.lane+'-',dir=base))
@@ -155,6 +159,9 @@ def main():
             witness.append(dict(path=name,sha256=sha(ROOT/name)))
     if args.lane in ('mujoco-managed','mujoco-viewer','mujoco-population','legacy-neural'):
         for name in ('scripts/run_sim.sh','scripts/mujoco_bindings.py','scripts/qa/probe_mujoco_managed.py','src/tcp_aer_ipc_bridge.rs','src/bin/tcp_aer_ipc_bridge.rs'):
+            witness.append(dict(path=name,sha256=sha(ROOT/name)))
+    if args.lane=='mujoco-behaviour':
+        for name in ('scripts/run_sim.sh','scripts/mujoco_bindings.py','scripts/qa/probe_celegans_mujoco_behaviour.py','scripts/webots_runtime_profile.sh','src/tcp_aer_ipc_bridge.rs','src/ui.rs','src/distributed.rs','network_celegans.json'):
             witness.append(dict(path=name,sha256=sha(ROOT/name)))
     if args.lane=='mujoco-population':
         for name in ('scripts/qa/probe_mujoco_population.py','scripts/webots_runtime_profile.sh','src/main.rs','Cargo.toml'):
@@ -342,6 +349,11 @@ print(json.dumps(report))"""]
         sdk=Path(os.environ.get('AARNN_MUJOCO_DIR',str(Path.home()/'Developer/mujoco-3.17.0')))
         command_env=dict(os.environ,AARNN_MUJOCO_DIR=str(sdk),LD_LIBRARY_PATH=str(sdk/'lib')+(':'+os.environ['LD_LIBRARY_PATH'] if os.environ.get('LD_LIBRARY_PATH') else ''))
         commands=[['cargo','build','--locked','-p','aarnn-mujoco','--features','viewer,service'],['cargo','build','--release','--locked','--all-features','--bin','tcp_aer_ipc_bridge'],['cargo','test','--release','--locked','--all-features','--bin','tcp_aer_ipc_bridge'],['python3','scripts/qa/probe_mujoco_managed.py','--output',str(output)]+(['--viewer'] if args.lane=='mujoco-viewer' else [])]
+    if args.lane=='mujoco-behaviour':
+        # Lock-step closed loop: the body waits for each preserved-brain reply.
+        sdk=Path(os.environ.get('AARNN_MUJOCO_DIR',str(Path.home()/'Developer/mujoco-3.17.0')))
+        command_env=dict(os.environ,AARNN_MUJOCO_DIR=str(sdk),LD_LIBRARY_PATH=str(sdk/'lib')+(':'+os.environ['LD_LIBRARY_PATH'] if os.environ.get('LD_LIBRARY_PATH') else ''))
+        commands=[['cargo','build','--locked','-p','aarnn-mujoco','--features','viewer,service'],simulation_runtime_build(),['python3','scripts/qa/probe_celegans_mujoco_behaviour.py','--output',str(output/'behaviour'),'--steps','15000','--pacing','lockstep']]
     if args.lane in ('launchers','minecraft-service'):
         sdk=Path(os.environ.get('AARNN_MUJOCO_DIR',str(Path.home()/'Developer/mujoco-3.17.0')))
         command_env=dict(os.environ,AARNN_MUJOCO_DIR=str(sdk),LD_LIBRARY_PATH=str(sdk/'lib')+(':'+os.environ['LD_LIBRARY_PATH'] if os.environ.get('LD_LIBRARY_PATH') else ''))
@@ -352,10 +364,11 @@ print(json.dumps(report))"""]
             commands=[['sim/minecraft/gradlew','-p','sim/minecraft','--no-daemon','compileJava','test'],['sim/minecraft/gradlew','-p','sim/minecraft','--no-daemon','compileJava','-Pminecraft_version=26.2','-Ploader_version=0.19.5','-Pfabric_version=0.160.0+26.2','-Pno_remap=true','-Pjava_release=25'],['python3','scripts/build_minecraft_bedrock.py','--output',str(output/'bedrock-pack')],['node','--experimental-vm-modules','scripts/qa/test_minecraft_physics.cjs'],['cargo','build','--locked','-p','aarnn-mujoco','--features','service'],['python3','scripts/qa/test_rust_physics_service.py']]
     codes=[]
     for i,command in enumerate(commands):
-        try:codes.append(run(command,output/f'run-{i}.log',2700 if args.lane=='legacy-neural' else 1200 if args.lane=='mujoco-population' else 300,command_env))
+        try:codes.append(run(command,output/f'run-{i}.log',2700 if args.lane in ('legacy-neural','mujoco-behaviour') else 1200 if args.lane=='mujoco-population' else 300,command_env))
         except OSError as error:codes.append(127);result['capability_error']=str(error)
         if codes[-1]!=0 and not (args.lane=='legacy-neural' and i==5):break
     if args.lane in ('mujoco-managed','mujoco-viewer') and (output/'managed.json').exists():result['managed_mujoco']=json.loads((output/'managed.json').read_text())
+    if args.lane=='mujoco-behaviour' and (output/'behaviour/behaviour.json').exists():result['celegans_behaviour']=json.loads((output/'behaviour/behaviour.json').read_text())
     if args.lane=='legacy-neural' and (output/'legacy-neural.json').exists():result['legacy_neural']=json.loads((output/'legacy-neural.json').read_text())
     if args.lane in ('legacy-neural','mujoco-population') and (output/'population/population.json').exists():result['managed_population']=json.loads((output/'population/population.json').read_text())
     if args.lane=='mujoco-population' and len(codes)==len(commands):result['population_exit']=codes[-1]

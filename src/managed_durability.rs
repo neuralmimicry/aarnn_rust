@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Opt-in adapter that places the live managed-network loop behind the
 //! durable shard commit boundary.
 //!
@@ -84,6 +88,9 @@ pub struct DurableCausalBatch {
     pub spike_indices: Vec<u32>,
     pub aer_payload: Vec<u8>,
     pub aer_base: u32,
+    /// Graded-layer membrane voltages (`SpikeBatch::membrane_v`).
+    #[serde(default)]
+    pub membrane_v: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1586,6 +1593,7 @@ mod tests {
             spike_indices: vec![1, 3],
             aer_payload: b"AER1".to_vec(),
             aer_base: 0,
+            membrane_v: Vec::new(),
         };
         let mut outbox = BTreeMap::new();
         outbox.insert("node-b".to_owned(), vec![batch.clone()]);
@@ -2107,6 +2115,7 @@ mod tests {
             spike_indices: vec![layer_index],
             aer_payload: vec![1, 2, 3],
             aer_base: 0,
+            membrane_v: Vec::new(),
         };
 
         let mut outbox = DurableCausalOutbox::open(&path).unwrap();

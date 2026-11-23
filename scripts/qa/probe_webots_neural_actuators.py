@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Exercise every Webots robot's real controller with bounded synthetic neural output.
 
 The temporary UDS responders provide an output frame after each sensory frame.

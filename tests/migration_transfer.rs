@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! End-to-end reference migration evidence.
 //!
 //! This test keeps the data plane and control plane explicit: a source

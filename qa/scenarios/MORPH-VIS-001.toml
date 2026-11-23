@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 id = "MORPH-VIS-001"
 version = 1
 title = "Stable anatomical projection, staged links, local tube meshes and membrane containment"

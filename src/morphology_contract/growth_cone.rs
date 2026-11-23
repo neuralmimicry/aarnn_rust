@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Bounded, renderer-independent growth-cone reference policy (version 1).
 //!
 //! All lengths are millimetres. Guidance vectors are dimensionless, with norm

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "keenon_c40",
-  "model_digest": "d1077d54f8f43a30fba493f7f826acfe9e5efa7b7f74b745fa317bd58de72c5f",
+  "model_digest": "f318e30d386d5b2991647f44a9dc71ad88605dd283cf103a39ff451016fdaa70",
   "io_digest": "db3ca9dcd733f68abcce87e2f8917846ca0c8176af1fe59fbbae3a6953043197",
   "targets": [
     {
@@ -22,8 +22,9 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.11200000000000002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_rear_left",
@@ -43,8 +44,9 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.11200000000000002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_front_right",
@@ -64,8 +66,9 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.11200000000000002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_front_left",
@@ -85,8 +88,9 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.11200000000000002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "cleaning_brush",
@@ -107,7 +111,8 @@
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     }
   ],
   "constraints": [],
@@ -140,7 +145,7 @@
         "id": "rim_0",
         "shape": "box",
         "position": [
-          0.75,
+          0.0,
           3.0,
           1.2000000000000002
         ],
@@ -167,14 +172,14 @@
         "id": "rim_1",
         "shape": "box",
         "position": [
-          0.75,
+          0.0,
           -3.0,
-          0.10500000000000001
+          1.2000000000000002
         ],
         "size": [
           6.0,
           0.07500000000000001,
-          0.21000000000000002
+          2.4000000000000004
         ],
         "colour": [
           0.42,
@@ -183,7 +188,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -194,7 +199,7 @@
         "id": "rim_2",
         "shape": "box",
         "position": [
-          3.75,
+          3.0,
           0.0,
           1.2000000000000002
         ],
@@ -221,7 +226,7 @@
         "id": "rim_3",
         "shape": "box",
         "position": [
-          -3.75,
+          -3.0,
           0.0,
           1.2000000000000002
         ],
@@ -2624,5 +2629,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 92,
-  "digest": "40d628e138104af32e9466e5a19779c6189c9babacf21c8a06e2b42393b6726c"
+  "digest": "1cb88b9ce32364111c416864ef7202d39c9ec6d351812ef6facea821697f5b4e"
 }

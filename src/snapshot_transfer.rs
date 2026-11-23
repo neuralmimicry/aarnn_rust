@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Bounded-frame transport for complete distributed network snapshots.
 //!
 //! The biological snapshot remains one logical, versioned document. This

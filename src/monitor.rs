@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};

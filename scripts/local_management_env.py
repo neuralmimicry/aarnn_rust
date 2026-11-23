@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Provision the local management_v1 environment used by developer launchers.
 
 The complete Cargo feature graph enables the authenticated management service.

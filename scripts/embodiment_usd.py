@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Offline USD 26.5 emitter. Does not import or initialise Isaac/Kit.
 
 Run in the separate USD conversion venv. Isaac runtime evidence is independent.
@@ -78,6 +82,9 @@ def emit(record,path):
         lamp.CreateRadiusAttr(.025);lamp.CreateColorAttr(Gf.Vec3f(*([.9,.28,.08] if o['cue']=='heat' else [.9,.85,.62])))
     actuators={a['joint']:a for a in record['actuators']}
     jointed={j['body'] for j in record['joints'] if j['type']!=0}
+    import xml.etree.ElementTree as ET
+    mjcf=Path(__file__).resolve().parents[1]/'sim/content/embodiments/generated'/(record['profile_id']+'.xml')
+    refs={j.get('name'):float(j.get('ref','0')) for j in ET.parse(mjcf).getroot().iter('joint')} if mjcf.exists() else {}
     for j in [] if official else record['joints']:
         if j['type']==0:continue
         if j['type'] not in (2,3):raise ValueError('unsupported spherical joint needs explicit adapter')
@@ -92,9 +99,14 @@ def emit(record,path):
         joint.CreateLocalPos0Attr(Gf.Vec3f(p0));joint.CreateLocalPos1Attr(Gf.Vec3f(local))
         jq=axis_quat(j['axis'])
         joint.CreateLocalRot0Attr(quat(b['quaternion_wxyz'])*jq);joint.CreateLocalRot1Attr(jq)
+        # The authored pose is the MJCF reference configuration (qpos0 = ref),
+        # where the PhysX joint coordinate is zero: limits are range - ref
+        # (qpos-coordinate limits put the hexapod femur/tibia outside them).
+        ref=refs.get(j['name'],0.)
+        joint.GetPrim().SetCustomDataByKey('aarnnJointRef',ref)
         if j['limited']:
             factor=1 if j['type']==2 else 180/math.pi
-            joint.CreateLowerLimitAttr(j['range'][0]*factor);joint.CreateUpperLimitAttr(j['range'][1]*factor)
+            joint.CreateLowerLimitAttr((j['range'][0]-ref)*factor);joint.CreateUpperLimitAttr((j['range'][1]-ref)*factor)
         if j['name'] in actuators:
             drive=UsdPhysics.DriveAPI.Apply(joint.GetPrim(),'linear' if j['type']==2 else 'angular')
             drive.CreateTypeAttr('force');drive.CreateStiffnessAttr(0);drive.CreateDampingAttr(0)

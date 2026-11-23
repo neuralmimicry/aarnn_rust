@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 # shellcheck disable=SC2016
 #
 # Deploy or tear down a mixed-architecture k3s cluster.

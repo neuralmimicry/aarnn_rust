@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Black-box coverage for the offline placement proposal CLI.
 //!
 //! The test deliberately invokes the compiled binary. This verifies the

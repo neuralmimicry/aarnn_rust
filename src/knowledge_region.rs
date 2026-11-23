@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Knowledge regions: transformer feed-forward layers executed as AARNN
 //! neuron meshes (Evelyn stage 3b).
 //!

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 /**
  * @file webots_controller.cpp
  * @brief C++ Webots Controller Example using the AARNN FFI Bridge.

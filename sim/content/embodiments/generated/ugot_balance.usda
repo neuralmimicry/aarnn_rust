@@ -8,8 +8,8 @@
 def Xform "Robot" (
     prepend apiSchemas = ["PhysicsArticulationRootAPI"]
     customData = {
-        string aarnnIODigest = "1ff69274587c023d26c45273f0360c1f0c51db30d2a9030474160e5c242288d5"
-        string aarnnModelDigest = "62922d2fa46382d4a16e936548b71c14d5aed46194b2a1f2e641b7322785dc0e"
+        string aarnnIODigest = "1f9326e45cc89adabacf44a9bb6c271610f443570f00c79827fe3e19f20d345f"
+        string aarnnModelDigest = "616cbad09652ce7125413785a4e505a57742f988798578e14c41ed2b8da7fe00"
     }
 )
 {
@@ -99,6 +99,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "wheel_-1"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -119,6 +120,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "wheel_1"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -159,8 +161,8 @@ def Xform "Habitat"
         float[] primvars:displayOpacity = [1]
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
-        float3 xformOp:scale = (1.3, 0.01625, 0.117)
-        double3 xformOp:translate = (0, 1.3, 0.11699999999999999)
+        float3 xformOp:scale = (1.3, 0.01625, 0.21)
+        double3 xformOp:translate = (0, 1.3, 0.21)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 
@@ -169,11 +171,11 @@ def Xform "Habitat"
     )
     {
         color3f[] primvars:displayColor = [(0.42, 0.5, 0.47)]
-        float[] primvars:displayOpacity = [1]
+        float[] primvars:displayOpacity = [0.2]
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
-        float3 xformOp:scale = (1.3, 0.01625, 0.0455)
-        double3 xformOp:translate = (0, -1.3, 0.045500000000000006)
+        float3 xformOp:scale = (1.3, 0.01625, 0.21)
+        double3 xformOp:translate = (0, -1.3, 0.21)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 
@@ -185,8 +187,8 @@ def Xform "Habitat"
         float[] primvars:displayOpacity = [1]
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
-        float3 xformOp:scale = (0.01625, 1.3, 0.117)
-        double3 xformOp:translate = (1.3, 0, 0.11699999999999999)
+        float3 xformOp:scale = (0.01625, 1.3, 0.21)
+        double3 xformOp:translate = (1.3, 0, 0.21)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 
@@ -198,8 +200,8 @@ def Xform "Habitat"
         float[] primvars:displayOpacity = [1]
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
-        float3 xformOp:scale = (0.01625, 1.3, 0.117)
-        double3 xformOp:translate = (-1.3, 0, 0.11699999999999999)
+        float3 xformOp:scale = (0.01625, 1.3, 0.21)
+        double3 xformOp:translate = (-1.3, 0, 0.21)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 

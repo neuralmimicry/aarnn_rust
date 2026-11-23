@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 RUST_TOOLCHAIN="${RUST_TOOLCHAIN:-1.92.0}"
 export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
 set -euo pipefail

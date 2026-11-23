@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // AARNN local gap-junction and volume-transmission demo.
 // Matches src/aarnn/dynamics.rs::apply_local_gap_junction_coupling and volume_transmission_factors_for_layer.
 

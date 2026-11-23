@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 # run_sim.sh — Unified AARNN simulator launcher
 #
 # Selects a native physics/reference or preserved legacy simulator route.
@@ -12,7 +16,9 @@ export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
 # Options:
 #   --sim <webots|unreal|unity|webgl|minecraft|mujoco|isaacsim|all>
 #                     Simulation backend (default: webots).
-#                       webots  — launch Webots + AARNN via run_multi_robot_webots.sh
+#                       webots  — launch Webots + AARNN via run_multi_robot_webots.sh;
+#                                 with --control aarnn the native 2 ms Webots
+#                                 controller and the managed MuJoCo brain route
 #                       unreal  — load distributed brains paused, launch Unreal,
 #                                 then arm processing after every robot handshake
 #                       unity   — start AARNN brains; press Play in the Unity editor
@@ -31,7 +37,11 @@ export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
 #                       keenon_c30, keenon_c40, cofe_robot_cafe, cofe_smart_bar,
 #                       botinkit_omni, xbot_ic60, xbot_s_pro.
 #                     New Webots/Unity/Unreal profiles dispatch native factories;
-#                     MuJoCo supports all 28. Isaac needs its own supported runtime.
+#                     MuJoCo supports all 28. Isaac Sim (--sim isaacsim) runs one
+#                     legacy/native-sensor body per process under its separate
+#                     NM_ISAACSIM_PYTHON (default target/isaacsim-venv/bin/python)
+#                     with the same managed AER brain, contract and trace; it
+#                     requires OMNI_KIT_ACCEPT_EULA=YES. See sim/isaacsim/README.md.
 #                     Minecraft/WebGL functional mode uses --physics-service.
 #                     Aliases: worm/worms/c_elegans → celegans
 #                              drosophila/fly/flies/fruitfly/banc → drosophila_banc
@@ -323,7 +333,19 @@ fi
 
 python3 "$ROBOT_PROFILES_PY" validate-target "$SIM_BACKEND" "$ROBOT_SPEC"
 
-if [ "$SIM_BACKEND" = webots ] && { [ -n "$EMBODIMENT_CONTROL" ] || python3 "$ROBOT_PROFILES_PY" has-new "$ROBOT_SPEC"; }; then
+# Managed native Webots: --control aarnn without explicit bindings uses the
+# same cluster, bridges, pinned bindings and arm gate as managed MuJoCo, and
+# the same shared Rust decoder (crates/aarnn-embodiment) in the controller.
+WEBOTS_MANAGED=0
+if [ "$SIM_BACKEND" = webots ] && [ "$EMBODIMENT_CONTROL" = aarnn ]; then
+  explicit_bindings=0
+  for arg in "${WEBOTS_PASSTHROUGH_ARGS[@]}"; do
+    case "$arg" in --reference-binding|--reference-bindings) explicit_bindings=1;; esac
+  done
+  if [ "$explicit_bindings" -eq 0 ] && python3 "$ROBOT_PROFILES_PY" managed-brains "$ROBOT_SPEC" --network-map "$NETWORK_MAP_CSV" >/dev/null
+  then WEBOTS_MANAGED=1; MUJOCO_MANAGED=1; fi
+fi
+if [ "$SIM_BACKEND" = webots ] && [ "$WEBOTS_MANAGED" -eq 0 ] && { [ -n "$EMBODIMENT_CONTROL" ] || python3 "$ROBOT_PROFILES_PY" has-new "$ROBOT_SPEC"; }; then
   if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ] || [ -n "$CONFIG_MAP_CSV$NETWORK_MAP_CSV" ]; then
     echo 'Native Webots expansion reference mode requires explicit --reference-bindings; cluster remapping is unavailable.' >&2
     exit 2
@@ -348,7 +370,9 @@ fi
 
 # Native embodiment adapters own their isolated environment and lifecycle.
 # Forward only simulation options; they never start a physical peripheral.
-if [ "$SIM_BACKEND" = mujoco ] && [ "$EMBODIMENT_REFERENCE_PYTHON" -eq 0 ] && [[ "$EMBODIMENT_CONTROL" != npc && "$EMBODIMENT_CONTROL" != silent ]]; then
+# MUJOCO_MANAGED marks any managed native physics owner (MuJoCo or Isaac Sim):
+# the shared cluster, bridges and pinned bindings below are owner-neutral.
+if [[ "$SIM_BACKEND" = mujoco || "$SIM_BACKEND" = isaacsim ]] && [ "$EMBODIMENT_REFERENCE_PYTHON" -eq 0 ] && [[ "$EMBODIMENT_CONTROL" != npc && "$EMBODIMENT_CONTROL" != silent ]]; then
   explicit_bindings=0
   for arg in "${WEBOTS_PASSTHROUGH_ARGS[@]}"; do
     case "$arg" in --reference-binding|--reference-bindings) explicit_bindings=1;; esac
@@ -356,7 +380,32 @@ if [ "$SIM_BACKEND" = mujoco ] && [ "$EMBODIMENT_REFERENCE_PYTHON" -eq 0 ] && [[
   if [ "$explicit_bindings" -eq 0 ] && python3 "$ROBOT_PROFILES_PY" managed-brains "$ROBOT_SPEC" --network-map "$NETWORK_MAP_CSV" >/dev/null
   then MUJOCO_MANAGED=1; fi
 fi
-if { [ "$SIM_BACKEND" = mujoco ] && [ "$MUJOCO_MANAGED" -eq 0 ]; } || [ "$SIM_BACKEND" = isaacsim ]; then
+isaacsim_python() {
+  local python="${NM_ISAACSIM_PYTHON:-}"
+  if [ -z "$python" ] && [ -x "$ROOT_DIR/target/isaacsim-venv/bin/python" ]; then
+    python="$ROOT_DIR/target/isaacsim-venv/bin/python"
+  fi
+  # Diagnostic MuJoCo twin of the Isaac body path needs neither Kit nor the EULA.
+  local arg previous=""
+  for arg in "${WEBOTS_PASSTHROUGH_ARGS[@]}"; do
+    if [ "$previous" = --physics-owner ] && [ "$arg" = mujoco-twin ]; then
+      printf '%s\n' "${python:?set NM_ISAACSIM_PYTHON}"
+      return 0
+    fi
+    previous="$arg"
+  done
+  # Importing isaacsim prompts for the EULA unless it was accepted explicitly.
+  if [[ ! "${OMNI_KIT_ACCEPT_EULA:-}" =~ ^([Yy]([Ee][Ss])?|1)$ ]]; then
+    echo 'Isaac Sim requires accepting the NVIDIA Omniverse EULA: export OMNI_KIT_ACCEPT_EULA=YES.' >&2
+    return 2
+  fi
+  if [ -z "$python" ] || ! "$python" -c 'import isaacsim' </dev/null >/dev/null 2>&1; then
+    echo 'Isaac Sim unavailable: set NM_ISAACSIM_PYTHON to the separate Isaac Sim 6.2 python (see sim/isaacsim/README.md).' >&2
+    return 2
+  fi
+  printf '%s\n' "$python"
+}
+if [[ "$SIM_BACKEND" = mujoco || "$SIM_BACKEND" = isaacsim ]] && [ "$MUJOCO_MANAGED" -eq 0 ]; then
   if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ] || [ -n "$CONFIG_MAP_CSV$NETWORK_MAP_CSV" ]; then
     echo 'Native embodiment reference mode requires explicit --reference-bindings; cluster remapping is unavailable.' >&2
     exit 2
@@ -375,20 +424,18 @@ if { [ "$SIM_BACKEND" = mujoco ] && [ "$MUJOCO_MANAGED" -eq 0 ]; } || [ "$SIM_BA
     fi
     embodiment_python="${NM_MUJOCO_PYTHON:-$ROOT_DIR/target/robot-mujoco-venv/bin/python}"
   else
-    embodiment_python="${NM_ISAACSIM_PYTHON:-}"
-    if [ -z "$embodiment_python" ]; then
-      echo 'Isaac Sim unavailable: set NM_ISAACSIM_PYTHON to its supported, separate python.sh.' >&2
-      exit 2
-    fi
+    embodiment_python="$(isaacsim_python)" || exit 2
+    exec "$embodiment_python" "$ROOT_DIR/sim/isaacsim/run_isaacsim.py" --robots "$ROBOT_SPEC" \
+      --assets "$ROOT_DIR/sim/content/embodiments/generated" "${WEBOTS_PASSTHROUGH_ARGS[@]}"
   fi
   exec "$embodiment_python" "$ROOT_DIR/scripts/run_embodied_sim.py" --sim "$SIM_BACKEND" --robots "$ROBOT_SPEC" "${WEBOTS_PASSTHROUGH_ARGS[@]}"
 fi
 
 # Validate --sim value
 case "$SIM_BACKEND" in
-  webots|unreal|unity|webgl|minecraft|mujoco|all) ;;
+  webots|unreal|unity|webgl|minecraft|mujoco|isaacsim|all) ;;
   *)
-    echo "run_sim.sh: invalid --sim value '$SIM_BACKEND' (must be webots, unreal, unity, webgl, minecraft, or all)" >&2
+    echo "run_sim.sh: invalid --sim value '$SIM_BACKEND' (must be webots, unreal, unity, webgl, minecraft, mujoco, isaacsim, or all)" >&2
     exit 1
     ;;
 esac
@@ -523,6 +570,8 @@ BRIDGE_PORTS=()
 CLUSTER_SOCKET_DIR=""
 CLUSTER_LOG_DIR=""
 CLUSTER_ORCHESTRATOR_PORT=""
+# Neuron-shard group that drives a body from several nodes (0 = off).
+BODY_SHARD_COUNT=0
 ENV_READY_DIR=""
 ARM_FILE=""
 DISTRIBUTED_MODE=0
@@ -976,8 +1025,26 @@ start_distributed_tcp_servers() {
     done
   fi
 
+  # With more nodes than brains, a single brain is split into neuron-range
+  # shards across all nodes: its IPC owner is shard 0 and coordinates the
+  # lock-step group, every other node computes its share of each population
+  # (src/neuron_shard.rs). NM_BODY_SHARDING=0 keeps the full network on the
+  # IPC owner (the managed network then runs as a shadow copy).
+  local -a body_shard_env=()
+  BODY_SHARD_COUNT=0
+  if [ "${NM_BODY_SHARDING:-1}" != "0" ] && [ "$total" -eq 1 ] && [ "$CLUSTER_NODE_COUNT" -gt 1 ]; then
+    BODY_SHARD_COUNT="$CLUSTER_NODE_COUNT"
+    body_shard_env=(
+      "NM_BODY_SHARDS=$BODY_SHARD_COUNT"
+      "NM_BODY_SHARD_ADDR=127.0.0.1:$(free_tcp_port 0)"
+      "NM_BODY_SHARD_BRAIN=${BRAIN_IDS[0]}"
+    )
+    echo "run_sim.sh: ${BRAIN_IDS[0]} runs as $BODY_SHARD_COUNT lock-step neuron shards (${body_shard_env[1]#NM_BODY_SHARD_ADDR=})."
+  fi
+
   local cluster_cmd=(
     env
+    "${body_shard_env[@]}"
     "NM_IPC_SOCKET_DIR=$CLUSTER_SOCKET_DIR"
     "NM_CLUSTER_NODES=$CLUSTER_NODE_COUNT"
     # A simulator request must not consume the network's initial autonomous
@@ -1052,7 +1119,7 @@ wait_for_environment_bridges_ready() {
   echo "run_sim.sh: waiting for simulator environment readiness (all bridge handshakes, timeout ${TCP_READY_TIMEOUT}s) …"
   while [ "$SECONDS" -le "$deadline" ]; do
     if [ -n "$MUJOCO_PID" ] && ! kill -0 "$MUJOCO_PID" 2>/dev/null; then
-      echo "run_sim.sh: MuJoCo exited before environment readiness; see $CLUSTER_LOG_DIR/mujoco.log" >&2
+      echo "run_sim.sh: $SIM_BACKEND physics owner exited before environment readiness; see $CLUSTER_LOG_DIR/$SIM_BACKEND.log" >&2
       return 1
     fi
     ready_count=0
@@ -1113,6 +1180,15 @@ arm_distributed_networks() {
   # network ignores legacy Start; membership may also change during import.
   wait_for_distributed_networks_loaded
   wait_for_distributed_placement_ready
+  if [ "$BODY_SHARD_COUNT" -gt 1 ]; then
+    # The neuron-shard group is paced by the body; the managed copy stays
+    # unarmed so no node also runs the whole network.
+    local temporary="$ARM_FILE.tmp-$$"
+    printf 'armed\n' >"$temporary"
+    mv -f "$temporary" "$ARM_FILE"
+    echo "run_sim.sh: body armed for the $BODY_SHARD_COUNT-shard group (managed copy not started)."
+    return 0
+  fi
   local brain_id
   for brain_id in "${BRAIN_IDS[@]}"; do
     echo "run_sim.sh: arming distributed network '$brain_id' after environment readiness …"
@@ -1283,7 +1359,21 @@ launch_unreal_engine() {
 # ---------------------------------------------------------------------------
 WEBOTS_SCRIPT="$ROOT_DIR/scripts/run_multi_robot_webots.sh"
 
+# Webots starts its own cluster. With NM_BODY_SHARDING=1, one brain and more
+# nodes than brains, that brain runs as lock-step neuron shards across the
+# nodes (src/neuron_shard.rs); opt-in until the Webots path is validated.
+export_webots_body_shards() {
+  [ "${NM_BODY_SHARDING:-0}" = "1" ] || return 0
+  [ "$CLUSTER_NODE_COUNT" -gt 1 ] || return 0
+  resolve_brain_arrays
+  [ "${#BRAIN_IDS[@]}" -eq 1 ] || return 0
+  export NM_BODY_SHARDS="$CLUSTER_NODE_COUNT"
+  export NM_BODY_SHARD_ADDR="127.0.0.1:$(free_tcp_port 0)"
+  echo "run_sim.sh: Webots brain runs as $NM_BODY_SHARDS lock-step neuron shards ($NM_BODY_SHARD_ADDR)."
+}
+
 launch_webots() {
+  export_webots_body_shards
   if [ ! -x "$WEBOTS_SCRIPT" ]; then
     echo "run_sim.sh: Webots launcher not found or not executable: $WEBOTS_SCRIPT" >&2
     exit 1
@@ -1295,6 +1385,7 @@ launch_webots() {
 }
 
 launch_webots_background() {
+  export_webots_body_shards
   if [ ! -x "$WEBOTS_SCRIPT" ]; then
     echo "run_sim.sh: Webots launcher not found or not executable: $WEBOTS_SCRIPT" >&2
     exit 1
@@ -1494,8 +1585,57 @@ case "$SIM_BACKEND" in
     wait "$MUJOCO_PID"
     MUJOCO_PID=""
     ;;
+  isaacsim)
+    # Same managed cluster, bridges, pinned bindings and arm gate as MuJoCo;
+    # only the physics owner differs (Kit/PhysX in its separate interpreter).
+    isaac_python="$(isaacsim_python)" || exit 2
+    native_args=()
+    i=0
+    while [ "$i" -lt "${#WEBOTS_PASSTHROUGH_ARGS[@]}" ]; do
+      arg="${WEBOTS_PASSTHROUGH_ARGS[$i]}"
+      case "$arg" in
+        --config-map|--network-map) i=$((i+2)); continue;;
+      esac
+      native_args+=("$arg");i=$((i+1))
+    done
+    start_distributed_tcp_servers
+    echo "run_sim.sh: Isaac Sim logs and evidence: $CLUSTER_LOG_DIR"
+    NM_AER_REFERENCE_STARTUP_TIMEOUT_MS="$((TCP_READY_TIMEOUT>3600?3600000:TCP_READY_TIMEOUT*1000))" \
+    "$isaac_python" "$ROOT_DIR/sim/isaacsim/run_isaacsim.py" --robots "$ROBOT_SPEC" \
+      --assets "$ROOT_DIR/sim/content/embodiments/generated" \
+      --reference-bindings "$ENV_READY_DIR/mujoco-bindings.json" --arm-file "$ARM_FILE" \
+      --output "$CLUSTER_LOG_DIR/isaacsim.json" "${native_args[@]}" \
+      > >(tee "$CLUSTER_LOG_DIR/isaacsim.log") 2> >(tee -a "$CLUSTER_LOG_DIR/isaacsim.log" >&2) &
+    MUJOCO_PID=$!
+    wait_for_environment_bridges_ready
+    arm_distributed_networks
+    wait "$MUJOCO_PID"
+    MUJOCO_PID=""
+    ;;
   webots)
-    launch_webots
+    if [ "$WEBOTS_MANAGED" -eq 0 ]; then launch_webots; fi
+    native_args=()
+    i=0
+    while [ "$i" -lt "${#WEBOTS_PASSTHROUGH_ARGS[@]}" ]; do
+      arg="${WEBOTS_PASSTHROUGH_ARGS[$i]}"
+      case "$arg" in
+        --config-map|--network-map) i=$((i+2)); continue;;
+      esac
+      native_args+=("$arg");i=$((i+1))
+    done
+    if [ "$NO_BUILD" -eq 1 ]; then native_args+=(--no-build); fi
+    start_distributed_tcp_servers
+    echo "run_sim.sh: native Webots logs and evidence: $CLUSTER_LOG_DIR"
+    NM_AER_REFERENCE_STARTUP_TIMEOUT_MS="$((TCP_READY_TIMEOUT>3600?3600000:TCP_READY_TIMEOUT*1000))" \
+    "${NM_MUJOCO_PYTHON:-$ROOT_DIR/target/robot-mujoco-venv/bin/python}" "$ROOT_DIR/scripts/run_webots_embodiment.py" \
+      --robots "$ROBOT_SPEC" --reference-bindings "$ENV_READY_DIR/mujoco-bindings.json" --arm-file "$ARM_FILE" \
+      --output "$CLUSTER_LOG_DIR/webots" "${native_args[@]}" \
+      > >(tee "$CLUSTER_LOG_DIR/webots.log") 2> >(tee -a "$CLUSTER_LOG_DIR/webots.log" >&2) &
+    MUJOCO_PID=$!
+    wait_for_environment_bridges_ready
+    arm_distributed_networks
+    wait "$MUJOCO_PID"
+    MUJOCO_PID=""
     ;;
   unreal)
     if [ "$CLUSTER_NODE_COUNT_SET" -eq 1 ]; then

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Bounded managed runtime for a physically partial stable-shard worker.
 //!
 //! [`PartialShardExecutor`] owns the deterministic biological state for the

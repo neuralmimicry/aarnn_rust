@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Run a read-only Ansible inventory probe through the local placement planner.
 
 This harness is deliberately an adapter, not a second scheduler. Ansible

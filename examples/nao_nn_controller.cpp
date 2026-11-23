@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // Webots NAO controller example that uses the Rust FFI bridge as the brain.
 //
 // Intended world: .../projects/robots/softbank/nao/worlds/nao_room.wbt

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Local reference causal executor used before distributed transport exists.
 //!
 //! The executor is intentionally single-threaded and reconstructible. It is

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // NmCelegansRobot.cs — Unity C# MonoBehaviour for C. elegans nematode worm robot.
 // Compatible with Unity 2022.3 LTS+.
 //
@@ -86,6 +90,8 @@ namespace NeuralMimicry
         // Previous-frame world velocities for mechanoreception (finite-difference).
         private Vector3[] _prevSegmentPos;
         private readonly float[] _muscleTrace = new float[TotalActuators];
+        // Graded (pulse-density) brain: reference 55 ms linear muscle filter.
+        private readonly NmMuscleActivations _gradedMuscles = new NmMuscleActivations(TotalActuators);
         private readonly float[] _dvTrace = new float[NumSegments];
         private readonly float[] _lateralTrace = new float[NumSegments];
         private float _frontContact;
@@ -313,6 +319,12 @@ namespace NeuralMimicry
             float muscleAlpha = 1f - Mathf.Exp(-Time.fixedDeltaTime / .055f);
             float spineAlpha = 1f - Mathf.Exp(-Time.fixedDeltaTime / .080f);
             string[] names = ActuatorNames;
+            // A pulse-density brain's event density is each muscle's graded
+            // activation: decode it linearly once per 2 ms brain frame with the
+            // reference 55 ms filter (celegans.rs) and hold it between frames.
+            bool graded = IsGraded;
+            if (graded && FreshFrame)
+                _gradedMuscles.Advance(outputs, NmOutputCode.PulseDensity);
 
             for (int seg = 1; seg < NumSegments; seg++)
             {
@@ -324,6 +336,7 @@ namespace NeuralMimicry
                 {
                     int channel = Array.FindIndex(names, n => n.EndsWith($"_{group}{seg + 1:D2}"));
                     if (channel < 0 || channel >= outputs.Length) return 0f;
+                    if (graded) return (float)_gradedMuscles[channel];
                     float raw = float.IsNaN(outputs[channel]) || float.IsInfinity(outputs[channel])
                         ? 0f : outputs[channel];
                     float drive = Mathf.Clamp01((raw - .5f) * 2f);
@@ -343,6 +356,9 @@ namespace NeuralMimicry
             }
             // MVULVA is a separate readout and is not a body-wall joint.
         }
+
+        /// <inheritdoc/>
+        protected override void ResetGradedDecode() => _gradedMuscles.Reset();
     }
 
 }

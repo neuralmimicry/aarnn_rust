@@ -1,10 +1,14 @@
-// Copyright NeuralMimicry. All Rights Reserved.
+// SPDX-FileCopyrightText: NEURALMIMICRY LTD
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 #pragma once
 
 #include "CoreMinimal.h"
 #include "HAL/CriticalSection.h"
 #include "Containers/Array.h"
 #include "Containers/UnrealString.h"
+#include "NmOutputDecode.h"
 
 class FSocket;
 
@@ -22,8 +26,10 @@ class FSocket;
  *   events : varint-pairs (delta_ts_us, addr, value) – see EncodeAer / DecodeAer
  *
  * Handshake (once, after TCP connect):
- *   Send: JSON text  { "s_names": [...], "o_names": [...], "sensory": N, "output": M }
- *   Recv: same JSON echoed back or an ack JSON – we discard the body.
+ *   Send: JSON text  { "s_names": [...], "o_names": [...], "sensory": N, "output": M,
+ *                      "dt_ms": 2 }
+ *   Recv: ack JSON. Its "output_code" (absent/null/"spikes" or "pulse_density")
+ *         is negotiated as GetOutputCode(); any other value refuses the brain.
  *
  * Sensor encoding:
  *   Each sensor value above SpikeThreshold is emitted as one AER1 event at address
@@ -63,10 +69,14 @@ public:
      *
      * @param SensorNames   Ordered list of sensory channel names.
      * @param ActuatorNames Ordered list of output / actuator channel names.
-     * @return false if the send or ack receive failed.
+     * @return false if the send or ack receive failed, or the brain advertised
+     *         an unsupported output_code.
      */
     bool SendHandshake(const TArray<FString>& SensorNames,
                        const TArray<FString>& ActuatorNames);
+
+    /** Output encoding negotiated by the last successful handshake. */
+    NmOutputDecode::EOutputCode GetOutputCode() const { return OutputCode; }
 
     /**
      * One sense→think→act round-trip.
@@ -167,6 +177,9 @@ private:
 
     /** Number of sensory channels, learned from SendHandshake(). */
     int32 NumSensoryChannels = 0;
+
+    /** Output encoding advertised in the handshake ack (output_code). */
+    NmOutputDecode::EOutputCode OutputCode = NmOutputDecode::EOutputCode::Spikes;
 
     mutable FCriticalSection SocketMutex;
 };

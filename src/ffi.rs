@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! # Foreign Function Interface (FFI) Bridge
 //!
 //! This module provides a C-compatible API for integrating the neuromorphic

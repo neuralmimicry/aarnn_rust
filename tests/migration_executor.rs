@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Verification of the registered orchestrator migration dispatch seam.
 
 use aarnn_rust::deterministic::{BrainId, LeaseTerm, LogicalTag, ShardId, StateDigest};

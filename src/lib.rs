@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! # AARNN Library
 //!
 //! This library provides the core engine for the neuromorphic simulation project.
@@ -173,6 +177,10 @@ pub mod distributed;
 pub mod openmpi_runtime;
 /// Remote Direct Memory Access (RDMA) backend for low-latency distributed communication.
 pub mod rdma;
+/// Lock-step reference execution of a network split into hidden-layer shards.
+pub mod layer_shard;
+/// Lock-step neuron-range shard groups that drive one embodiment.
+pub mod neuron_shard;
 /// Orchestration logic for running simulations in various modes.
 pub mod runner;
 /// Persistent runtime middleware for multi-user workspaces and scheduling.

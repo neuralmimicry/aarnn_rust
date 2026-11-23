@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // NmZebrafishRobot.cs — Unity C# MonoBehaviour for a Danio rerio zebrafish larva.
 // Compatible with Unity 2022.3 LTS+.
 //
@@ -111,6 +115,22 @@ namespace NeuralMimicry
         // ------------------------------------------------------------------ //
 
         private ArticulationBody[] _segments;  // length = NumSegments
+
+        // Graded (pulse-density) brain readouts of this body's own map: per
+        // segment R(+1)/L(-1) antagonists (centred), then fin channels 22..25.
+        // The generated zebrafish readouts (8 tail pairs, fins, trunk
+        // stiffness) are a different map.
+        private readonly NmGradedJoints _graded = new NmGradedJoints(GradedReadouts());
+
+        private static NmReadout[][] GradedReadouts()
+        {
+            var readouts = new NmReadout[NumSegments + 4][];
+            for (int seg = 0; seg < NumSegments; seg++)
+                readouts[seg] = new[] { new NmReadout(2 * seg + 1, 1.0), new NmReadout(2 * seg, -1.0) };
+            for (int fin = 0; fin < 4; fin++)
+                readouts[NumSegments + fin] = new[] { new NmReadout(22 + fin, 1.0) };
+            return readouts;
+        }
 
         // Optical flow cameras.
         private Camera        _leftEyeCam,  _rightEyeCam;
@@ -481,6 +501,24 @@ namespace NeuralMimicry
         {
             if (_segments == null || outputs == null) return;
 
+            if (IsGraded)
+            {
+                // Reference linear decode (actuation.rs) onto this body's own
+                // drive limits; centred segments, full-range fins.
+                if (FreshFrame)
+                {
+                    _graded.Accept(outputs);
+                    _graded.Advance();
+                }
+                for (int seg = 0; seg < NumSegments; seg++)
+                    if (_segments[seg] != null)
+                        DriveArticulationNorm(_segments[seg], (float)_graded.Normalized(seg), axis: 1);
+                for (int fin = 0; fin < 4; fin++)
+                    if (NumBodySegments > fin + 1 && _segments[fin + 1] != null)
+                        DriveArticulationNorm(_segments[fin + 1], (float)_graded.Normalized(NumSegments + fin), axis: 2);
+                return;
+            }
+
             // --- Body segment undulation [00-21]: L/R muscle pair per segment.
             //     Left activation (>0.5) bends the segment left (negative Y).
             //     Right activation (>0.5) bends the segment right (positive Y).
@@ -512,5 +550,8 @@ namespace NeuralMimicry
 
             // Channels 26..31: reserved, not applied.
         }
+
+        /// <inheritdoc/>
+        protected override void ResetGradedDecode() => _graded.Reset();
     }
 }

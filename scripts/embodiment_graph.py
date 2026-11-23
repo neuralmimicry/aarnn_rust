@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Engine-neutral rigid-cluster export for native Unity/Unreal factories.
 
 The authored canonical MJCF/record stays authoritative. This generated graph
@@ -62,7 +66,15 @@ def joint_maps(record,model):
             force=model.actuator_forcerange[aid].tolist() if model.actuator_forcelimited[aid] else [-1e6,1e6]
             gain=float(model.actuator_gainprm[aid,0]);bias=model.actuator_biasprm[aid,:3].tolist();gear=float(model.actuator_gear[aid,0])
         else:gain=0;bias=[0,0,0];gear=1;force=[0,0]
-        targets.append(dict(joint=j['name'],device=j['name'],sensor=j['name']+'_position',body=j['body'],kind='linear' if j['type']==2 else 'rotational',actuator=aid,gain=gain,bias=bias,gear=gear,force_range=force,damping=float(model.dof_damping[model.jnt_dofadr[jid]]),driven=aid is not None or j['name'] in coupled))
+        targets.append(dict(joint=j['name'],device=j['name'],sensor=j['name']+'_position',body=j['body'],kind='linear' if j['type']==2 else 'rotational',actuator=aid,gain=gain,bias=bias,gear=gear,force_range=force,damping=float(model.dof_damping[model.jnt_dofadr[jid]]),driven=aid is not None or j['name'] in coupled,
+                            # Joint reference (MJCF ref = qpos0): engines must start
+                            # and measure the joint relative to it (the Webots
+                            # export lacked it: femur/tibia were off by -0.8/-1.2 rad).
+                            qpos0=float(model.qpos0[model.jnt_qposadr[jid]])))
+        if model.jnt_stiffness[jid]:
+            # Passive joint spring (crow flight v2: series-elastic shoulder,
+            # co-contraction stiffness of wing, twist and tail joints).
+            targets[-1].update(stiffness=float(model.jnt_stiffness[jid]), spring_reference=float(model.qpos_spring[model.jnt_qposadr[jid]]))
     return targets,constraints
 
 def compile_graph(profile):
@@ -128,7 +140,7 @@ def compile_graph(profile):
             if not any((at&bc) or (bt&ac) for at,ac in masks[x] for bt,bc in masks[y]):
                 exclusions.append(dict(body1=x,body2=y,reason='canonical source collision masks'))
     graph['world_geoms']=world_geoms
-    graph['standard_projection']=not record['controller_transfer'].startswith('blocked') and (profile=='crow_corvus_corone' or all(s['kind'] in ('angle','angular_velocity','body_gyro','range_ray') for s in record['io']['sensors']))
+    graph['standard_projection']=not record['controller_transfer'].startswith('blocked') and (profile=='crow_corvus_corone' or all(s['kind'] in ('angle','angular_velocity','body_gyro','body_gravity','range_ray') for s in record['io']['sensors']))
     graph['scene']=record.get('scene')
     graph['collision_exclusions']=exclusions
     graph['collision_filter_scope']='source masks aggregated per rigid cluster; joint-neighbour exclusions native; different instances retain external contact'

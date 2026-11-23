@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Shared authenticated node-session binding for inter-node streams.
 //!
 //! The node ID and token headers identify the claimed workload, but neither

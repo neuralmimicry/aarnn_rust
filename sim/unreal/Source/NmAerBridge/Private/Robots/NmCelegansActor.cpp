@@ -1,4 +1,7 @@
-// Copyright NeuralMimicry. All Rights Reserved.
+// SPDX-FileCopyrightText: NEURALMIMICRY LTD
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 
 #include "Robots/NmCelegansActor.h"
 #include "NmSharedContent.h"
@@ -151,20 +154,44 @@ void UNmCelegansComponent::ApplyActuators(const TArray<float>& Actuators)
 
     TArray<FString> OutputNames;
     GetActuatorNames(OutputNames);
-    auto Muscle = [&](const TCHAR* Group, int32 Segment)
+    // A pulse-density brain's event density is each muscle's graded
+    // activation: decode it linearly once per 2 ms brain frame with the
+    // reference 55 ms filter (celegans.rs) and hold it between frames.
+    const bool bGraded = IsGraded();
+    if (bGraded && IsFreshFrame())
+    {
+        GradedMuscles.Advance(Actuators.GetData(), static_cast<size_t>(Actuators.Num()),
+                              NmOutputDecode::EOutputCode::PulseDensity);
+    }
+    auto MuscleIndex = [&](const TCHAR* Group, int32 Segment)
     {
         const FString Suffix = FString::Printf(TEXT("_%s%02d"), Group, Segment + 1);
-        const int32 Index = OutputNames.IndexOfByPredicate([&](const FString& Name) { return Name.EndsWith(Suffix); });
+        return OutputNames.IndexOfByPredicate([&](const FString& Name) { return Name.EndsWith(Suffix); });
+    };
+    auto Muscle = [&](const TCHAR* Group, int32 Segment)
+    {
+        const int32 Index = MuscleIndex(Group, Segment);
         return Index != INDEX_NONE && Actuators.IsValidIndex(Index) ? Actuators[Index] : 0.f;
+    };
+    auto Contract = [&](const TCHAR* Group, int32 Segment, float& Trace)
+    {
+        if (!bGraded)
+        {
+            return ContractFromOutput(Muscle(Group, Segment), Trace);
+        }
+        // Same neutral-centred contraction command as the spiking path.
+        const int32 Index = MuscleIndex(Group, Segment);
+        Trace = Index != INDEX_NONE ? static_cast<float>(GradedMuscles.Activation(static_cast<size_t>(Index))) : 0.f;
+        return 0.5f + 0.5f * Trace;
     };
     float AbsDriveSum = 0.0f;
     float AbsDriveMax = 0.0f;
     for (int32 Seg = 0; Seg < NumSegments; ++Seg)
     {
-        const float MDL = ContractFromOutput(Muscle(TEXT("MDL"), Seg), MdlTrace[Seg]);
-        const float MDR = ContractFromOutput(Muscle(TEXT("MDR"), Seg), MdrTrace[Seg]);
-        const float MVL = ContractFromOutput(Muscle(TEXT("MVL"), Seg), MvlTrace[Seg]);
-        const float MVR = ContractFromOutput(Muscle(TEXT("MVR"), Seg), MvrTrace[Seg]);
+        const float MDL = Contract(TEXT("MDL"), Seg, MdlTrace[Seg]);
+        const float MDR = Contract(TEXT("MDR"), Seg, MdrTrace[Seg]);
+        const float MVL = Contract(TEXT("MVL"), Seg, MvlTrace[Seg]);
+        const float MVR = Contract(TEXT("MVR"), Seg, MvrTrace[Seg]);
 
         const float Dorsal = 0.5f * (MDL + MDR);
         const float Ventral = 0.5f * (MVL + MVR);

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 pub const AER_PACKET_MAGIC: u32 = 0x4145_5231;
 pub const AER_PACKET_VERSION: u16 = 1;
 pub const MAX_EVENTS_PER_PACKET: usize = 64;
