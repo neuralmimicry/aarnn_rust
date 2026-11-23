@@ -455,9 +455,8 @@ impl World {
                         "body_gyro" => {
                             local_omega[*sensor.axis.as_ref().ok_or("missing gyro axis")?]
                         }
-                        "body_gravity" => {
-                            inverse(r, [0., 0., -1.])[*sensor.axis.as_ref().ok_or("missing gravity axis")?]
-                        }
+                        "body_gravity" => inverse(r, [0., 0., -1.])
+                            [*sensor.axis.as_ref().ok_or("missing gravity axis")?],
                         "range_ray" => {
                             let angle = sensor.angle_rad.ok_or("missing ray direction")?;
                             let delta = rotation(r, [0., 0., 0.1]);

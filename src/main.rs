@@ -60,7 +60,6 @@ mod knowledge;
 #[cfg(test)]
 mod knowledge_region;
 mod layer_shard;
-mod neuron_shard;
 mod managed_durability;
 mod managed_partial_shard_runtime;
 mod managed_shard_runtime;
@@ -79,6 +78,7 @@ mod morphology;
 mod morphology_contract;
 mod network;
 mod neuron_kernels;
+mod neuron_shard;
 mod node_auth;
 #[cfg(feature = "openmpi")]
 mod openmpi_runtime;
@@ -3035,7 +3035,13 @@ fn neuron_shard_bench(spec: &str) -> anyhow::Result<()> {
     );
     println!(
         "{:>6} {:>14} {:>14} {:>12} {:>10} {:>12} {:>10}  storage",
-        "shards", "weights/shard", "state/shard", "INIT/follower", "ms/step", "bytes/step", "identical"
+        "shards",
+        "weights/shard",
+        "state/shard",
+        "INIT/follower",
+        "ms/step",
+        "bytes/step",
+        "identical"
     );
     for r in rows {
         println!(
@@ -3458,7 +3464,10 @@ fn main() -> anyhow::Result<()> {
     // A compute node without the embodiment endpoint serves as a follower
     // shard when a neuron-shard group drives the body (`NM_BODY_SHARDS`).
     if args.node && !args.ipc && !args.orchestrator {
-        let node_id = args.node_id.clone().unwrap_or_else(|| args.brain_id.clone());
+        let node_id = args
+            .node_id
+            .clone()
+            .unwrap_or_else(|| args.brain_id.clone());
         neuron_shard::spawn_configured_follower(&node_id);
     }
 

@@ -526,7 +526,10 @@ mod tests {
         let expected = lo + density * (hi - lo);
         let mean = tail.iter().sum::<f64>() / tail.len() as f64;
         let spread = tail.iter().fold(0f64, |m, c| m.max((c - mean).abs()));
-        assert!((mean - expected).abs() < 0.03 * (hi - lo), "{mean} vs {expected}");
+        assert!(
+            (mean - expected).abs() < 0.03 * (hi - lo),
+            "{mean} vs {expected}"
+        );
         assert!(spread < 0.02 * (hi - lo), "ripple {spread}");
     }
 

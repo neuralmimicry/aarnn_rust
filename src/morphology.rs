@@ -1410,10 +1410,19 @@ mod growth_gain_tests {
     fn growth_propensity_is_relative_to_the_network_gain() {
         let mut cfg = crate::config::NetworkConfig::default();
         cfg.aarnn_bio.synaptic_gain = 100.0;
-        assert!((growth_gain_factor(&cfg, 100.0) - 1.0).abs() < 1e-6, "designed circuit: nominal growth");
-        assert!((growth_gain_factor(&cfg, 500.0) - 5.0).abs() < 1e-6, "stronger type grows faster");
+        assert!(
+            (growth_gain_factor(&cfg, 100.0) - 1.0).abs() < 1e-6,
+            "designed circuit: nominal growth"
+        );
+        assert!(
+            (growth_gain_factor(&cfg, 500.0) - 5.0).abs() < 1e-6,
+            "stronger type grows faster"
+        );
         cfg.aarnn_bio.synaptic_gain = 1.0;
-        assert!((growth_gain_factor(&cfg, 14.0) - 14.0).abs() < 1e-6, "base-1 networks unchanged");
+        assert!(
+            (growth_gain_factor(&cfg, 14.0) - 14.0).abs() < 1e-6,
+            "base-1 networks unchanged"
+        );
     }
 }
 
@@ -5920,7 +5929,8 @@ impl Morphology {
                 let mut local_sprout_p = sprout_p;
                 if let Some(tname) = &soma.type_name {
                     if let Some(ntype) = config.neuron_types.iter().find(|t| &t.name == tname) {
-                        local_sprout_p *= growth_gain_factor(config, ntype.bio_params.synaptic_gain);
+                        local_sprout_p *=
+                            growth_gain_factor(config, ntype.bio_params.synaptic_gain);
                     }
                 }
                 let effective_sprout_p = local_sprout_p * (0.4 + local_e * 2.0);
@@ -6186,7 +6196,8 @@ impl Morphology {
                 let soma = &somas_layer[j];
                 if let Some(tname) = &soma.type_name {
                     if let Some(ntype) = config.neuron_types.iter().find(|t| &t.name == tname) {
-                        local_sprout_p *= growth_gain_factor(config, ntype.bio_params.synaptic_gain);
+                        local_sprout_p *=
+                            growth_gain_factor(config, ntype.bio_params.synaptic_gain);
                     }
                 }
                 let effective_sprout_p = local_sprout_p * (1.0 + local_e * 5.0) * homeo_boost;
