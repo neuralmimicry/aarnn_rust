@@ -1621,6 +1621,112 @@ Storage results (N = 160):
 
 Storage tracks the number of possible synapses. In these runs experiences were placed in random groups, not filled group by group as the proposed growth rule would do. That rule, and larger collections, are the next tests.
 
+### NAO learns obstacle avoidance by experience (2026-11-23)
+
+Learning uses the same AARNN algorithms as every other network. Only the NAO's wiring and parameters are specific to it.
+
+**Circuit** (`scripts/build_nao_learn_network_json.py` on `build_nao_walk_network_json.py --learn-groups 20`):
+- The innate far-sonar turn of the walking NAO is removed.
+- In its place, each chest sonar feeds a group of 20 distance-tuned relay cells (`CS_{l,r}_00..19`, onsets 0.45-1.5 m).
+  - The group is sparse inside: each ordered pair is connected with p = 0.5.
+  - The two groups form one collection, joined by a 2-synapse attachment (the groups-of-groups rule).
+  - Anatomy: inferior colliculus.
+- Every relay cell has a silent synapse (0.05 mV/ms) onto that side's learning-turn cell LT (superior colliculus). LT drives the reticulospinal turn cell exactly as the innate cell did.
+- The innate near reflex (sonar < 0.4 m: back off and turn) also excites LT, so it is the teacher (distributed adaptive control).
+- Plastic-cell mask: only synapses onto LT learn. The homeostat (tau 600 s) is the counterweight.
+- Neuromodulation is off, so the learning rate is plain.
+
+**Depth matters.**
+- Point cells (S0) have only matrix STDP. STDP cannot learn this, because the relay spikes do not cause LT's spikes, so its potentiation and depression cancel (12 paired approaches: turn onset unchanged at 0.27 m).
+- The association is learned by the dendritic-bouton plasticity overlay that S1 (3D anatomy and morphology) adds. It acts on graded co-activity through its Hebbian and Oja terms.
+- Ablation (`ol8_nohebb_paired`, Hebbian share 0): the network still learns, more slowly (turn onset 1.06 / 0.98 m and weights x8.2 / x7.2 after 8 approaches per side, against 1.30 / 1.29 m and x14). The Hebbian share roughly doubles the rate; it is not the only learning term.
+- This overlay now uses the graded cells' activity, not spike flags (`src/runner.rs`).
+- `aarnn_plasticity_eta` (default 0, which means the runtime rate) lets a network set its rate as a parameter.
+
+**S1 calibration.**
+- Designed circuits inherit the C. elegans template's distance attenuation (0.26 per mean path) and release heterogeneity (0.12). These silenced the NAO's threshold-tuned near reflex at S1: relay 2.3 Hz against 13.7 Hz in point cells.
+- The `--route-report` option of `celegans_depth_probe` found the two causes:
+  - distance attenuation;
+  - a lower release probability on the right afferent synapse.
+- Rule (the same for any animal): the largest equal values at which the innate reflex keeps its point-cell level on both sides. Here that is 0.04 / 0.04; 0.06 lost the right side (sweep in `target/qa/nao_learn/cal_*`).
+- Both features stay on. For comparison, the NAO connectome builder uses 0.08 / 0.08.
+
+**Open-loop proof.**
+- Script: `scripts/qa/nao_learn_openloop.py`; report: `scripts/qa/nao_learn_report.py`; runs in `target/qa/nao_learn/ol6_*`.
+- 16 scripted wall approaches, alternating sides: 2.2 m -> hold -> retreat over 30 s.
+- Turn onset uses one absolute threshold for every condition: half the frozen network's reflex peak.
+- `--watch-rows LT_l,LT_r` logs the synapses onto LT in every 50 ms window.
+
+| Condition (same network) | turn onset, approaches 1-2 -> 15-16 | LT activity at 0.6-1.2 m | summed sonar -> LT efficacy |
+|---|---|---|---|
+| reflex paired with approach (hold 0.25 m) | 0.35 m -> 1.30 m | 0.4 -> 17.7 Hz | x14 |
+| approach only, never near enough for the reflex (hold 0.5 m) | never turns | 0.4 -> 3.7 Hz | x4 |
+| frozen (plasticity off) | 0.30-0.35 m throughout | 0.4 Hz throughout | unchanged |
+
+- With the reflex as teacher, the network learned to turn from 1.3 m, more than three times the innate range, within 7-8 experiences per side. Both sides learned.
+- Without the teacher, the same exposure gave a slow, non-associative potentiation, not a turn. It accelerates: the Hebbian term reinforces itself as LT's activity rises, and the 600 s homeostat does not hold it within 16 approaches. With much longer exposure it could cross the turn threshold. This is the open caveat.
+- A faster homeostat is not the fix (`target/qa/nao_learn/ol7h60_*`, tau 60 s):
+  - it left the approach-only drift unchanged (summed efficacy 0.38 vs 0.37);
+  - it suppressed paired learning (0.31 vs 1.25);
+  - because it scales every excitatory input to LT, it also weakened the teacher synapse: the innate reflex turn dropped out on 3 of 16 approaches.
+  - The counterweight must stay much slower than learning, as biological homeostasis (hours) is slower than learning (minutes).
+  - An LTD term for unpaired activity is the next test.
+
+Figure: `nao_experience_figure` in `docs/research/poster_v3/figures.py`. The poster now uses the teacher-gated final network instead: `nao_gated_learning_figure` (open loop `target/qa/nao_learn/ol14_report.json`; closed loop `closedloop_summary.json`).
+
+**Teacher-gated (three-factor) plasticity: a new shared algorithm (23 Nov, evening).**
+In conditioning, an unconditioned stimulus activates neuromodulatory neurons (dopaminergic, noradrenergic), and their release gates synaptic plasticity: three-factor learning. Co-activity alone does not write a memory.
+
+AARNN had only network-wide neuromodulators driven by global signals; no cell could release one. The new mechanism is available to every network, with no change unless it is configured:
+- `aarnn_modulatory_cells` (a cell mask) marks the cells that release a modulator.
+- Their mean release rate, cleared with `aarnn_modulator_tau_ms` (1 s), sets the modulator level.
+- Long-term plasticity runs at `eta x level / aarnn_modulator_ref_hz` (10 Hz), at most x3.
+- With no modulatory cells, plasticity is ungated as before. The homeostat is not gated.
+- Code: `Runner::modulated_plasticity_gate`, which multiplies the single learning rate used by matrix STDP, the dendritic-bouton overlay and the GPU path.
+- Test: `teacher_gated_plasticity_follows_the_released_modulator` (gate 1 when ungated, 0 for a silent teacher, rising with release and capped at 3, clearing with tau).
+
+NAO wiring (`build_nao_walk_network_json.py --learn-teacher 1`):
+- The innate near reflex (N_sonar cells) also drives a noradrenergic locus coeruleus cell `LC`, laid out in the dorsal pons.
+- `build_nao_learn_network_json.py --gated 1` marks LC as the only modulatory cell.
+
+Open loop, 16 approaches (`target/qa/nao_learn/ol10_*`, `ol11_*`; 72-cell network `network_nao_teach_1`):
+
+| Condition | onset, approach 1 -> 15 / 16 (left / right) | summed sonar -> LT efficacy |
+|---|---|---|
+| paired, gated, homeostat on | 0.36 -> 1.25 m / 0.35 -> 0.72 m | x11 / x5.8 |
+| paired, gated, homeostat off | 0.36 -> 1.26 m / 0.35 -> 0.38 m | x12 / x4.4 |
+| approach only, gated, homeostat on | never | x2.1 |
+| approach only, gated, homeostat off | never | x1.00 (unchanged, as frozen) |
+| frozen | 0.35-0.36 m | x1 |
+
+- The gate removes exposure-driven potentiation completely. The x2.1 left with the homeostat on is not learning: the LC teacher was silent (0.02 Hz, gate 0.002). It is the homeostat scaling up the inputs of the turn cell, which is quiet most of the time; its set point, taken in the first 2 s, does not represent a cell that is active only near walls.
+- The gated NAO network therefore runs with the homeostat off (`--homeo-gain 0`, the new default). The teacher gate gives the stability the homeostat was added for. A set point for episodically active cells is an open item.
+- The right side learns more slowly because its innate reflex, and so its teaching signal, is weaker (right relay synapse with a lower release probability; see the S1 calibration above).
+
+**Closed loop: why the robot was trapped, and the fix.**
+- Baseline: in MuJoCo (3 m x 3 m walled room, `scripts/qa/nao_learn_closedloop.py`, `target/qa/nao_learn/cl_*`) both the learning and the frozen network were trapped at the first wall. They rocked at 0.3-0.4 m for 460-750 of 800 s, and the frozen network never left.
+- Cause: the turn shortens one side's stride. Walking backwards in a back-off bout, the same shortened stride turns the body the other way, so every bout undid the turn that the forward steps had made.
+- Mirroring the turn during the bout (shortening the outer stride instead; `cl2_*`, `cl3_*`) did turn the body, but it tipped over backwards within 76-101 s in all three runs.
+- Cancelling the turn command's stride inhibition while reversing (`cl4_*`, `cl5_learn`) tipped the robot over in its first bout (52-53 s). That inhibition also brakes the reversal, whose drive was tuned with it present ("41 fell head-on"); without it the reverse speed doubled (-12 vs -5.5 cm/s).
+- Current version (`--reverse-steer 1`): AND cells `Q_l`/`Q_r` (turn command x reversal level, built like the existing yaw AND cells) give the outer stride the inner stride's inhibition while reversing. The body backs slowly and straight, keeping the brake but not the asymmetry. No falls in 4 runs of 800 s.
+- That alone does not free a naive robot from a head-on wall: stride steering needs forward progress, and at the wall the body mostly steps in place between bouts. A replay of the recorded sensor stream through the probe shows the turn command active and one-sided (RS_l 13-16 Hz, RS_r 0). The project notes already record that this NAO's stride and hip-yaw steering are weak (about 1 deg/s).
+
+**Closed loop: experience changes behaviour.** 3 m x 3 m walled room, start at the centre facing a wall; 800 s, no falls in any run. "Experienced" = the same network after the 16 scripted paired approaches in open loop (`nao_learn_openloop.py --export-after`), weights carried into the room, still learning.
+
+| Robot (gated, homeostat off) | first entry into the reflex range (< 0.4 m) | time within 0.4 m of a wall |
+|---|---|---|
+| naive, frozen (`cl6_frozen`) | 49.6 s, first wall; never escapes | 745 of 800 s (93 %) |
+| naive, learning (`cl6_learn`) | 49.6 s, first wall; never escapes | 745 of 800 s (93 %) |
+| experienced, sonar map 0.45-1.5 m (`cl6_experienced`) | never: turns from the start, 1.0-1.5 m from walls | 0 of 800 s (0 %) |
+| experienced, sonar map 0.45-0.9 m (`cl7_experienced09`, 646 s, cut short by a host crash) | 114.7 s, second wall, after avoiding the first (closest 0.63 m) and walking along it | 525 of 646 s (81 %) |
+
+Summary: `target/qa/nao_learn/closedloop_summary.json`. One run per condition; the naive runs are near-identical because the learning robot's weights only change while the teacher is active.
+
+- The naive robots learn while stuck at the wall, but cannot turn out faster. At the wall the learned and the innate turn are the same weak command. Learning pays off only before the wall, which is what the experienced robots show.
+- In this 3 m room a 1.5 m learned range keeps the turn command on almost everywhere: the experienced robot avoids every wall but mostly rotates in place, because continuous stride shortening stalls forward progress.
+- A 0.9 m map leaves room to walk. However, after turning ~90 deg along the first wall the robot met the next one nearly head-on, and 0.9 m of warning is too little for a ~1 deg/s turner.
+- Free navigation of the room needs faster turning (body mechanics), or a range matched to the room, not more learning.
+
 ### Engine launch notes
 
 Webots/Unreal have native interactive launch without `--headless`. Isaac's

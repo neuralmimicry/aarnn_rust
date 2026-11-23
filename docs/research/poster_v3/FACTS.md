@@ -31,7 +31,9 @@ Rebuild, with Python and matplotlib, Pillow and segno:
 | Human brain ≈86 billion neurons | Azevedo et al. 2009 [2]: 86.1 ± 8.1 billion (adult males) |
 | Absolute cortical or pallial neuron numbers are a good correlate of cognitive capability across species | Herculano-Houzel 2017 [3]. The publisher's highlights say "good correlates"; the poster does not claim "best" |
 | Raven pallium ≈1.2 billion; goldcrest ≈64 million | Olkowicz et al. 2016 [4], Results text and Table S1 |
-| Status: 9 moving bodies, layouts, stable learning, specialised learning, capacity from 8 to 1,024 neurons | sections 02–05 below |
+| Status: 9 moving bodies, layouts, a 3D NAO network learns from experience, stable and specialised plasticity, capacity and storage growth | sections 02–05 below |
+| Subtitle and hypothesis text: "grown in 3D, learn from experience"; "learning by experience in a 3D morphological network" | section 04 |
+| Not yet shown: replicated conditioning | section 04: one run per condition, one task, one seed |
 | 2,101 neurons on 5 nodes; 1.38 M-neuron layer on 40 shards | v2 FACTS (section 06) |
 | 2–7 ms median brain reply per exchange | `docs/lec-crow-delivery.md` results table: per-robot median latency 1.9–6.8 ms (worm ~2, Keenon 1.9–2.6, NAO 2.6–3.7, fish 3.3, balancer 3.5, crow 4.4, UGOT quadruped 2.8–6.8) |
 
@@ -68,11 +70,31 @@ Stills are frames of `target/showcase-videos/*.mp4`, recaptured on 23 Nov 2026 w
 | Worm positions from WormAtlas soma maps (ganglion, A–P site per class) | `scripts/celegans_anatomy.py` docstring; `scripts/build_celegans_network_json.py` `anatomical_position` |
 | Fly cells at their BANC-annotated neuropil and soma side | `scripts/layout_designed_circuit.py` `drosophila` (`data/drosophila/BANC v626/neurons.csv.gz`: "Top in/out region", "Soma side"; Bates et al. 2026 [8]) |
 | NAO human-equivalent cord; mammal-equivalent cords for quadruped and wheeled robots; avian layout for the crow | `scripts/layout_designed_circuit.py` profiles `nao`, `ugot_quadruped`, `ugot_balance`, `keenon_t8`, `crow` |
-| Placement alone leaves dynamics bit-identical | 23 Nov 2026: `celegans_depth_probe` hidden-rate series, original vs layout network, 4 s on each robot's recorded showcase trace. All eight designed circuits (zebrafish, nao, crow, drosophila, hexapod, ugot_quadruped, ugot_balance, keenon_t8) give identical 400-row series (`cmp`). These nets have gap-junction strength 0 and morphology and delays off |
+| Placement alone leaves dynamics bit-identical (supporting evidence; dropped from the poster text on 23 Nov to make room for section 04) | 23 Nov 2026: `celegans_depth_probe` hidden-rate series, original vs layout network, 4 s on each robot's recorded showcase trace. All eight designed circuits (zebrafish, nao, crow, drosophila, hexapod, ugot_quadruped, ugot_balance, keenon_t8) give identical 400-row series (`cmp`). These nets have gap-junction strength 0 and morphology and delays off |
 | With morphology and delays on: zebrafish 0.69 vs 0.63 L/s, hexapod 0.073 vs 0.059, NAO 0.586 vs 0.582 m in 30 s | `docs/lec-crow-delivery.md` "Showcase videos, 3D layouts and the spatial ladder" |
 | Figure | `figures.layouts_figure`: soma positions and nonzero `w_hh_rec`, `w_in` and `w_out` of the four networks |
 
-## 04 Learning that keeps innate skills
+## 04 A 3D network learns by experience
+NAO learning by experience; added 23 Nov 2026 on the user's request, updated the same evening to the teacher-gated network.
+- Same AARNN algorithms as every network; NAO wiring and parameters only.
+- Final network: `target/qa/nao_learn/network_nao_teach_1.json` (72 cells), frozen twin `network_nao_teach_0.json`.
+- Builders: `scripts/build_nao_learn_network_json.py` (defaults `--gated 1 --homeo-gain 0`) on `scripts/build_nao_walk_network_json.py --learn-groups 20 --learn-teacher 1 --reverse-steer 1`.
+- Details: `docs/lec-crow-delivery.md`, "NAO learns obstacle avoidance by experience".
+
+| Claim | Evidence |
+|---|---|
+| Each sonar feeds a sparse group of 20 distance-tuned cells, the groups joined by 2 synapses, silent onto a turn cell | `add_sonar_avoidance`: `CS_{l,r}_00..19` relays tuned 0.45–1.5 m; pairs inside a group wired with p = 0.5; 2 attachment synapses; CS→LT 0.05 mV/ms; plastic-cell mask = LT only |
+| The innate back-off reflex drives a locus coeruleus cell whose release gates plasticity | N_sonar → `LC` (laid out in the dorsal pons) and → LT. New shared mechanism: `aarnn_modulatory_cells` + `Runner::modulated_plasticity_gate` (eta × modulator level / 10 Hz, at most 3×; clearance 1 s); test `teacher_gated_plasticity_follows_the_released_modulator` |
+| Three-factor rule | Frémaux & Gerstner 2016 [25] (title: neuromodulated STDP and the theory of three-factor learning rules; verified via Crossref, 23 Nov 2026) |
+| After 8 paired approaches the left turn starts at 1.25 m, not 0.35 m | `target/qa/nao_learn/ol14_report.json` (`nao_learn_report.py`, paired = `ol12_train` on the final network). Onset is first LT activity above half the frozen reflex peak (9.04 Hz). Left approaches 1 → 8: 0.352 → 1.254 m; summed CS→LT efficacy 0.0906 → 1.045 (×11.5). Right side (weaker reflex): 0.352 → 0.372 m, ×4.0 (in the figure) |
+| Exposure without the reflex leaves synapses unchanged (×1.00) | `ol14_csonly` (hold 0.5 m, outside the reflex): summed efficacy 0.0906 at every one of 16 approaches; never turns |
+| Frozen stays at 0.35 m | `ol14_frozen`: onset 0.29–0.36 m throughout |
+| Point cells (STDP only) did not learn | `target/qa/nao_learn/ol4_paired` (`--spatial 0`, earlier ungated build): onset 0.27–0.28 m over 12 paired approaches; relay spikes do not cause LT spikes, so STDP potentiation and depression cancel |
+| Closed loop: the experienced robot spent 0 % of 800 s at a wall, the naive 93 % (one run each) | `target/qa/nao_learn/closedloop_summary.json` (`nao_learn_closedloop.py`; 3 m × 3 m MuJoCo room, start at centre facing a wall, no falls). "At a wall" = nearer chest sonar < 0.4 m. Naive frozen `cl6_frozen` and naive learning `cl6_learn`: 745 of 800 s (93.2 %), first at 49.6 s. Experienced `cl6_experienced` (final network after the 16 approaches, `--export-after`): 0 s |
+| Figure | `figures.nao_gated_learning_figure(ol14_report.json, closedloop_summary.json)` |
+| Not on the poster, in the doc | 0.9 m sonar-map variant `cl7_experienced09`: first wall avoided, caught at the second; earlier ungated runs (exposure-driven drift x4); homeostat drift (x2.1 with the teacher silent); reverse-steer fixes |
+
+### Plasticity that keeps innate skills
 | Claim | Evidence |
 |---|---|
 | STDP was applied to every dense-matrix entry and created absent synapses; worm input synapses 246 → 12,381 in 8 s; 88 of 96 inhibitory outputs lost; all 302 cells at ≈320 Hz | `data/celegans_learning_runaway.json` (before-fix runs, 23 Nov 2026; code at 6d02f24). Inhibitory outputs: `w_out_negative` 96 → 8 |
@@ -141,7 +163,7 @@ Stills are frames of `target/showcase-videos/*.mp4`, recaptured on 23 Nov 2026 w
 | Worm import signed (26 GABAergic cells) and includes gap junctions | `docs/lec-crow-delivery.md` import v2 defect table (`--polarity transmitter`; McIntire et al. GABA set via `scripts/celegans_anatomy.py`); Cook et al. 2019 [7] |
 | Fly projections remap ≈63 % of kept edges | v2 FACTS (unchanged builder) |
 | Nine bodies; designed circuits; no held-out task | section 02 |
-| Specialised learning keeps gait; no controlled conditioning in any robot | section 04; `target/qa/complexity/*/REPORT.md` ("conditioning none") and `SPATIAL_LEARN.md` |
+| 3D NAO learns: turn 0.35 → 1.25 m; exposure alone ×1.00; closed loop at a wall 93 % → 0 %; gait kept | section 04 |
 | Median reply 1.9–6.8 ms; fly flight p95 3.7 ms; no energy measurement | delivery results table; Drosophila flight paragraph; a repo-wide search finds no energy measurement |
 | Christensen et al. 2022 [6] for energy and latency metrics | v2 reference |
 
@@ -150,6 +172,7 @@ Stills are frames of `target/showcase-videos/*.mp4`, recaptured on 23 Nov 2026 w
 |---|---|
 | Growth: sprouting unbounded in designed circuits | `docs/lec-crow-delivery.md` "Growth is unbounded and its cost explodes" |
 | G3 target 100–400 M | author's roadmap (v1/v2) |
+| G2 now: NAO learns by experience (open and closed loop, one run) | section 04 |
 
 ## Code changed for this poster (working tree, 23 Nov 2026)
 - `src/aarnn/plasticity.rs`: `apply_weight_delta` (no synapse creation, sign kept, silent floor 1e-6, no truncation above `w_max`); `homeostatic_scale_rows`; `RateHomeostat`; unit tests.
@@ -167,3 +190,8 @@ Stills are frames of `target/showcase-videos/*.mp4`, recaptured on 23 Nov 2026 w
 - `scripts/layout_designed_circuit.py`: fly, quadruped, balancer, Keenon and crow profiles.
 - `scripts/qa/complexity_ladder.py`: `+Ls` specialised-subset learning.
 - New: `examples/aarnn_scaling_probe.rs` and `scripts/qa/scaling_study.py`.
+- NAO learning (23 Nov, later):
+  - `src/runner.rs`: the bouton overlay uses graded activity (`plasticity_activity`) instead of spike flags; `aarnn_plasticity_eta` override.
+  - `src/config.rs`: `aarnn_plasticity_eta`.
+  - `examples/celegans_depth_probe.rs`: `--watch-rows` and `--route-report`.
+  - New: `scripts/build_nao_learn_network_json.py`, `scripts/qa/nao_learn_openloop.py`, `scripts/qa/nao_learn_report.py`, `scripts/qa/nao_learn_closedloop.py`; the `--learn-*` options of `scripts/build_nao_walk_network_json.py`.

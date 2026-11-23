@@ -1433,7 +1433,10 @@ fn managed_sensory_delivery_error_is_retryable(error: &str) -> bool {
 fn bind_body_shard_group(
     ipc_bound: bool,
     brain_id: &str,
-) -> (Option<(crate::neuron_shard::ShardGroupListener, usize)>, bool) {
+) -> (
+    Option<(crate::neuron_shard::ShardGroupListener, usize)>,
+    bool,
+) {
     if !ipc_bound || !crate::neuron_shard::coordinates_brain(brain_id) {
         return (None, false);
     }
@@ -2759,6 +2762,11 @@ struct ReplayCapture {
     frame: u64,
     every: u64,
     max_frames: u64,
+    /// `NM_UI_REPLAY_WINDOWS="t0-t1,t2-t3"` (seconds): save screenshots only
+    /// inside these windows. The network still steps through the whole
+    /// stream (learning accumulates), ten times faster per UI frame outside
+    /// them. Empty = capture throughout.
+    windows: Vec<(f64, f64)>,
     dir: std::path::PathBuf,
     index: u64,
     awaiting: bool,
@@ -2812,7 +2820,10 @@ impl ReplayCapture {
             if sensors.is_empty() {
                 continue;
             }
-            rows.push((t * 1000.0, sensors.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect()));
+            rows.push((
+                t * 1000.0,
+                sensors.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect(),
+            ));
         }
         if rows.is_empty() {
             nm_err!("[ui.replay] no sensory rows in {}", input);
@@ -2820,7 +2831,10 @@ impl ReplayCapture {
         }
         let _ = std::fs::create_dir_all(&dir);
         let env_u64 = |key: &str, default: u64| {
-            std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+            std::env::var(key)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default)
         };
         let end_ms = rows.last().map(|r| r.0).unwrap_or(0.0);
         let (labels_h, labels_o) = std::env::var("NM_UI_REPLAY_NETWORK")
@@ -2831,13 +2845,22 @@ impl ReplayCapture {
                 let names = |key: &str| -> Vec<String> {
                     v["connectome_labels"][key]
                         .as_array()
-                        .map(|a| a.iter().map(|x| x.as_str().unwrap_or("").to_string()).collect())
+                        .map(|a| {
+                            a.iter()
+                                .map(|x| x.as_str().unwrap_or("").to_string())
+                                .collect()
+                        })
                         .unwrap_or_default()
                 };
                 (names("hidden_nodes"), names("output_nodes"))
             })
             .unwrap_or_default();
-        nm_log!("[ui.replay] {} sensory rows ({:.1} s) from {}", rows.len(), end_ms / 1000.0, input);
+        nm_log!(
+            "[ui.replay] {} sensory rows ({:.1} s) from {}",
+            rows.len(),
+            end_ms / 1000.0,
+            input
+        );
         Some(Self {
             rows,
             cursor: 0,
@@ -2845,6 +2868,20 @@ impl ReplayCapture {
             frame: 0,
             every: env_u64("NM_UI_REPLAY_EVERY", 10).max(1),
             max_frames: env_u64("NM_UI_REPLAY_MAX_FRAMES", u64::MAX),
+            windows: std::env::var("NM_UI_REPLAY_WINDOWS")
+                .ok()
+                .map(|v| {
+                    v.split(',')
+                        .filter_map(|w| {
+                            let (a, b) = w.trim().split_once('-')?;
+                            Some((
+                                a.trim().parse::<f64>().ok()? * 1000.0,
+                                b.trim().parse::<f64>().ok()? * 1000.0,
+                            ))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             dir,
             index: 0,
             awaiting: false,
@@ -2881,8 +2918,12 @@ impl ReplayCapture {
         let end = self.rows.last().map(|r| r.0).unwrap_or(0.0);
         (self.frame * 2) as f64 > end
     }
-}
 
+    /// Whether simulated time `t_ms` is captured (no windows = always).
+    fn in_window(&self, t_ms: f64) -> bool {
+        self.windows.is_empty() || self.windows.iter().any(|(a, b)| t_ms >= *a && t_ms < *b)
+    }
+}
 
 #[cfg(feature = "ui")]
 /// Top‑level UI state and cached drawing buffers.
@@ -10782,7 +10823,12 @@ impl App {
         for (p, a) in self.sensory_positions.iter().zip(rp.act_s.iter()) {
             glow(*p, *a, (90, 170, 255));
         }
-        for (p, a) in self.hidden_positions.iter().flatten().zip(rp.act_h.iter().flatten()) {
+        for (p, a) in self
+            .hidden_positions
+            .iter()
+            .flatten()
+            .zip(rp.act_h.iter().flatten())
+        {
             glow(*p, *a, (255, 160, 60));
         }
         for (p, a) in self.output_positions.iter().zip(rp.act_o.iter()) {
@@ -10814,7 +10860,11 @@ impl App {
                     image.size[1] as u32,
                     image::ColorType::Rgba8,
                 ) {
-                    nm_err!("[ui.replay] frame save failed for {}: {}", path.display(), error);
+                    nm_err!(
+                        "[ui.replay] frame save failed for {}: {}",
+                        path.display(),
+                        error
+                    );
                 }
                 rp.index += 1;
                 rp.awaiting = false;
@@ -10844,7 +10894,11 @@ impl App {
         }
         if rp.frame >= rp.max_frames || rp.exhausted() {
             let _ = std::fs::write(rp.dir.join("DONE"), format!("{}\n", rp.index));
-            nm_log!("[ui.replay] captured {} frames to {}", rp.index, rp.dir.display());
+            nm_log!(
+                "[ui.replay] captured {} frames to {}",
+                rp.index,
+                rp.dir.display()
+            );
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return false;
         }
@@ -10860,7 +10914,11 @@ impl App {
                 ));
             }
             let n_s = r.net.num_sensory_neurons;
-            fn tally(out: &crate::runner::StepOut, cnt_h: &mut Vec<Vec<f32>>, cnt_o: &mut Vec<f32>) {
+            fn tally(
+                out: &crate::runner::StepOut,
+                cnt_h: &mut Vec<Vec<f32>>,
+                cnt_o: &mut Vec<f32>,
+            ) {
                 cnt_h.resize(out.spk_h.len(), Vec::new());
                 for (li, sp) in out.spk_h.iter().enumerate() {
                     cnt_h[li].resize(sp.len(), 0.0);
@@ -10881,7 +10939,9 @@ impl App {
             let mut cnt_h: Vec<Vec<f32>> = Vec::new();
             let mut cnt_o: Vec<f32> = Vec::new();
             let mut input_frames: Vec<(u64, Vec<u32>)> = Vec::with_capacity(rp.every as usize);
-            for _ in 0..rp.every {
+            let capture_now = rp.in_window((rp.frame * 2) as f64);
+            let steps = if capture_now { rp.every } else { rp.every * 10 };
+            for _ in 0..steps {
                 let t_ms = (rp.frame * 2) as f64;
                 let values = rp.values_at(t_ms);
                 if rp.phase.len() != n_s {
@@ -10918,7 +10978,12 @@ impl App {
                 }
                 input_frames.push((
                     r.t as u64,
-                    frame.iter().enumerate().filter(|(_, x)| **x != 0).map(|(i, _)| i as u32).collect(),
+                    frame
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, x)| **x != 0)
+                        .map(|(i, _)| i as u32)
+                        .collect(),
                 ));
                 let out = r.step_sync(1.0, Some(&zero));
                 tally(&out, &mut cnt_h, &mut cnt_o);
@@ -10944,7 +11009,11 @@ impl App {
             // Window activity: any spike in the window lights the cell,
             // more spikes brighter; graded cells show their release.
             let lit = |prev: f32, n: f32, graded: f32| -> f32 {
-                let spike = if n > 0.0 { (0.55 + 0.15 * n).min(1.0) } else { 0.0 };
+                let spike = if n > 0.0 {
+                    (0.55 + 0.15 * n).min(1.0)
+                } else {
+                    0.0
+                };
                 (prev * 0.72).max(spike).max(graded.clamp(0.0, 1.0))
             };
             rp.act_s.resize(cnt_s.len(), 0.0);
@@ -11020,17 +11089,33 @@ impl App {
                 let mut desired: Vec<(ProbeTarget, String, egui::Color32)> = Vec::new();
                 let hidden_colors = [(255u8, 190u8, 80u8), (255, 120, 90), (240, 225, 100)];
                 for (n, (_, li, j)) in hs.iter().take(3).enumerate() {
-                    let label = rp.labels_h.get(flat[*li] + j).filter(|x| !x.is_empty()).cloned()
+                    let label = rp
+                        .labels_h
+                        .get(flat[*li] + j)
+                        .filter(|x| !x.is_empty())
+                        .cloned()
                         .unwrap_or_else(|| format!("H{}:{}", li + 1, j));
                     let (r_, g_, b_) = hidden_colors[n];
-                    desired.push((ProbeTarget::Hidden(*li, *j), format!("{} Vm", label), egui::Color32::from_rgb(r_, g_, b_)));
+                    desired.push((
+                        ProbeTarget::Hidden(*li, *j),
+                        format!("{} Vm", label),
+                        egui::Color32::from_rgb(r_, g_, b_),
+                    ));
                 }
                 let output_colors = [(160u8, 240u8, 120u8), (90u8, 220u8, 210u8)];
                 for (n, (_, k)) in os.iter().take(2).enumerate() {
-                    let label = rp.labels_o.get(*k).filter(|x| !x.is_empty() && !x.chars().all(|c| c.is_ascii_digit()))
-                        .cloned().unwrap_or_else(|| format!("O{}", k));
+                    let label = rp
+                        .labels_o
+                        .get(*k)
+                        .filter(|x| !x.is_empty() && !x.chars().all(|c| c.is_ascii_digit()))
+                        .cloned()
+                        .unwrap_or_else(|| format!("O{}", k));
                     let (r_, g_, b_) = output_colors[n];
-                    desired.push((ProbeTarget::Output(*k), format!("{} Vm", label), egui::Color32::from_rgb(r_, g_, b_)));
+                    desired.push((
+                        ProbeTarget::Output(*k),
+                        format!("{} Vm", label),
+                        egui::Color32::from_rgb(r_, g_, b_),
+                    ));
                 }
                 // New buffers start empty (NaN), not at 0 mV, so the
                 // auto-scaled lanes fit the real trace from the first sample.
@@ -11042,7 +11127,14 @@ impl App {
                         None => {
                             let id = self.next_probe_id;
                             self.next_probe_id += 1;
-                            let mut pr = Probe::new(id, String::new(), color, target, ProbeKind::Membrane, 10_000);
+                            let mut pr = Probe::new(
+                                id,
+                                String::new(),
+                                color,
+                                target,
+                                ProbeKind::Membrane,
+                                10_000,
+                            );
                             pr.data = vec![f32::NAN; cap];
                             pr.capacity = cap;
                             pr.write_idx = 0;
@@ -11059,20 +11151,34 @@ impl App {
                 let lit_o: usize = rp.act_o.iter().filter(|a| **a > 0.08).count();
                 let raster_spikes: usize = self.raster_inputs.iter().map(|c| c.len()).sum();
                 for pr in &self.probes {
-                    let finite: Vec<f32> = pr.data.iter().copied().filter(|v| v.is_finite()).collect();
+                    let finite: Vec<f32> =
+                        pr.data.iter().copied().filter(|v| v.is_finite()).collect();
                     let lo = finite.iter().copied().fold(f32::INFINITY, f32::min);
                     let hi = finite.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                    nm_log!("[ui.replay]   probe {}: {} samples, {:.2}..{:.2}", pr.name, finite.len(), lo, hi);
+                    nm_log!(
+                        "[ui.replay]   probe {}: {} samples, {:.2}..{:.2}",
+                        pr.name,
+                        finite.len(),
+                        lo,
+                        hi
+                    );
                 }
                 nm_log!(
                     "[ui.replay] frame {} t={} ms: lit hidden {} output {}; input raster {} cols {} spikes; probes {}",
-                    rp.index, rp.frame * 2, lit_h, lit_o, self.raster_inputs.len(), raster_spikes, self.probes.len()
+                    rp.index,
+                    rp.frame * 2,
+                    lit_h,
+                    lit_o,
+                    self.raster_inputs.len(),
+                    raster_spikes,
+                    self.probes.len()
                 );
             }
             self.append_input_raster_step_frames(input_frames);
         }
         if let Ok(r) = runner.try_read() {
-            self.sim_t_ms_bits.store(r.t_ms.to_bits(), Ordering::Release);
+            self.sim_t_ms_bits
+                .store(r.t_ms.to_bits(), Ordering::Release);
             // Probes were sampled every sub-step above; keep sync from
             // adding a duplicate sample.
             let paused = self.scope_paused;
@@ -11083,6 +11189,19 @@ impl App {
         self.sensory_activity = rp.act_s.clone();
         self.hidden_activity = rp.act_h.clone();
         self.output_activity = rp.act_o.clone();
+        if !rp.in_window(((rp.frame.saturating_sub(1)) * 2) as f64) {
+            return true;
+        }
+        if !rp.windows.is_empty() {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(rp.dir.join("frames.tsv"))
+            {
+                let _ = writeln!(f, "{}\t{}", rp.index, rp.frame * 2);
+            }
+        }
         ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         rp.awaiting = true;
         true

@@ -42,8 +42,7 @@ use crate::aarnn::plasticity::enforce_dale_matrix_cols_with_mask as dale_enforce
 use crate::aarnn::plasticity::{
     PlasticityRule, RateHomeostat, ShortTermPlasticityParams, WeightProposal,
     apply_synaptic_scaling_matrix_rows as scale_synaptic_rows, apply_weight_delta,
-    homeostatic_scale_rows,
-    commit_weight_proposals, enforce_dale_matrix_cols as dale_enforce_cols,
+    commit_weight_proposals, enforce_dale_matrix_cols as dale_enforce_cols, homeostatic_scale_rows,
     is_inhibitory_presyn as inferred_inhibitory_presyn, should_release as should_release_ref,
     stp_update_slice as stp_update_slice_ref, triplet_eta_scale, weight_delta,
 };
@@ -372,6 +371,9 @@ pub struct SnapshotRuntimeState {
     /// Homeostatic counterweight state (rates, set points, warm-up).
     #[serde(default)]
     pub rate_homeostat: Option<RateHomeostat>,
+    /// Released modulator level of teacher-gated plasticity (Hz).
+    #[serde(default)]
+    pub modulator_level: f64,
     pub stp_u_s: Vec<f64>,
     pub stp_x_s: Vec<f64>,
     pub stp_u_h: Vec<Vec<f64>>,
@@ -1455,6 +1457,9 @@ pub struct Runner {
     /// Homeostatic counterweight to long-term plasticity (per-cell firing
     /// rates and set points); see `apply_rate_homeostasis`.
     pub rate_homeostat: RateHomeostat,
+    /// Released modulator level (mean modulatory-cell release, Hz, cleared
+    /// with `aarnn_modulator_tau_ms`); see `modulated_plasticity_gate`.
+    pub modulator_level: f64,
     pub stp_u_s: Array1<f64>,
     pub stp_x_s: Array1<f64>,
     pub stp_u_h: Vec<Array1<f64>>,
@@ -5907,6 +5912,7 @@ impl Runner {
             rate_ema_h,
             rate_ema_o,
             rate_homeostat: RateHomeostat::default(),
+            modulator_level: 0.0,
             stp_u_s,
             stp_x_s,
             stp_u_h,
@@ -6363,6 +6369,7 @@ impl Runner {
             rate_ema_h: vec_from_layers_f64(&self.rate_ema_h),
             rate_ema_o: vec_from_arr1_f64(&self.rate_ema_o),
             rate_homeostat: Some(self.rate_homeostat.clone()),
+            modulator_level: self.modulator_level,
             stp_u_s: vec_from_arr1_f64(&self.stp_u_s),
             stp_x_s: vec_from_arr1_f64(&self.stp_x_s),
             stp_u_h: vec_from_layers_f64(&self.stp_u_h),
@@ -6557,6 +6564,7 @@ impl Runner {
         self.rate_ema_h = layers_from_vec_f64(&state.rate_ema_h, &hidden_sizes);
         self.rate_ema_o = array1_from_vec_f64(&state.rate_ema_o, self.net.num_output_neurons);
         self.rate_homeostat = state.rate_homeostat.clone().unwrap_or_default();
+        self.modulator_level = state.modulator_level;
         self.stp_u_s = array1_from_vec_f64(&state.stp_u_s, self.net.num_sensory_neurons);
         self.stp_x_s = array1_from_vec_f64(&state.stp_x_s, self.net.num_sensory_neurons);
         self.stp_u_h = layers_from_vec_f64(&state.stp_u_h, &hidden_sizes);
@@ -10068,6 +10076,51 @@ impl Runner {
     /// Per-cell activity this step for long-term plasticity and its
     /// homeostatic counterweight: 1 for a spike; with graded plasticity a
     /// graded cell contributes its expected spikes (release x max rate x dt).
+    /// Teacher-gated (three-factor) plasticity: update the released
+    /// modulator from the modulatory cells' activity and return the factor
+    /// on the learning rate (1 when no cells are marked). The level relaxes
+    /// toward the marked cells' mean release rate with the clearance time
+    /// constant; the gate is level / reference rate, at most 3.
+    fn modulated_plasticity_gate(&mut self) -> f64 {
+        let mask = &self.net.aarnn_modulatory_cells;
+        if !mask.enabled {
+            return 1.0;
+        }
+        let (act_h, act_o) = self.plasticity_activity();
+        let mut sum = 0.0;
+        let mut n = 0usize;
+        for (l, layer) in act_h.iter().enumerate() {
+            for (j, a) in layer.iter().enumerate() {
+                if mask
+                    .hidden
+                    .get(l)
+                    .and_then(|v| v.get(j))
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    sum += a;
+                    n += 1;
+                }
+            }
+        }
+        for (k, a) in act_o.iter().enumerate() {
+            if mask.outputs.get(k).copied().unwrap_or(false) {
+                sum += a;
+                n += 1;
+            }
+        }
+        let dt_ms = self.lif.dt.max(1.0e-6);
+        let release_hz = if n > 0 {
+            sum / n as f64 / (dt_ms / 1000.0)
+        } else {
+            0.0
+        };
+        let tau = (self.net.aarnn_modulator_tau_ms as f64).max(dt_ms);
+        self.modulator_level += (release_hz - self.modulator_level) * (dt_ms / tau);
+        let reference = (self.net.aarnn_modulator_ref_hz as f64).max(1.0e-6);
+        (self.modulator_level / reference).clamp(0.0, 3.0)
+    }
+
     fn plasticity_activity(&self) -> (Vec<Vec<f64>>, Vec<f64>) {
         let graded = self.net.aarnn_graded_plasticity_enabled;
 
@@ -10180,7 +10233,10 @@ impl Runner {
             scale(&mut self.w_hh_rec[l], err.get(l).and_then(Option::as_ref));
         }
         for l in 0..self.w_hh_fwd.len() {
-            scale(&mut self.w_hh_fwd[l], err.get(l + 1).and_then(Option::as_ref));
+            scale(
+                &mut self.w_hh_fwd[l],
+                err.get(l + 1).and_then(Option::as_ref),
+            );
         }
         for l in 0..self.w_hh_bwd.len() {
             scale(&mut self.w_hh_bwd[l], err.get(l).and_then(Option::as_ref));
@@ -16233,7 +16289,14 @@ impl Runner {
         {
             observe_time!("Runner::step/learning");
             let mut eta = if self.net.aarnn_plasticity_enabled {
-                self.stdp.eta * neuromod_plasticity_gain
+                // A network may set its own learning rate (a parameter, like
+                // its weights); the plasticity algorithm stays the same.
+                let base_eta = if self.net.aarnn_plasticity_eta > 0.0 {
+                    self.net.aarnn_plasticity_eta
+                } else {
+                    self.stdp.eta
+                };
+                base_eta * neuromod_plasticity_gain * self.modulated_plasticity_gate()
             } else {
                 0.0
             };
@@ -19568,11 +19631,17 @@ impl Runner {
         let dist_scale = self.syn_path_len_scale.max(1.0e-3) as f64;
 
         let mask = self.net.aarnn_plastic_cells.clone();
+        // Same per-cell activity as the matrix plasticity path: 1 for a spike,
+        // a graded cell's expected spikes when graded plasticity is on (the
+        // overlay used spike flags only, so graded cells never learned here).
+        let (act_h, act_o) = self.plasticity_activity();
         for si in 0..self.morph.synapses.len() {
             let syn = self.morph.synapses[si];
             let learns = match syn.kind {
                 crate::morphology::SynKind::Out => mask.output_learns(syn.post_id),
-                _ => syn.post_layer >= 0 && mask.hidden_learns(syn.post_layer as usize, syn.post_id),
+                _ => {
+                    syn.post_layer >= 0 && mask.hidden_learns(syn.post_layer as usize, syn.post_id)
+                }
             };
             if !learns {
                 continue;
@@ -19589,9 +19658,9 @@ impl Runner {
             };
 
             let apply_delta =
-                |w: &mut f64, pre_spk: i8, post_spk: i8, pre_trace: f64, post_trace: f64| {
-                    let pre = if pre_spk != 0 { 1.0 } else { 0.0 };
-                    let post = if post_spk != 0 { 1.0 } else { 0.0 };
+                |w: &mut f64, pre_act: f64, post_act: f64, pre_trace: f64, post_trace: f64| {
+                    let pre = pre_act.clamp(0.0, 1.0);
+                    let post = post_act.clamp(0.0, 1.0);
                     if pre == 0.0
                         && post == 0.0
                         && pre_trace.abs() < 1.0e-9
@@ -19620,13 +19689,12 @@ impl Runner {
                     let j = syn.post_id;
                     let i = syn.pre_id;
                     if j < self.w_in.nrows() && i < self.w_in.ncols() {
-                        let pre_spk = s_t.get(i).copied().unwrap_or(0);
-                        let post_spk = self
-                            .last_spk_h
-                            .get(l)
-                            .and_then(|v| v.get(j))
-                            .copied()
-                            .unwrap_or(0);
+                        let pre_spk = if s_t.get(i).copied().unwrap_or(0) != 0 {
+                            1.0
+                        } else {
+                            0.0
+                        };
+                        let post_spk = act_h.get(l).and_then(|v| v.get(j)).copied().unwrap_or(0.0);
                         let pre_trace = self.x_pre_in.get(i).copied().unwrap_or(0.0);
                         let post_trace = self
                             .x_post_h
@@ -19648,18 +19716,13 @@ impl Runner {
                     let j = syn.post_id;
                     if let Some(mat) = self.w_hh_fwd.get_mut(l) {
                         if j < mat.nrows() && i < mat.ncols() {
-                            let pre_spk = self
-                                .last_spk_h
-                                .get(l)
-                                .and_then(|v| v.get(i))
-                                .copied()
-                                .unwrap_or(0);
-                            let post_spk = self
-                                .last_spk_h
+                            let pre_spk =
+                                act_h.get(l).and_then(|v| v.get(i)).copied().unwrap_or(0.0);
+                            let post_spk = act_h
                                 .get(l + 1)
                                 .and_then(|v| v.get(j))
                                 .copied()
-                                .unwrap_or(0);
+                                .unwrap_or(0.0);
                             let pre_trace = self
                                 .x_pre_h
                                 .get(l)
@@ -19687,18 +19750,13 @@ impl Runner {
                     let j = syn.pre_id;
                     if let Some(mat) = self.w_hh_bwd.get_mut(l) {
                         if i < mat.nrows() && j < mat.ncols() {
-                            let pre_spk = self
-                                .last_spk_h
+                            let pre_spk = act_h
                                 .get(l + 1)
                                 .and_then(|v| v.get(j))
                                 .copied()
-                                .unwrap_or(0);
-                            let post_spk = self
-                                .last_spk_h
-                                .get(l)
-                                .and_then(|v| v.get(i))
-                                .copied()
-                                .unwrap_or(0);
+                                .unwrap_or(0.0);
+                            let post_spk =
+                                act_h.get(l).and_then(|v| v.get(i)).copied().unwrap_or(0.0);
                             let pre_trace = self
                                 .x_pre_h
                                 .get(l + 1)
@@ -19726,18 +19784,10 @@ impl Runner {
                     let j = syn.post_id;
                     if let Some(mat) = self.w_hh_rec.get_mut(l) {
                         if j < mat.nrows() && i < mat.ncols() {
-                            let pre_spk = self
-                                .last_spk_h
-                                .get(l)
-                                .and_then(|v| v.get(i))
-                                .copied()
-                                .unwrap_or(0);
-                            let post_spk = self
-                                .last_spk_h
-                                .get(l)
-                                .and_then(|v| v.get(j))
-                                .copied()
-                                .unwrap_or(0);
+                            let pre_spk =
+                                act_h.get(l).and_then(|v| v.get(i)).copied().unwrap_or(0.0);
+                            let post_spk =
+                                act_h.get(l).and_then(|v| v.get(j)).copied().unwrap_or(0.0);
                             let pre_trace = self
                                 .x_pre_h
                                 .get(l)
@@ -19764,13 +19814,8 @@ impl Runner {
                     let j = syn.pre_id;
                     let k = syn.post_id;
                     if k < self.w_out.nrows() && j < self.w_out.ncols() {
-                        let pre_spk = self
-                            .last_spk_h
-                            .get(l)
-                            .and_then(|v| v.get(j))
-                            .copied()
-                            .unwrap_or(0);
-                        let post_spk = self.last_spk_o.get(k).copied().unwrap_or(0);
+                        let pre_spk = act_h.get(l).and_then(|v| v.get(j)).copied().unwrap_or(0.0);
+                        let post_spk = act_o.get(k).copied().unwrap_or(0.0);
                         let pre_trace = self
                             .x_pre_h
                             .get(l)
@@ -24564,7 +24609,10 @@ impl Runner {
         let layout = self.shard_row_layout().ok_or("not a neuron shard")?;
         let take = |m: &Array2<f64>, r: &std::ops::Range<usize>| -> Result<Array2<f64>, String> {
             if r.end > m.nrows() {
-                return Err(format!("row range {r:?} exceeds a {}-row matrix", m.nrows()));
+                return Err(format!(
+                    "row range {r:?} exceeds a {}-row matrix",
+                    m.nrows()
+                ));
             }
             Ok(m.slice(ndarray::s![r.clone(), ..]).to_owned())
         };
@@ -29791,7 +29839,70 @@ mod tests {
         // Synaptic scaling and Dale enforcement also act on w_in whenever
         // plasticity is on; graded Hebbian potentiation comes on top.
         let (off, on) = (run(false), run(true));
-        assert!(on > off + 1e-3, "graded cells learn with graded plasticity ({on} vs {off})");
+        assert!(
+            on > off + 1e-3,
+            "graded cells learn with graded plasticity ({on} vs {off})"
+        );
+    }
+
+    /// Teacher-gated (three-factor) plasticity: the learning-rate factor is
+    /// 1 without modulatory cells, 0 while they are silent, rises with their
+    /// release (capped at 3) and decays with the clearance time constant
+    /// after the teacher stops.
+    #[test]
+    fn teacher_gated_plasticity_follows_the_released_modulator() {
+        let mut r = graded_test_runner();
+        r.net.aarnn_graded_plasticity_enabled = false;
+        assert_eq!(
+            r.modulated_plasticity_gate(),
+            1.0,
+            "no modulatory cells: ungated"
+        );
+        r.net.aarnn_modulatory_cells = crate::config::PlasticCellMask {
+            enabled: true,
+            hidden: vec![vec![false, false, true]],
+            outputs: vec![false; 2],
+        };
+        r.net.aarnn_modulator_tau_ms = 100.0;
+        r.net.aarnn_modulator_ref_hz = 10.0;
+        for l in r.last_spk_h.iter_mut() {
+            l.fill(0);
+        }
+        for _ in 0..50 {
+            assert_eq!(
+                r.modulated_plasticity_gate(),
+                0.0,
+                "silent teacher: no plasticity"
+            );
+        }
+        // Teacher fires 10 % of 1 ms steps (100 Hz) for 300 ms.
+        let mut gate = 0.0;
+        for t in 0..300 {
+            r.last_spk_h[0][2] = i8::from(t % 10 == 0);
+            gate = r.modulated_plasticity_gate();
+        }
+        assert!(
+            gate > 2.5 && gate <= 3.0,
+            "released modulator opens the gate, capped at 3 ({gate})"
+        );
+        // Teacher stops: the modulator clears with tau = 100 ms.
+        r.last_spk_h[0][2] = 0;
+        let level0 = r.modulator_level;
+        for _ in 0..100 {
+            gate = r.modulated_plasticity_gate();
+        }
+        let ratio = r.modulator_level / level0;
+        assert!(
+            (ratio - (-1.0f64).exp()).abs() < 0.02,
+            "clears with tau ({ratio})"
+        );
+        for _ in 0..300 {
+            gate = r.modulated_plasticity_gate();
+        }
+        assert!(
+            gate < 0.25,
+            "gate closes as the modulator clears ({gate} after 4 tau)"
+        );
     }
 
     /// Driven graded cells depolarise without ever spiking; graded outputs

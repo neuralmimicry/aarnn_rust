@@ -40,6 +40,10 @@ def main():
     ap.add_argument('--elevation', type=float, default=-30.0)
     ap.add_argument('--azimuth', type=float, default=135.0)
     ap.add_argument('--title', default='')
+    ap.add_argument('--trail-radius', type=float, default=None,
+                    help='path-trail dot radius in metres (default 1.2 percent of the body length)')
+    ap.add_argument('--time-offset', type=float, default=0.0,
+                    help='seconds added to the displayed time (a window cut from a longer run)')
     ap.add_argument('--fixed', metavar='X,Y,Z', help='fixed camera look-at point instead of following the root body')
     ap.add_argument('--lookat-height', type=float, default=0.5,
                     help='followed look-at height as a fraction of the root height (1 keeps a flier centred)')
@@ -75,7 +79,7 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     label = (args.title or header['profile']).replace(':', r'\:').replace("'", '')
     draw = (f"drawtext=fontcolor=white:fontsize=26:box=1:boxcolor=black@0.45:x=18:y=18:"
-            f"text='{label}  t = %{{pts\\:hms}} sim time (1\\:1)'")
+            f"text='{label}  t = %{{pts\\:hms\\:{args.time_offset:.3f}}} sim time (1\\:1)'")
     proc = subprocess.Popen([ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'rgb24',
                              '-s', f'{args.width}x{args.height}', '-r', f'{fps:.6f}', '-i', '-', '-vf', draw,
                              '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20', str(out)], stdin=subprocess.PIPE)
@@ -92,10 +96,10 @@ def main():
             cam.lookat[:] = [root[0], root[1], max(root[2] * args.lookat_height, 0.0)]
         renderer.update_scene(data, camera=cam)
         scn = renderer.scene
-        for q in trail[-600::6]:
+        for q in (trail[::25] if args.trail_radius else trail[-600::6]):
             if scn.ngeom >= scn.maxgeom:
                 break
-            mujoco.mjv_initGeom(scn.geoms[scn.ngeom], mujoco.mjtGeom.mjGEOM_SPHERE, [0.012 * length, 0, 0],
+            mujoco.mjv_initGeom(scn.geoms[scn.ngeom], mujoco.mjtGeom.mjGEOM_SPHERE, [args.trail_radius or 0.012 * length, 0, 0],
                                 [q[0], q[1], 0.003], np.eye(3).flatten(), [0.15, 0.55, 0.95, 0.75])
             scn.ngeom += 1
         proc.stdin.write(renderer.render().tobytes())

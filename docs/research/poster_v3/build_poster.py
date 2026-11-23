@@ -24,7 +24,7 @@ sys.path.insert(0, str(HERE))
 
 import segno  # noqa: E402
 
-from figures import (layouts_figure, learning_figure, scaling_two_panel_figure,  # noqa: E402
+from figures import (layouts_figure, learning_figure, nao_gated_learning_figure, scaling_two_panel_figure,  # noqa: E402
                      whole_and_storage_figure)
 from odg import Doc, P, PStyle, Run, block_height, text_width_cm  # noqa: E402
 
@@ -113,8 +113,9 @@ doc.text(W - M - 54, 1.05, 54, [P("ROYAL SOCIETY  ·  INNOVATING TECHNOLOGIES FO
 TITLE = PStyle(size=92, leading=1.0, color=WHITE, bold=True)
 y = 2.95 + doc.text(M, 2.95, CW, [P("Growing Embodied Intelligence\nfrom a Single Neuron", TITLE)], name="Title")
 SUB = PStyle(size=35, leading=1.15, color=TEAL_XL)
-y = text(M, y + 0.2, CW, [P("More neurons, more room to compute: biomimetic AARNN circuits now move nine bodies, "
-                            "sit where biology puts them, and keep innate gait while specialised cells stay plastic", SUB)],
+y = text(M, y + 0.2, CW, [P("More neurons, more room to compute: biomimetic AARNN circuits move nine bodies, sit "
+                            "where biology puts them and, grown in 3D, learn from experience while keeping innate gait",
+                            SUB)],
          name="Subtitle")
 AUTH = PStyle(size=26, leading=1.2, color=WHITE)
 text(M, y + 0.35, CW, [P([Run("Paul B. Isaac’s", bold=True),
@@ -134,8 +135,8 @@ hyp_paras = [
     P("Across mammals and birds, the absolute number of cortical or pallial neurons is a good correlate of "
       "cognitive capability [3]; a raven’s pallium holds ≈1.2 billion neurons [4]. AARNN (Auto-Asynchronous "
       "Recursive Neuromorphic Network) is the open, inspectable test-bed for the claim. Since our 13 Nov poster it "
-      "has gained **nine moving bodies**, **3D biological layouts**, **stable plasticity** and a **measured "
-      "neuron-count scaling curve**. Every number traces to the source [1], its study outputs or the cited "
+      "has gained **nine moving bodies**, **3D biological layouts**, **stable plasticity**, **learning by experience "
+      "in a 3D morphological network** and a **measured neuron-count scaling curve**. Every number traces to the source [1], its study outputs or the cited "
       "literature.", PStyle(size=21, leading=1.28, color=INK)),
 ]
 hyp_h = block_height(hyp_paras, hyp_w - 2 * pad - 0.45) + 2 * pad
@@ -144,14 +145,14 @@ st_x = COLX[2]
 st_pad = 0.7
 status_rows = [
     (GOOD, "NEW SINCE 13 NOVEMBER",
-     "9 robot bodies move by AARNN circuits · neurons placed as in biology · plasticity stabilised · plasticity "
-     "confined to specialised cells keeps innate gait · " + (json.loads((HERE / "data/scaling_text.json").read_text())["status"]
+     "9 robot bodies move by AARNN circuits · neurons placed as in biology · a 3D NAO network learns from "
+     "experience · stable, specialised plasticity keeps innate gait · " + (json.loads((HERE / "data/scaling_text.json").read_text())["status"]
                                                 if (HERE / "data/scaling_text.json").exists()
                                                 else "neuron-count scaling study running")),
     (WARN, "MEASURED AT SMALL SCALE",
      "2,101 neurons on 5 nodes · a 1.38 M-neuron layer on 40 shards · 2–7 ms median brain reply per exchange"),
     (CRIT, "NOT YET SHOWN",
-     "Controlled conditioning · bounded growth · held-out task transfer · energy per task · live analog FPAA"),
+     "Replicated conditioning · bounded growth · held-out task transfer · energy per task · live analog FPAA"),
 ]
 dot = 0.7
 row_w = COLW - 2 * st_pad - dot - 0.4
@@ -292,10 +293,9 @@ col_bottom.append(y)
 # ===================================================================== COLUMN 2
 x, w = COLX[1], COLW
 y = section(x, ytop, w, "03", "Neurons where biology puts them")
-y = text(x, y, w, [P("Space matters for timing and growth, so every soma now sits at a biologically equivalent "
-                     "site – for synthetic bodies, in the nervous system of the animal the body resembles [1].",
-                     BODY)])
-lf_h = 13.8
+y = text(x, y, w, [P("Space sets timing and growth, so every soma sits at a biologically equivalent site – for "
+                     "robots, in the animal the body resembles [1].", BODY)])
+lf_h = 12.0
 panels = [("C. elegans · 302 neurons", ROOT / "target/qa/celegans-depth-study-forward-crawl/network_grafted.json",
            "WormAtlas soma map"),
           ("Zebrafish larva · 55 cells", Q / "spatial/showcase/network_zebrafish_layout.json",
@@ -310,32 +310,41 @@ y += lf_h + 0.25
 y = text(x, y, w, [
     B("**Fly** cells sit at their BANC-annotated neuropil [8]; **NAO** gets a human cord with cervical and "
       "lumbar enlargements; wheeled and four-legged robots a mammalian cord; the **crow** an avian one.", BUL_S),
-    B("Placement alone leaves dynamics bit-identical; with morphology and conduction delays on, circuits still "
-      "work (zebrafish 0.69 vs 0.63 body lengths/s; NAO 0.586 vs 0.582 m in 30 s) [1].", BUL_S),
+    B("With morphology and conduction delays on, circuits still work (zebrafish 0.69 vs 0.63 body lengths/s; NAO "
+      "0.586 vs 0.582 m in 30 s) [1].", BUL_S),
 ], gap=SEC_GAP)
 
-y = section(x, y, w, "04", "Plasticity that keeps innate skills")
-lfig_h = 11.0
+NAO_LEARN = Q / "nao_learn/ol14_report.json"
+NAO_CLOSED = Q / "nao_learn/closedloop_summary.json"
+y = section(x, y, w, "04", "A 3D network learns by experience")
+if NAO_LEARN.exists() and NAO_CLOSED.exists():
+    nfig_h = 8.2
+    svg, png = nao_gated_learning_figure(NAO_LEARN, NAO_CLOSED, w, nfig_h)
+    doc.image(x, y, w, nfig_h, "fig_nao_experience", svg, png)
+    y += nfig_h + 0.2
+    y = text(x, y, w, [
+        B("**Taught by its own reflex:** each sonar feeds a sparse group of 20 distance-tuned cells (groups joined "
+          "by 2 synapses), silent onto a turn cell. The innate back-off reflex drives a locus coeruleus cell whose "
+          "release gates plasticity (three-factor rule [25]); after 8 paired approaches the left turn starts at "
+          "1.25 m, not 0.35 m [1].", BUL_S),
+        B("**Controls and closed loop:** exposure without the reflex leaves synapses unchanged (×1.00), frozen stays "
+          "at 0.35 m, point cells (STDP only) did not learn; in MuJoCo the experienced robot spent 0 % of 800 s at a "
+          "wall, the naive one 93 % (one run each) [1].", BUL_S),
+    ], gap=0.25)
+lfig_h = 7.6
 svg, png = learning_figure(Q / "complexity/celegans/spatial_learn.json", Q / "complexity/celegans/spatial_iso.json",
                            Q / "complexity/nao/spatial_learn.json", Q / "complexity/nao/spatial_iso.json", w, lfig_h)
 doc.image(x, y, w, lfig_h, "fig_learning", svg, png)
 y += lfig_h + 0.2
 y = text(x, y, w, [
-    B("**Found and fixed:** STDP was applied to every entry of dense weight matrices, so learning wired up absent "
-      "synapses. In 8 s the worm’s input synapses went from 246 to 12,381 and 88 of 96 inhibitory outputs vanished; "
-      "all 302 cells fired at ≈320 Hz in lock-step. Learning now changes only synapses that exist; making new ones is "
-      "growth’s job [1].", BUL_S),
-    B("**Homeostatic counterweight:** each cell defends its own firing-rate set point [13] by multiplicative scaling "
-      "– excitation down and inhibition up when over-active [10, 11], the compensation Hebbian learning needs [12]. "
-      "Worm with learning: 9.8–9.9 Hz over 40 s and coherence between ganglia 0.07 (before the fix 0.98), as "
-      "without learning (9.5–10.1 Hz; 0.07).", BUL_S),
-    B("**Specialised learning:** in C. elegans, locomotion runs on motor-circuit rhythm generators [16, 17] while "
-      "memory sits at sensory→interneuron synapses [15]. Letting only the amphid interneurons AIA, AIB, AIY and AIZ "
-      "learn [14] keeps the crawl (0.125–0.146 body lengths/s, as without learning); NAO learning only in its sonar "
-      "and decision cells walks 15.7–16.0 body lengths without falling.", BUL_S),
-    B("**Like babies:** newborn stepping already holds two locomotor primitives kept for life, with new ones added "
-      "in toddlers [18]; adults adapt gait through the cerebellum [19]. AARNN now follows this design: an innate "
-      "scaffold plus specialised plastic circuits.", BUL_S),
+    B("**Stable plasticity:** only existing synapses learn (dense STDP had wired absent ones: worm inputs 246 → "
+      "12,381 in 8 s); each cell defends its own rate set point [10, 11, 13], as Hebbian learning needs [12]: worm "
+      "9.8–9.9 Hz, coherence 0.07 (0.98 before) [1].", BUL_S),
+    B("**Specialised learning keeps innate skills:** worm memory sits at sensory→interneuron synapses [15], rhythm "
+      "in motor circuits [16, 17]. With only AIA, AIB, AIY, AIZ plastic [14] the crawl is kept (0.125–0.146 body "
+      "lengths/s); NAO walks 15.7–16.0 body lengths.", BUL_S),
+    B("**Like babies:** newborn stepping holds primitives kept for life, toddlers add new ones [18], adults adapt "
+      "gait via the cerebellum [19].", BUL_S),
 ])
 col_bottom.append(y)
 
@@ -411,8 +420,8 @@ rows = [
      (WARN, "PARTIAL", "Nine bodies locomote closed-loop with designed circuits; no held-out task or matched "
                        "controller yet.")),
     ("Learning and retention", "Controlled (paired vs unpaired) learning; innate skills retained while learning.",
-     (WARN, "PARTIAL", "Specialised learning keeps gait in worm and NAO; no controlled conditioning in any "
-                       "robot yet.")),
+     (WARN, "PARTIAL", "3D NAO learns: turn 0.35 → 1.25 m; exposure alone ×1.00; closed loop at a wall 93 % → 0 %; "
+                       "gait kept.")),
     ("Timing and energy", "p95/p99 sensor-to-actuator latency; whole-system joules per task [6].",
      (CRIT, "OPEN", "Median reply 1.9–6.8 ms per exchange (fly flight p95 3.7 ms); no energy measurement yet.")),
 ]
@@ -453,7 +462,7 @@ gates = [
     ("G1  DEVELOPMENT", "Single-neuron growth", "Gate: bounded growth, stable dynamics, reproducible replay.",
      "growth implemented; sprouting still unbounded in designed circuits; stable learning shown."),
     ("G2  EMBODIMENT", "Connectome + robot", "Gate: unseen tasks, retained adaptation, controlled learning.",
-     "nine bodies move; innate gait kept while learning; no controlled conditioning yet."),
+     "nine bodies move; innate gait kept while learning; NAO learns by experience (open and closed loop, one run)."),
     ("G3  DISTRIBUTED SCALE", "100–400 million neurons",
      "Gate: capacity keeps rising; memory, causal lag and recovery measured.",
      "1.38 M neurons on 40 shards; 2,101 on 5 nodes."),
@@ -512,20 +521,29 @@ refs = [
     "[22] D. J. Willshaw, O. P. Buneman, H. C. Longuet-Higgins. Nature 222, 960–962 (1969). doi:10.1038/222960a0",
     "[23] G. Palm. Biol. Cybern. 36, 19–31 (1980). doi:10.1007/BF00337019",
     "[24] D. Meunier, R. Lambiotte, E. T. Bullmore. Front. Neurosci. 4, 200 (2010). doi:10.3389/fnins.2010.00200",
+    "[25] N. Frémaux, W. Gerstner. Front. Neural Circuits 9, 85 (2016). doi:10.3389/fncir.2015.00085",
 ]
 ref_st = PStyle(size=14.5, leading=1.2, color=INK2, after=0.06)
 qr_w = 6.0
 collab_w = 19.0
 ref_w = CW - collab_w - qr_w - 2 * 0.9
 ncols = 3
-per = (len(refs) + ncols - 1) // ncols
 rcol_w = (ref_w - (ncols - 1) * 0.6) / ncols
 print(f"refs start {y:.2f}")
 text(M, y, ref_w, [P("REFERENCES", LABEL)])
 ry0 = y + 0.9
+# Split the ordered list into three columns of near-equal height (not count).
+ref_h = [block_height([P(r, ref_st)], rcol_w) for r in refs]
+best = None
+for i in range(1, len(refs) - 1):
+    for j in range(i + 1, len(refs)):
+        tallest = max(sum(ref_h[:i]), sum(ref_h[i:j]), sum(ref_h[j:]))
+        if best is None or tallest < best[0]:
+            best = (tallest, i, j)
+_, ci, cj = best
 hs = []
-for c in range(ncols):
-    hs.append(doc.text(M + c * (rcol_w + 0.6), ry0, rcol_w, [P(r, ref_st) for r in refs[c * per:(c + 1) * per]],
+for c, (lo, hi) in enumerate(((0, ci), (ci, cj), (cj, len(refs)))):
+    hs.append(doc.text(M + c * (rcol_w + 0.6), ry0, rcol_w, [P(r, ref_st) for r in refs[lo:hi]],
                        name=f"References {c + 1}"))
 cx2 = M + ref_w + 0.9
 cb = bullet_style(PStyle(size=17, leading=1.25, color=INK), after=0.06)
