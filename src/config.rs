@@ -3105,6 +3105,27 @@ pub struct NetworkConfig {
     /// circuit rhythm generators and learning sits at identified
     /// sensory-interneuron synapses.
     pub aarnn_plastic_cells: PlasticCellMask,
+    /// Learning rate of long-term plasticity for this network (0 = the
+    /// runtime's STDP default). A parameter only: every network runs the
+    /// same plasticity algorithm.
+    pub aarnn_plasticity_eta: f64,
+    /// Teacher-gated (three-factor) plasticity: cells that release a
+    /// neuromodulator. Disabled (the default) = plasticity is not gated.
+    /// Enabled: the marked cells' activity, cleared with
+    /// `aarnn_modulator_tau_ms`, sets a modulator level, and long-term
+    /// plasticity runs only in proportion to it (eta x level /
+    /// `aarnn_modulator_ref_hz`, at most 3x). Co-activity alone then leaves
+    /// synapses unchanged; it is written into them when the teacher - a
+    /// reflex, a punishment or reward signal - activates the modulatory
+    /// cells, as dopaminergic or noradrenergic neurons gate synaptic
+    /// plasticity in conditioning (three-factor learning rules). The
+    /// homeostatic counterweight is not gated.
+    pub aarnn_modulatory_cells: PlasticCellMask,
+    /// Clearance time constant of the released modulator (ms).
+    pub aarnn_modulator_tau_ms: f32,
+    /// Modulatory-cell release rate (Hz, mean over the marked cells) that
+    /// gives the full learning rate.
+    pub aarnn_modulator_ref_hz: f32,
     /// Legacy automatic output gain control: whenever the output source layer
     /// spikes, rescale every output current so the largest reaches a profile
     /// peak (up to 512x). It erases relative motor drive and amplifies
@@ -3303,6 +3324,10 @@ impl Default for NetworkConfig {
             aarnn_rate_homeostasis_target_hz: 0.0,
             aarnn_rate_homeostasis_warmup_ms: 2000.0,
             aarnn_plastic_cells: PlasticCellMask::default(),
+            aarnn_plasticity_eta: 0.0,
+            aarnn_modulatory_cells: PlasticCellMask::default(),
+            aarnn_modulator_tau_ms: 1000.0,
+            aarnn_modulator_ref_hz: 10.0,
             aarnn_output_gain_floor_enabled: true,
             aarnn_bio: AarnnBioParams::default(),
             spike_io: SpikeIoConfig::default(),

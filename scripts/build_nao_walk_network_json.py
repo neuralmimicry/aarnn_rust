@@ -71,7 +71,10 @@ def add_sonar_avoidance(c, args, dcells):
     s_on = 1.0 - args.onset_m / SONAR_REACH_M
     _, hi_knee = bistable_band(args.rs_plateau)
     w_prs = hi_knee / steady_release(6.0)
+    learn = getattr(args, "learn_groups", 0) > 0
     for name, side in (("Sonar/Left", "l"), ("Sonar/Right", "r")):
+        if learn:
+            break   # the far-sonar turn is learned, not innate (see below)
         relay, r0, slope = add_sensor_relay(c, GAIN, name, s_on, tau_ms=30.0)
         # P reaches 6 mV/ms when the reading is 0.1 (0.255 m) nearer than onset.
         k = 6.0 / max(slope * 0.1, 1e-3)
@@ -80,6 +83,49 @@ def add_sonar_avoidance(c, args, dcells):
         cell = c.cell(f"P_sonar_{side}", tname, "sensory")
         c.connect(relay, cell, drive_weight(k, GAIN))
         c.connect(cell, rs[side], drive_weight(w_prs, GAIN))
+    if learn:
+        # Learning by experience (distributed adaptive control): no innate
+        # far-sonar turn. A learning-turn cell LT per side drives that
+        # side's turn cell RS exactly as the innate P cell did; its teaching
+        # input is the innate near reflex (N cells, below), its candidate
+        # input a group of distance-tuned sonar cells whose synapses onto LT
+        # start silent and are the only plastic synapses (plastic-cell mask
+        # on LT). Each group has `learn_groups` cells (the group-size
+        # threshold), sparse inside (each pair with probability
+        # `learn_within_p`), and the two groups form one collection joined
+        # by a 2-synapse attachment.
+        import random
+        rnd = random.Random(7)
+        c.type("Learn:turn", **graded(tau_ms=20.0), **common)
+        if args.learn_teacher:
+            # Teacher-gated learning: the innate near reflex (N cells, below)
+            # also drives a noradrenergic locus coeruleus cell, the network's
+            # modulatory cell (aarnn_modulatory_cells), whose release gates
+            # plasticity - aversive events gate synaptic plasticity through
+            # neuromodulators, so mere exposure to the sonar does not learn.
+            c.type("Modulator:LC", **graded(tau_ms=50.0), **common)
+            hb["lc"] = c.cell("LC", "Modulator:LC", "hindbrain")
+        hb["lt"] = {}
+        hb["cs"] = {}
+        g = args.learn_groups
+        for name, side in (("Sonar/Left", "l"), ("Sonar/Right", "r")):
+            lt = c.cell(f"LT_{side}", "Learn:turn", "hindbrain")
+            c.connect(lt, rs[side], drive_weight(w_prs, GAIN))
+            hb["lt"][side] = lt
+            cells = []
+            for k in range(g):
+                d = args.learn_near_m + (args.learn_far_m - args.learn_near_m) * k / max(1, g - 1)
+                cell, _, _ = add_sensor_relay(c, GAIN, name, 1.0 - d / SONAR_REACH_M, tau_ms=30.0,
+                                              name=f"CS_{side}_{k:02d}")
+                c.connect(cell, lt, drive_weight(args.learn_w0, GAIN))
+                cells.append(cell)
+            for a in cells:
+                for b in cells:
+                    if a != b and rnd.random() < args.learn_within_p:
+                        c.connect(a, b, drive_weight(args.learn_within_mv, GAIN))
+            hb["cs"][side] = cells
+        for (a, b) in ((hb["cs"]["l"][0], hb["cs"]["r"][0]), (hb["cs"]["r"][-1], hb["cs"]["l"][-1])):
+            c.connect(a, b, drive_weight(args.learn_within_mv, GAIN))
     if args.yaw_turn > 0:
         # Hip yaw-pitch steering (NAO turns with this one motor): during a
         # turn it alternates with the gait phase (programmed: -0.3 rad in A,
@@ -115,6 +161,11 @@ def add_sonar_avoidance(c, args, dcells):
             near = c.cell(f"N_sonar_{side}", f"Sense:sonar_near:{side}", "sensory")
             c.connect(relay, near, drive_weight(k, GAIN))
             c.connect(near, back, drive_weight(args.back_kick, GAIN))
+            if learn:
+                # Innate teaching input: the near reflex turns away too.
+                c.connect(near, hb["lt"][side], drive_weight(args.learn_teach_mv, GAIN))
+                if "lc" in hb:
+                    c.connect(near, hb["lc"], drive_weight(args.learn_teach_mv, GAIN))
         # BACK decides; a slow reversal cell REV (--rev-tau, no plateau)
         # carries the gating, so the stride passes through zero before it
         # reverses and returns the same way: switching in one step threw a
@@ -132,12 +183,37 @@ def add_sonar_avoidance(c, args, dcells):
                 c.connect(rev, dcells[side, ph], drive_weight(-24.0, GAIN))
                 c.connect(x, dcells[side, ph], drive_weight(args.back_drive, GAIN))
         hb["back"] = back
+        hb["rev"] = rev
     # RS_l turns right: shorten the right stride (inner), slightly the left.
     for rs_side, inner, outer in (("l", "R", "L"), ("r", "L", "R")):
         for ph in "AB":
             c.connect(rs[rs_side], dcells[inner, ph], drive_weight(-args.turn, GAIN))
             if args.turn_outer > 0:
                 c.connect(rs[rs_side], dcells[outer, ph], drive_weight(-args.turn_outer, GAIN))
+    if args.backup > 0 and args.reverse_steer > 0:
+        # Steering while reversing. Walking backwards, a shorter inner stride
+        # turns the body the other way, so every back-off bout undid the turn
+        # the forward steps had made and a head-on wall trapped the body
+        # (MuJoCo, 23 Nov: 460-750 s rocking at 0.3-0.4 m). Two fixes failed:
+        # mirroring the turn during the bout tipped the body over backwards
+        # (76-101 s, 3 of 3 runs), and cancelling the turn command's stride
+        # inhibition doubled the reverse speed (-12 vs -5.5 cm/s) and tipped it
+        # over in the first bout - that inhibition also brakes the reversal
+        # the back-off drive was tuned with. So the bout keeps the brake and
+        # loses only the asymmetry: an AND cell per side (turn command x
+        # reversal level, the Y cells' design) gives the outer stride the
+        # inner stride's inhibition while reversing. The body backs slowly and
+        # straight; forward steps turn, backward steps no longer undo it.
+        # Threshold above either input alone (RS, REV each <= ~0.9 release x 12).
+        c.type("Turn:rev_and", **graded(tau_ms=10.0, tonic=-args.rev_and_threshold), **common)
+        q_high = steady_release(12.0 * 0.8 + 12.0 * 0.8 - args.rev_and_threshold)
+        extra = (args.turn - args.turn_outer) * 0.8 / max(q_high, 1e-3)
+        for rs_side, inner, outer in (("l", "R", "L"), ("r", "L", "R")):
+            q = c.cell(f"Q_{rs_side}", "Turn:rev_and", "hindbrain")
+            c.connect(rs[rs_side], q, drive_weight(12.0, GAIN))
+            c.connect(hb["rev"], q, drive_weight(12.0, GAIN))
+            for ph in "AB":
+                c.connect(q, dcells[outer, ph], drive_weight(-extra, GAIN))
     return hb
 
 
@@ -262,8 +338,21 @@ def main():
     ap.add_argument("--rev-tau", type=float, default=600.0, help="stride-reversal level time constant (ms): smooth forward<->backward")
     ap.add_argument("--back-kick", type=float, default=4.0, help="near-proximity drive onto BACK (mV/ms)")
     ap.add_argument("--back-drive", type=float, default=32.0, help="AND cell drive onto the stride cells while backing (41: faster corner escape but fell head-on)")
+    ap.add_argument("--reverse-steer", type=int, default=0,
+                    help="1: back off straight and slow (outer stride gets the inner stride's turn inhibition while reversing) so backing no longer undoes the turn")
+    ap.add_argument("--rev-and-threshold", type=float, default=11.5, help="reverse-steer AND cell threshold (mV/ms)")
     ap.add_argument("--yaw-turn", type=float, default=0.0, help="hip yaw-pitch turn alternation (rad); 0 = stride steering only")
     ap.add_argument("--and-threshold", type=float, default=13.0)
+    ap.add_argument("--learn-groups", type=int, default=0,
+                    help="learning by experience: cells per distance-tuned sonar group (0 = innate far-sonar turn)")
+    ap.add_argument("--learn-near-m", type=float, default=0.45, help="nearest tuned distance of a group (m)")
+    ap.add_argument("--learn-far-m", type=float, default=1.5, help="farthest tuned distance of a group (m)")
+    ap.add_argument("--learn-w0", type=float, default=0.05, help="initial (silent) sonar-group -> LT drive (mV/ms)")
+    ap.add_argument("--learn-teach-mv", type=float, default=12.0, help="innate near reflex -> LT drive (mV/ms)")
+    ap.add_argument("--learn-teacher", type=int, default=1,
+                    help="1: the near reflex drives a modulatory locus coeruleus cell LC (teacher-gated learning)")
+    ap.add_argument("--learn-within-p", type=float, default=0.5, help="within-group connection probability")
+    ap.add_argument("--learn-within-mv", type=float, default=0.3, help="within-group synapse drive (mV/ms)")
     ap.add_argument("--solve", action="store_true", help="solve each pair against the idle cell's residual")
     ap.add_argument("--trim", type=float, default=0.6, help="stride trim: right x (1+trim), left x (1-trim); 0.6 walks ~straight (0.5: -60 deg, 0.7: +38 deg in 40 s)")
     args = ap.parse_args()

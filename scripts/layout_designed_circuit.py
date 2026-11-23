@@ -161,6 +161,11 @@ def nao(name: str, kind: str):
         m = re.match(r"RS_([lr])$", name)
         if m:
             return (lr(m[1], 0.02), 0.64, -0.01), "medulla_reticulospinal"
+        if name == "LC":   # noradrenergic modulatory cell (teacher-gated plasticity)
+            return (0.006, 0.675, 0.02), "locus_coeruleus"
+        m = re.match(r"Q_([lr])$", name)
+        if m:   # steering during reversal (turn command x reversal level)
+            return (lr(m[1], 0.012), 0.65, -0.012), "medullary_reversal"
         m = re.match(r"ARTR(_A)?_([lr])$", name)
         if m:
             return (lr(m[2], 0.03 + (0.01 if m[1] else 0.0)), 0.66, 0.01), "pontine_turn_oscillator"
@@ -172,6 +177,14 @@ def nao(name: str, kind: str):
         m = re.match(r"D_([LR])_([AB])$", name)
         if m:
             return (lr(m[1], 0.03), 0.22 - (0.01 if m[2] == "B" else 0.0), 0.006), "lumbar_CPG_delay"
+        m = re.match(r"CS_([lr])_(\d+)$", name)
+        if m:   # learned sonar distance map: inferior colliculus, one group per side
+            k = int(m[2])
+            return (lr(m[1], 0.032 + 0.0015 * (k % 5)), 0.755 - 0.002 * (k // 5), 0.015 + 0.002 * (k % 3)), \
+                "inferior_colliculus_distance_map"
+        m = re.match(r"LT_([lr])$", name)
+        if m:   # learned orienting turn: superior colliculus
+            return (lr(m[1], 0.03), 0.78, 0.035), "superior_colliculus_orienting"
         m = re.match(r"(R|P|N|R_near)_(?:Sonar/)?(?:sonar_)?(Left|Right|l|r)$", name)
         if m:
             nucleus = {"R": "cochlear_nucleus", "R_near": "cochlear_nucleus", "P": "inferior_colliculus",

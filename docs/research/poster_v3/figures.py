@@ -247,7 +247,8 @@ def learning_figure(worm_new: Path, worm_old: Path, nao_new: Path, nao_old: Path
               ("NAO path in 30 s (body lengths)", ["T0/S0", "T0/S1"], ["point\ncells", "3D\nanatomy"], nn, no,
                "path_length_L")]
     for p, (title, levels, labels, tn, to, key) in enumerate(panels):
-        ax = fig.add_axes([0.08 + p * 0.5, 0.34, 0.40, 0.54])
+        bottom = 3.2 / h_cm   # two-line tick labels + two-row legend, in cm
+        ax = fig.add_axes([0.08 + p * 0.5, bottom, 0.40, 1.0 - bottom - 0.95 / h_cm])
         bw = 0.2
         for si, (lab, suf, col, _, src) in enumerate(series):
             xs, ys, fell = [], [], []
@@ -534,4 +535,116 @@ def whole_and_storage_figure(one_by_one: Path, report_path: Path, w_cm: float, h
     bx.set_title("Memories grow faster than neurons", fontsize=fs - 1, color=INK, loc="left")
     for s_ in ("top", "right"):
         bx.spines[s_].set_visible(False)
+    return _export(fig)
+
+
+def nao_experience_figure(report_path: Path, w_cm: float, h_cm: float):
+    """NAO learning by experience, open loop (scripts/qa/nao_learn_report.py
+    JSON): scripted wall approaches, alternating sides. Left: distance at
+    which the learning-turn cell switches on (same absolute threshold for
+    every condition). Right: its anticipatory activity 0.6-1.2 m from the
+    wall, beyond the innate reflex (< 0.4 m)."""
+    rep = json.loads(Path(report_path).read_text())
+    conds = rep["conditions"]
+    style = {"paired": (TEAL, "o", "reflex paired with approach"),
+             "csonly": (INDIGO, "s", "approach only"),
+             "frozen": (ORANGE, "^", "frozen")}
+    fig = plt.figure(figsize=(w_cm * CM, h_cm * CM))
+    fs = 18
+    axes = [fig.add_axes([0.075, 0.30, 0.40, 0.58]), fig.add_axes([0.585, 0.30, 0.40, 0.58])]
+    n_eps = 1
+    for key, c in conds.items():
+        k = next((s for s in style if s in key), None)
+        if k is None:
+            continue
+        col, mk, lab = style[k]
+        eps = c["episodes"]
+        n_eps = max(n_eps, len(eps))
+        x = [e["episode"] + 1 for e in eps]
+        on = [e["onset_m"] if e["onset_m"] is not None else float("nan") for e in eps]
+        if k != "csonly":
+            axes[0].plot(x, on, color=col, marker=mk, ms=6, lw=2, label=lab, zorder=3)
+        axes[1].plot(x, [e["lt_far_hz"] for e in eps], color=col, marker=mk, ms=6, lw=2, label=lab, zorder=3)
+    axes[0].axhline(0.4, color=INK2, lw=1, ls="--", zorder=1)
+    axes[0].text(n_eps, 0.45, "innate reflex < 0.4 m", fontsize=fs - 5, color=INK2, va="bottom", ha="right")
+    axes[0].text(n_eps, 0.04, "approach only: no turn", fontsize=fs - 5, color=INDIGO, va="bottom", ha="right")
+    axes[0].set_ylim(0, 1.5)
+    axes[0].set_yticks([0, 0.5, 1.0, 1.5])
+    axes[1].set_yticks([0, 5, 10, 15])
+    axes[0].set_title("Turn onset distance (m)", fontsize=fs, color=INK, loc="left", pad=8)
+    axes[1].set_title("Turn cell, 0.6–1.2 m out (Hz)", fontsize=fs, color=INK, loc="left", pad=8)
+    for ax in axes:
+        ax.set_xticks([1] + list(range(4, n_eps + 1, 4)))
+        ax.set_xlim(0.5, n_eps + 0.5)
+        ax.tick_params(labelsize=fs - 3)
+        ax.grid(axis="y", color=RULE, lw=0.7, zorder=0)
+        for s_ in ("top", "right"):
+            ax.spines[s_].set_visible(False)
+    fig.text(0.5, 0.155, "wall approach (alternating sides)", ha="center", fontsize=fs - 3, color=INK2)
+    h, l = axes[1].get_legend_handles_labels()
+    fig.legend(h, l, loc="lower center", ncol=3, fontsize=fs - 4, frameon=False, bbox_to_anchor=(0.5, -0.02),
+               columnspacing=1.4, handlelength=1.6)
+    return _export(fig)
+
+
+def nao_gated_learning_figure(report_path: Path, closed_loop_path: Path, w_cm: float, h_cm: float):
+    """NAO learning by experience with teacher-gated plasticity.
+    Left (open loop, scripts/qa/nao_learn_report.py JSON): distance at which
+    the learning-turn cell switches on, per scripted wall approach on each
+    side, for reflex-paired runs (left and right sides apart - the right
+    reflex, hence its teacher, is weaker) and frozen runs; approach-only
+    runs never turn. Right (closed loop, closedloop_summary.json): share of
+    800 s in the 3 m MuJoCo room spent within 0.4 m of a wall."""
+    rep = json.loads(Path(report_path).read_text())["conditions"]
+    cl = json.loads(Path(closed_loop_path).read_text())
+    fig = plt.figure(figsize=(w_cm * CM, h_cm * CM))
+    fs = 18
+    ax = fig.add_axes([0.075, 0.30, 0.43, 0.58])
+    n = 1
+    series = [("paired", "l", TEAL, "o", "-", "reflex paired: left"),
+              ("paired", "r", TEAL, "o", "--", "reflex paired: right"),
+              ("frozen", None, ORANGE, "^", "-", "frozen")]
+    for key, side, col, mk, ls, lab in series:
+        eps = next(c for k, c in rep.items() if key in k)["episodes"]
+        if side:
+            eps = [e for e in eps if e["side"] == side]
+        else:
+            eps = [e for e in eps if e["side"] == "l"]
+        x = list(range(1, len(eps) + 1))
+        n = max(n, len(x))
+        y = [e["onset_m"] if e["onset_m"] is not None else float("nan") for e in eps]
+        ax.plot(x, y, color=col, marker=mk, ms=7, lw=2, ls=ls, label=lab, zorder=3,
+                mfc=col if side != "r" else "white")
+    ax.axhline(0.4, color=INK2, lw=1, ls=":", zorder=1)
+    ax.text(1, 0.45, "innate reflex < 0.4 m", fontsize=fs - 5, color=INK2, va="bottom", ha="left")
+    ax.text(n, 0.04, "approach only: no turn, weights x1.00", fontsize=fs - 5, color=INDIGO, va="bottom",
+            ha="right")
+    ax.set_ylim(0, 1.5)
+    ax.set_yticks([0, 0.5, 1.0, 1.5])
+    ax.set_xticks(range(1, n + 1))
+    ax.set_xlim(0.6, n + 0.4)
+    ax.set_xlabel("wall approach on that side (open loop)", fontsize=fs - 3)
+    ax.set_title("Turn onset distance (m)", fontsize=fs, color=INK, loc="left", pad=8)
+    h, l = ax.get_legend_handles_labels()
+    fig.legend(h, l, loc="lower left", ncol=3, fontsize=fs - 5, frameon=False, bbox_to_anchor=(0.0, -0.02),
+               columnspacing=1.0, handlelength=1.8)
+    bx = fig.add_axes([0.62, 0.30, 0.36, 0.58])
+    bars = [("naive,\nfrozen", "naive, frozen", ORANGE), ("naive,\nlearning", "naive, learning", "#8A9BA8"),
+            ("after 16\napproaches", "experienced, 0.45-1.5 m map", TEAL)]
+    vals = [cl[k]["in_reflex_pct"] for _, k, _ in bars]
+    bx.bar(range(3), vals, color=[c for *_, c in bars], width=0.62, zorder=2)
+    for i, v in enumerate(vals):
+        bx.text(i, v + 2, f"{v:.0f} %", ha="center", va="bottom", fontsize=fs - 3, color=INK)
+    bx.set_xticks(range(3))
+    bx.set_xticklabels([b for b, *_ in bars], fontsize=fs - 5)
+    bx.set_ylim(0, 110)
+    bx.set_yticks([0, 50, 100])
+    bx.set_title("Time at a wall, 800 s (%)", fontsize=fs, color=INK, loc="left", pad=8)
+    bx.text(1, -0.42, "closed loop, 3 m MuJoCo room", transform=bx.get_xaxis_transform(), ha="center",
+            fontsize=fs - 5, color=INK2)
+    for a_ in (ax, bx):
+        a_.tick_params(labelsize=fs - 3)
+        a_.grid(axis="y", color=RULE, lw=0.7, zorder=0)
+        for s_ in ("top", "right"):
+            a_.spines[s_].set_visible(False)
     return _export(fig)

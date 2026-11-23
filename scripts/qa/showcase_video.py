@@ -63,7 +63,10 @@ def ensure_xvfb(display=":97"):
 def capture_ui(trace, network, config, frames_dir, display, timeout_s, extra_env=None):
     shutil.rmtree(frames_dir, ignore_errors=True)
     frames_dir.mkdir(parents=True)
-    env = dict(os.environ, DISPLAY=display, NM_UI_REPLAY_INPUT=str(trace), NM_UI_REPLAY_CAPTURE_DIR=str(frames_dir),
+    # OpenGL (Mesa llvmpipe on Xvfb): the default wgpu renderer took the NVIDIA
+    # GPU through Vulkan and locked it (host crash, 23 Nov 2026).
+    env = dict(os.environ, NM_UI_RENDERER="glow", DISPLAY=display, NM_UI_REPLAY_INPUT=str(trace),
+               NM_UI_REPLAY_CAPTURE_DIR=str(frames_dir),
                NM_UI_REPLAY_EVERY="10", NM_DISABLE_OPENCL="1", RAYON_NUM_THREADS="2", NM_AUTO_AARNN_DEPTH="0")
     env.pop("WAYLAND_DISPLAY", None)
     env.update(extra_env or {})

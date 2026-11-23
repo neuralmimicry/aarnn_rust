@@ -40,6 +40,15 @@ struct Args {
     /// spike-equivalent rate) and output activation, one JSON line per window.
     series: Option<PathBuf>,
     series_ms: usize,
+    /// Hidden cells whose incoming recurrent synapses (nonzero weights) are
+    /// added to every series line, to follow learning over time.
+    watch_rows: Vec<String>,
+    /// Write every hidden cell's incoming morphology routes (presynaptic
+    /// name, weight, delay steps, attenuation) after the run.
+    route_report: Option<PathBuf>,
+    /// Write the network (learned weights, runtime state, frozen
+    /// morphology) after the run, for a later closed-loop test.
+    export_after: Option<PathBuf>,
 }
 
 fn parse() -> Result<Args, String> {
@@ -55,6 +64,9 @@ fn parse() -> Result<Args, String> {
         export_frozen: None,
         series: None,
         series_ms: 20,
+        watch_rows: Vec::new(),
+        route_report: None,
+        export_after: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(k) = it.next() {
@@ -69,6 +81,9 @@ fn parse() -> Result<Args, String> {
             "--no-raster" => a.raster = false,
             "--series" => a.series = Some(PathBuf::from(v()?)),
             "--series-ms" => a.series_ms = v()?.parse().map_err(|_| "series-ms")?,
+            "--route-report" => a.route_report = Some(PathBuf::from(v()?)),
+            "--export-after" => a.export_after = Some(PathBuf::from(v()?)),
+            "--watch-rows" => a.watch_rows = v()?.split(',').map(str::to_string).collect(),
             // Write the imported network with its built morphology frozen in
             // runtime state, so later loads (all depth variants) share one
             // anatomy instead of regrowing dendrites with thread-local RNGs.
@@ -243,6 +258,24 @@ fn main() -> Result<(), String> {
         )),
         None => None,
     };
+    let hidden_names: Vec<String> = labels["hidden_nodes"]
+        .as_array()
+        .map(|v| {
+            v.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let watch: Vec<(String, usize)> = a
+        .watch_rows
+        .iter()
+        .filter_map(|n| {
+            hidden_names
+                .iter()
+                .position(|h| h == n)
+                .map(|i| (n.clone(), i))
+        })
+        .collect();
     let mut win_h = vec![0.0f64; h_count];
     let mut win_o = vec![0.0f64; o_count];
     // Output spikes per series window (spiking outputs report no graded
@@ -349,12 +382,29 @@ fn main() -> Result<(), String> {
                 && win_steps >= a.series_ms.max(1)
             {
                 let n = win_steps as f64;
+                let mut watched = serde_json::Map::new();
+                if let Some(m) = runner.w_hh_rec.first() {
+                    for (name, row) in &watch {
+                        let mut inc = serde_json::Map::new();
+                        for (col, &wv) in m.row(*row).iter().enumerate() {
+                            if wv != 0.0 {
+                                let pre = hidden_names
+                                    .get(col)
+                                    .cloned()
+                                    .unwrap_or_else(|| col.to_string());
+                                inc.insert(pre, serde_json::json!((wv * 1.0e6).round() / 1.0e6));
+                            }
+                        }
+                        watched.insert(name.clone(), serde_json::Value::Object(inc));
+                    }
+                }
                 let line = serde_json::json!({
                     "t_ms": tick + 1,
                     "hidden_hz": win_h.iter().map(|x| (x / n * 100.0).round() / 100.0).collect::<Vec<_>>(),
                     "output_activation": win_o.iter().map(|x| (x / n * 1000.0).round() / 1000.0).collect::<Vec<_>>(),
                     "output_spikes": win_os.clone(),
                     "hidden_v": win_v.iter().map(|x| (x / n * 100.0).round() / 100.0).collect::<Vec<_>>(),
+                    "weights": watched,
                 });
                 writeln!(w, "{line}").map_err(|e| e.to_string())?;
                 win_h.fill(0.0);
@@ -444,6 +494,61 @@ fn main() -> Result<(), String> {
         "raster_hidden": raster_h,
         "raster_output": raster_o,
     });
+    if let Some(path) = &a.export_after {
+        let mut learned: serde_json::Value =
+            serde_json::from_str(&runner.export_network_json().map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        learned["connectome_labels"] = labels.clone();
+        learned["connectome_labels"]["experience"] = serde_json::json!({
+            "source": a.network, "input": a.input, "ms": a.ms, "seed": a.seed,
+            "note": "network after the probe run: weights learned during it, runtime state and morphology kept"
+        });
+        std::fs::write(path, learned.to_string()).map_err(|e| e.to_string())?;
+    }
+    if let Some(path) = &a.route_report {
+        let sensory_names: Vec<String> = labels["sensory_nodes"]
+            .as_array()
+            .map(|v| {
+                v.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut cells = serde_json::Map::new();
+        for (j, name) in hidden_names.iter().enumerate() {
+            let mut routes = Vec::new();
+            for &(i, si) in runner.recv_in.get(j).map(|v| v.as_slice()).unwrap_or(&[]) {
+                let (steps, atten) = runner.syn_delay_and_atten(si);
+                let w = runner.w_in.get((j, i)).copied().unwrap_or(0.0);
+                routes.push(
+                    serde_json::json!({"pre": sensory_names.get(i).cloned().unwrap_or_default(),
+                    "kind": "sensory", "w": w, "steps": steps, "atten": atten}),
+                );
+            }
+            for &(i, si) in runner
+                .recv_rec
+                .first()
+                .and_then(|v| v.get(j))
+                .map(|v| v.as_slice())
+                .unwrap_or(&[])
+            {
+                let (steps, atten) = runner.syn_delay_and_atten(si);
+                let w = runner
+                    .w_hh_rec
+                    .first()
+                    .and_then(|m| m.get((j, i)))
+                    .copied()
+                    .unwrap_or(0.0);
+                routes.push(
+                    serde_json::json!({"pre": hidden_names.get(i).cloned().unwrap_or_default(),
+                    "kind": "recurrent", "w": w, "steps": steps, "atten": atten}),
+                );
+            }
+            cells.insert(name.clone(), serde_json::Value::Array(routes));
+        }
+        std::fs::write(path, serde_json::Value::Object(cells).to_string())
+            .map_err(|e| e.to_string())?;
+    }
     let mut file = std::fs::File::create(&a.out).map_err(|e| e.to_string())?;
     writeln!(file, "{out}").map_err(|e| e.to_string())?;
     println!(
