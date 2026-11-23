@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! # Simulation Runner and Orchestrator
 //!
 //! The `Runner` is the central orchestrator for the interactive and real-time
@@ -36,8 +40,9 @@ use crate::aarnn::dynamics::{
 #[cfg(feature = "growth3d")]
 use crate::aarnn::plasticity::enforce_dale_matrix_cols_with_mask as dale_enforce_cols_with_mask;
 use crate::aarnn::plasticity::{
-    PlasticityRule, ShortTermPlasticityParams, WeightProposal,
+    PlasticityRule, RateHomeostat, ShortTermPlasticityParams, WeightProposal,
     apply_synaptic_scaling_matrix_rows as scale_synaptic_rows, apply_weight_delta,
+    homeostatic_scale_rows,
     commit_weight_proposals, enforce_dale_matrix_cols as dale_enforce_cols,
     is_inhibitory_presyn as inferred_inhibitory_presyn, should_release as should_release_ref,
     stp_update_slice as stp_update_slice_ref, triplet_eta_scale, weight_delta,
@@ -71,7 +76,9 @@ use crate::hierarchical_sharding::{
 #[cfg(all(feature = "morpho", feature = "growth3d"))]
 use crate::morphology::{EvolutionResult, Morphology};
 use crate::network::{BuiltNetwork, build_network};
-use crate::neuron_kernels::{izh_transition, lif_transition};
+use crate::neuron_kernels::{
+    GradedParams, graded_release, graded_transition, izh_transition, lif_transition,
+};
 use crate::sim::{Learning, NeuronModel};
 #[cfg(feature = "growth3d")]
 use crate::topology::{EarlyCell3D, EarlyCellPhase, Node3D, Topology3D};
@@ -131,6 +138,11 @@ fn nd_from_mat_owned(mut matrix: Matrix2) -> anyhow::Result<Array2<f64>> {
         .rows
         .checked_mul(matrix.cols)
         .ok_or_else(|| anyhow::anyhow!("snapshot matrix dimensions overflow"))?;
+    if matrix.data.is_empty() {
+        // Shape-only matrix (a neuron-shard skeleton): zero pages are mapped
+        // lazily, so an untouched matrix costs no resident memory.
+        return Ok(Array2::zeros((matrix.rows, matrix.cols)));
+    }
     matrix.data.resize(expected, 0.0);
     matrix.data.truncate(expected);
     Array2::from_shape_vec((matrix.rows, matrix.cols), matrix.data)
@@ -303,6 +315,39 @@ fn vec_from_history_frames(history: &VecDeque<Array1<i8>>) -> Vec<Vec<i8>> {
     history.iter().map(vec_from_arr1_i8).collect()
 }
 
+/// Long-term plasticity proposals for one weight matrix (rows = target
+/// cells). Only existing synapses (non-zero) onto cells that learn get a
+/// proposal: absent synapses cannot be created by plasticity and innate
+/// cells keep their weights. `terms(row, col)` returns
+/// `(pre, post, pre_trace, post_trace)`.
+fn matrix_plasticity_proposals(
+    mat: &Array2<f64>,
+    row_learns: impl Fn(usize) -> bool,
+    terms: impl Fn(usize, usize) -> (f64, f64, f64, f64),
+    rule: PlasticityRule,
+    eta: f64,
+) -> Vec<WeightProposal> {
+    let mut proposals = Vec::new();
+    for (row, weights) in mat.axis_iter(ndarray::Axis(0)).enumerate() {
+        if !row_learns(row) {
+            continue;
+        }
+        for (col, &current) in weights.iter().enumerate() {
+            if current == 0.0 {
+                continue;
+            }
+            let (pre, post, pre_trace, post_trace) = terms(row, col);
+            proposals.push(WeightProposal::new(
+                row,
+                col,
+                current,
+                weight_delta(rule, eta, pre, post, pre_trace, post_trace, current),
+            ));
+        }
+    }
+    proposals
+}
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(default)]
 pub struct SnapshotRuntimeState {
@@ -324,6 +369,9 @@ pub struct SnapshotRuntimeState {
     pub thr_offset_o: Vec<f64>,
     pub rate_ema_h: Vec<Vec<f64>>,
     pub rate_ema_o: Vec<f64>,
+    /// Homeostatic counterweight state (rates, set points, warm-up).
+    #[serde(default)]
+    pub rate_homeostat: Option<RateHomeostat>,
     pub stp_u_s: Vec<f64>,
     pub stp_x_s: Vec<f64>,
     pub stp_u_h: Vec<Vec<f64>>,
@@ -458,6 +506,9 @@ pub struct Snapshot {
     pub w_hh_bwd: Vec<Matrix2>,
     pub w_hh_rec: Vec<Matrix2>,
     pub w_out: Matrix2,
+    /// Connectome electrical synapses per hidden layer: symmetric
+    /// conductances (current units per mV); empty when not imported.
+    pub w_gap: Vec<Matrix2>,
     // Presence tracking
     pub p_in: Option<Matrix2U32>,
     pub p_fwd: Option<Vec<Matrix2U32>>,
@@ -492,6 +543,7 @@ impl Default for Snapshot {
             w_hh_fwd: vec![],
             w_hh_bwd: vec![],
             w_hh_rec: vec![],
+            w_gap: vec![],
             w_out: Matrix2 {
                 rows: 0,
                 cols: 0,
@@ -1400,10 +1452,35 @@ pub struct Runner {
     pub thr_offset_o: Array1<f64>,
     pub rate_ema_h: Vec<Array1<f64>>,
     pub rate_ema_o: Array1<f64>,
+    /// Homeostatic counterweight to long-term plasticity (per-cell firing
+    /// rates and set points); see `apply_rate_homeostasis`.
+    pub rate_homeostat: RateHomeostat,
     pub stp_u_s: Array1<f64>,
     pub stp_x_s: Array1<f64>,
     pub stp_u_h: Vec<Array1<f64>>,
     pub stp_x_h: Vec<Array1<f64>>,
+    /// STP release fraction of every sensory spike frame, aligned with
+    /// `spk_hist_s` (index 0 = newest frame). A spike read from the delay
+    /// history must use the release computed when it was emitted.
+    stp_rel_hist_s: VecDeque<Vec<f64>>,
+    /// Connectome electrical synapses (see `Snapshot::w_gap`).
+    pub w_gap: Vec<Array2<f64>>,
+    /// Sparse view of `w_gap`: `[layer][post] -> (pre, conductance)`.
+    gap_routes: Vec<Vec<Vec<(usize, f64)>>>,
+    /// Sigma-delta phase of the pulse-density code of graded output cells.
+    graded_phase_o: Vec<f64>,
+    /// Per hidden layer, STP release fraction aligned with `spk_hist_h`.
+    stp_rel_hist_h: Vec<VecDeque<Vec<f64>>>,
+    /// Layer-shard boundary state staged for hidden layers owned by another
+    /// shard (see `stage_remote_layer`); empty unless `layer_range` is set.
+    remote_hidden: Vec<RemoteLayerSlot>,
+    /// Output-stage spikes staged from the shard that owns the output stage.
+    remote_output: RemoteLayerSlot,
+    /// Neuron-range shard membership (see `NeuronShard`); `None` computes
+    /// every cell locally.
+    pub neuron_shard: Option<NeuronShard>,
+    /// Partition-stored shard: weight rows held (see `ShardRowLayout`).
+    pub shard_rows: Option<ShardRowLayout>,
     /// Dendritic calcium-like integration state per hidden neuron.
     pub dend_ca_h: Vec<Array1<f64>>,
     /// Dendritic plateau state per hidden neuron.
@@ -1497,6 +1574,10 @@ pub struct Runner {
     syn_ax_steps: Vec<usize>,
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     syn_den_steps: Vec<usize>,
+    /// Largest quantised route delay (steps) after the last route rebuild.
+    route_delay_steps_max: usize,
+    /// Depth the route delays were quantised for.
+    route_steps_depth: Option<usize>,
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
     bouton_latency_steps: usize,
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -2114,6 +2195,94 @@ impl Runner {
         matches!(self.neuron_model, NeuronModel::Izh(_) | NeuronModel::Aarnn)
     }
 
+    /// Izhikevich parameters of one AARNN neuron from its per-type biology.
+    ///
+    /// Layers >= 1 already honoured `bio_params.izh_preset`; layer 0 and the
+    /// output population used the network-wide preset, so a single-layer
+    /// connectome ran every typed cell as the global preset. An explicit
+    /// `NeuronModel::Izh(p)` keeps its one parameter set.
+    #[inline]
+    fn neuron_izh_params(
+        &self,
+        bio: Option<&AarnnBioParams>,
+        fallback: IzhikevichParams,
+    ) -> IzhikevichParams {
+        match (self.neuron_model, bio) {
+            (NeuronModel::Aarnn, Some(b)) => {
+                IzhikevichParams::from_preset(&b.izh_preset, self.lif.dt)
+            }
+            _ => fallback,
+        }
+    }
+
+    #[inline]
+    fn hidden_neuron_bio(&self, layer: usize, j: usize) -> Option<&AarnnBioParams> {
+        #[cfg(feature = "growth3d")]
+        {
+            self.bio_h.get(layer).and_then(|v| v.get(j))
+        }
+        #[cfg(not(feature = "growth3d"))]
+        {
+            let _ = (layer, j);
+            None
+        }
+    }
+
+    #[inline]
+    fn output_neuron_bio(&self, k: usize) -> Option<&AarnnBioParams> {
+        #[cfg(feature = "growth3d")]
+        {
+            self.bio_o.get(k)
+        }
+        #[cfg(not(feature = "growth3d"))]
+        {
+            let _ = k;
+            None
+        }
+    }
+
+    /// Place every Izhikevich-like membrane at its stable resting point.
+    ///
+    /// Membranes were zero-initialised (v = 0 mV, u = 0), which is far above
+    /// the -50 mV saddle-node: every neuron fired synchronously on the first
+    /// step after construction, reset or a state-less import.
+    fn settle_izh_resting_state(&mut self) {
+        if !self.is_izh_like() {
+            return;
+        }
+        let Some(fallback) = self.effective_izh_params() else {
+            return;
+        };
+        let layers = self.v_h.len();
+        for l in 0..layers {
+            for j in 0..self.v_h[l].len() {
+                let p = self.neuron_izh_params(self.hidden_neuron_bio(l, j), fallback);
+                let (v, u) = match self.graded_params_h(l, j) {
+                    Some(g) => (g.v_rest, 0.0),
+                    None => crate::neuron_kernels::izh_resting_state(p),
+                };
+                self.v_h[l][j] = v;
+                if let Some(uh) = self.u_h.as_mut()
+                    && let Some(cell) = uh.get_mut(l).and_then(|layer| layer.get_mut(j))
+                {
+                    *cell = u;
+                }
+            }
+        }
+        self.graded_phase_o.clear();
+        for k in 0..self.v_o.len() {
+            let p = self.neuron_izh_params(self.output_neuron_bio(k), fallback);
+            let (v, u) = match self.graded_params_o(k) {
+                Some(g) => (g.v_rest, 0.0),
+                None => crate::neuron_kernels::izh_resting_state(p),
+            };
+            self.v_o[k] = v;
+            if let Some(cell) = self.u_o.as_mut().and_then(|uo| uo.get_mut(k)) {
+                *cell = u;
+            }
+        }
+    }
+
     #[inline]
     fn sanitize_current_value(i: f64) -> f64 {
         sanitize_current_value_ref(i)
@@ -2232,6 +2401,35 @@ impl Runner {
         })
     }
 
+    /// Depth-0 counterpart of [`Self::apply_synaptic_filter`]: same charge
+    /// per event, no temporal kernel (see `instantaneous_synaptic_charge`).
+    fn apply_depth0_synaptic_charge(
+        dt: f64,
+        default_bio: &crate::config::AarnnBioParams,
+        raw: &Array1<f64>,
+        vmem: Option<&Array1<f64>>,
+        nmda_voltage_sensitivity: f64,
+        bio_vec: Option<&Vec<crate::config::AarnnBioParams>>,
+        default_decays: &PrecalculatedDecays,
+    ) -> Array1<f64> {
+        crate::aarnn::dynamics::instantaneous_synaptic_charge(
+            raw,
+            vmem,
+            nmda_voltage_sensitivity,
+            |i| {
+                let (bio, d) = if let Some(b) = bio_vec.and_then(|bv| bv.get(i)) {
+                    (b, Self::get_decays_static(dt, b))
+                } else {
+                    (default_bio, *default_decays)
+                };
+                let mut params = SynapticDriveParams::from_bio(bio, d);
+                // Neuromodulation is a depth >= 1 feature.
+                params.neuromod_excitability_gain = 1.0;
+                params
+            },
+        )
+    }
+
     #[inline]
     #[allow(unused_variables)]
     fn hidden_bio_params(&self, layer: usize, neuron: usize) -> &crate::config::AarnnBioParams {
@@ -2252,6 +2450,11 @@ impl Runner {
     #[cfg(feature = "opencl")]
     pub(crate) fn aarnn_gpu_transition_supported(&self) -> bool {
         if !matches!(self.neuron_model, NeuronModel::Aarnn) {
+            return false;
+        }
+        // Graded (non-spiking) cells have only the CPU reference transition;
+        // a device transition would keep its own membrane buffers.
+        if self.graded_configured() {
             return false;
         }
         #[cfg(feature = "growth3d")]
@@ -2375,7 +2578,7 @@ impl Runner {
         output: usize,
         out_layer: usize,
         use_stp: bool,
-        stp_release_h: &[Vec<f64>],
+        _stp_release_h: &[Vec<f64>],
     ) -> (f64, Vec<ReleasedEvent>) {
         let mut acc = 0.0;
         let mut events = Vec::new();
@@ -2385,7 +2588,9 @@ impl Runner {
             .map(|routes| routes.as_slice())
             .unwrap_or(&[])
         {
-            let weight = self.w_out.get((output, hidden)).copied().unwrap_or(0.0);
+            // A partition-stored shard holds rows from its first output.
+            let row = output.wrapping_sub(self.shard_output_row_offset());
+            let weight = self.w_out.get((row, hidden)).copied().unwrap_or(0.0);
             if weight.abs() <= 1.0e-12 {
                 continue;
             }
@@ -2394,11 +2599,7 @@ impl Runner {
                 continue;
             }
             let stp_scale = if use_stp {
-                stp_release_h
-                    .get(out_layer)
-                    .and_then(|release| release.get(hidden))
-                    .copied()
-                    .unwrap_or(0.0)
+                self.stp_release_h_at(out_layer, steps, hidden)
             } else {
                 1.0
             };
@@ -2653,15 +2854,416 @@ impl Runner {
         self.released_events = events;
     }
 
+    /// Validate `w_gap` and build its sparse per-neuron view.
+    fn rebuild_gap_routes(&mut self) -> anyhow::Result<()> {
+        self.gap_routes.clear();
+        for (l, m) in self.w_gap.iter().enumerate() {
+            if m.nrows() != m.ncols() {
+                anyhow::bail!("electrical synapse matrix {l} must be square");
+            }
+            let mut routes = vec![Vec::new(); m.nrows()];
+            for ((post, pre), g) in m.indexed_iter() {
+                if !g.is_finite() || *g < 0.0 {
+                    anyhow::bail!("electrical conductance ({post},{pre}) must be finite and >= 0");
+                }
+                if (m[(pre, post)] - g).abs() > 1.0e-9 {
+                    anyhow::bail!("electrical synapse matrix {l} must be symmetric");
+                }
+                if *g > 0.0 && pre != post {
+                    routes[post].push((pre, *g));
+                }
+            }
+            self.gap_routes.push(routes);
+        }
+        Ok(())
+    }
+
+    /// Current through connectome electrical synapses for one step.
+    ///
+    /// Backward Euler on the linear coupling: solve `(I + dt L) v_c = v`,
+    /// where `L` is the conductance graph Laplacian, and inject
+    /// `I_j = (v_c,j - v_j) / dt`. For weak coupling this equals the ohmic
+    /// `sum_i g_ji (v_i - v_j)`; unlike the explicit form it is stable for
+    /// any conductance (explicit coupling diverges once a cell's summed
+    /// conductance times dt exceeds 2, e.g. AVA with 231 contacts), never
+    /// overshoots the coupled mean and conserves current exactly. Applied to
+    /// the pre-transition membranes, unfiltered, at every depth; skipped if
+    /// growth has changed the layer size since import.
+    fn apply_connectome_gap_currents(&self, layer: usize, curr: &mut Array1<f64>) {
+        let (Some(routes), Some(v)) = (self.gap_routes.get(layer), self.v_h.get(layer)) else {
+            return;
+        };
+        if routes.len() != curr.len() || v.len() != curr.len() {
+            return;
+        }
+        let dt = self.lif.dt.max(1.0e-6);
+        let v: Vec<f64> = v.iter().copied().collect();
+        let currents = implicit_gap_currents(routes, &v, dt);
+        for (c, i) in curr.iter_mut().zip(currents) {
+            *c += i;
+        }
+    }
+
+    /// Whether any cell type declares a tonic input current.
+    #[inline]
+    fn tonic_configured(&self) -> bool {
+        matches!(self.neuron_model, NeuronModel::Aarnn)
+            && (self.net.aarnn_bio.tonic_current != 0.0
+                || self
+                    .net
+                    .neuron_types
+                    .iter()
+                    .any(|t| t.bio_params.tonic_current != 0.0))
+    }
+
+    /// Add each hidden cell's tonic input current (`bio.tonic_current`)
+    /// after all synaptic, electrical and dendritic terms, before the
+    /// transition. A non-finite value is ignored.
+    fn add_tonic_currents_h(&self, layer: usize, curr: &mut Array1<f64>) {
+        if !self.tonic_configured() {
+            return;
+        }
+        for (j, c) in curr.iter_mut().enumerate() {
+            let i = self
+                .hidden_neuron_bio(layer, j)
+                .unwrap_or(&self.net.aarnn_bio)
+                .tonic_current;
+            if i.is_finite() {
+                *c += i;
+            }
+        }
+    }
+
+    fn add_tonic_currents_o(&self, curr: &mut Array1<f64>) {
+        if !self.tonic_configured() {
+            return;
+        }
+        for (k, c) in curr.iter_mut().enumerate() {
+            let i = self
+                .output_neuron_bio(k)
+                .unwrap_or(&self.net.aarnn_bio)
+                .tonic_current;
+            if i.is_finite() {
+                *c += i;
+            }
+        }
+    }
+
+    /// Whether the configuration declares any graded (non-spiking) cell.
+    /// Per-cell biology is always derived from `net.aarnn_bio` and
+    /// `net.neuron_types`, so this is exact and cheap.
+    #[inline]
+    fn graded_configured(&self) -> bool {
+        matches!(self.neuron_model, NeuronModel::Aarnn)
+            && (self.net.aarnn_bio.graded_enabled
+                || self
+                    .net
+                    .neuron_types
+                    .iter()
+                    .any(|t| t.bio_params.graded_enabled))
+    }
+
+    #[inline]
+    fn graded_params_h(&self, layer: usize, j: usize) -> Option<GradedParams> {
+        if !self.graded_configured() {
+            return None;
+        }
+        GradedParams::from_bio(
+            self.hidden_neuron_bio(layer, j)
+                .unwrap_or(&self.net.aarnn_bio),
+        )
+    }
+
+    #[inline]
+    fn graded_params_o(&self, k: usize) -> Option<GradedParams> {
+        if !self.graded_configured() {
+            return None;
+        }
+        GradedParams::from_bio(self.output_neuron_bio(k).unwrap_or(&self.net.aarnn_bio))
+    }
+
+    /// Spike-equivalent presynaptic events per step of every releasing graded
+    /// cell of `layer`: `release(V) * release_max_hz * dt`, from the current
+    /// membrane voltage (the voltage after the previous transition for
+    /// recurrent use, after this step's transition for the next layer).
+    fn graded_events_h(&self, layer: usize) -> Vec<(usize, f64)> {
+        if !self.graded_configured() {
+            return Vec::new();
+        }
+        let Some(v) = self.v_h.get(layer) else {
+            return Vec::new();
+        };
+        let dt_s = self.lif.dt / 1000.0;
+        (0..v.len())
+            .filter_map(|i| {
+                let p = self.graded_params_h(layer, i)?;
+                let e = graded_release(v[i], p) * p.release_max_hz * dt_s;
+                (e > 0.0).then_some((i, e))
+            })
+            .collect()
+    }
+
+    /// Add `w (post x pre) * events` to `out`; true if anything was added.
+    fn add_graded_drive(w: &Array2<f64>, events: &[(usize, f64)], out: &mut Array1<f64>) -> bool {
+        Self::add_graded_drive_rows(w, None, events, out)
+    }
+
+    /// [`Self::add_graded_drive`] for a matrix that, on a partition-stored
+    /// shard (`row0 = Some(first row)`), holds only rows
+    /// `row0..row0 + w.nrows()` of the population.
+    fn add_graded_drive_rows(
+        w: &Array2<f64>,
+        row0: Option<usize>,
+        events: &[(usize, f64)],
+        out: &mut Array1<f64>,
+    ) -> bool {
+        let row0 = match row0 {
+            None if w.nrows() != out.len() => return false,
+            None => 0,
+            Some(r0) if r0 + w.nrows() > out.len() => return false,
+            Some(r0) => r0,
+        };
+        let mut any = false;
+        for &(i, e) in events {
+            if i >= w.ncols() {
+                continue;
+            }
+            let rows = row0..row0 + w.nrows();
+            for (o, wv) in out
+                .slice_mut(ndarray::s![rows])
+                .iter_mut()
+                .zip(w.column(i).iter())
+            {
+                if *wv != 0.0 {
+                    *o += wv * e;
+                    any = true;
+                }
+            }
+        }
+        any
+    }
+
+    /// Graded synaptic drive into hidden layer `l` in raw (spike-equivalent)
+    /// units: recurrent, feed-forward from `l - 1` and feedback from `l + 1`.
+    ///
+    /// It enters the same depth-gated stage as spike-driven drive (the
+    /// instantaneous charge at depth 0, the AMPA/NMDA/GABA kernels at depth
+    /// >= 1), so a graded cell at release `r` delivers the mean charge of a
+    /// spiking cell at `r * release_max_hz`. Graded transmission is tonic: no
+    /// STP, release probability or axonal delay applies to it.
+    fn graded_drive_hidden(&self, l: usize) -> Option<Array1<f64>> {
+        if !self.graded_configured() {
+            return None;
+        }
+        let mut raw = Array1::<f64>::zeros(self.v_h.get(l)?.len());
+        let mut any = false;
+        if let Some(w) = self.w_hh_rec.get(l) {
+            any |= Self::add_graded_drive_rows(
+                w,
+                self.shard_rows_stored_from(l),
+                &self.graded_events_h(l),
+                &mut raw,
+            );
+        }
+        if l >= 1
+            && let Some(w) = self.w_hh_fwd.get(l - 1)
+        {
+            any |= Self::add_graded_drive_rows(
+                w,
+                self.shard_rows_stored_from(l),
+                &self.graded_events_h(l - 1),
+                &mut raw,
+            );
+        }
+        if l + 1 < self.v_h.len()
+            && let Some(w) = self.w_hh_bwd.get(l)
+        {
+            any |= Self::add_graded_drive_rows(
+                w,
+                self.shard_rows_stored_from(l),
+                &self.graded_events_h(l + 1),
+                &mut raw,
+            );
+        }
+        any.then_some(raw)
+    }
+
+    /// Graded neuromuscular/output drive from hidden layer `out_l`.
+    fn graded_drive_output(&self, out_l: usize) -> Option<Array1<f64>> {
+        if !self.graded_configured() {
+            return None;
+        }
+        let mut raw = Array1::<f64>::zeros(self.v_o.len());
+        Self::add_graded_drive_rows(
+            &self.w_out,
+            self.shard_output_rows_stored_from(),
+            &self.graded_events_h(out_l),
+            &mut raw,
+        )
+        .then_some(raw)
+    }
+
+    /// Graded cells of hidden `layer` with their pre-transition voltage.
+    fn graded_pre_state_h(&self, layer: usize) -> Vec<(usize, f64, GradedParams)> {
+        if !self.graded_configured() {
+            return Vec::new();
+        }
+        let Some(v) = self.v_h.get(layer) else {
+            return Vec::new();
+        };
+        (0..v.len())
+            .filter_map(|j| self.graded_params_h(layer, j).map(|p| (j, v[j], p)))
+            .collect()
+    }
+
+    fn graded_pre_state_o(&self) -> Vec<(usize, f64, GradedParams)> {
+        if !self.graded_configured() {
+            return Vec::new();
+        }
+        (0..self.v_o.len())
+            .filter_map(|k| self.graded_params_o(k).map(|p| (k, self.v_o[k], p)))
+            .collect()
+    }
+
+    /// Replace the spiking transition of graded hidden cells: integrate the
+    /// graded membrane from the captured voltage under the same total
+    /// current. Graded cells never spike and hold no spike-adaptation state.
+    fn finish_graded_hidden(
+        &mut self,
+        layer: usize,
+        pre: &[(usize, f64, GradedParams)],
+        currents: &Array1<f64>,
+        mut spikes: Array1<i8>,
+    ) -> Array1<i8> {
+        let dt = self.lif.dt;
+        for &(j, v_old, p) in pre {
+            let v = graded_transition(v_old, currents.get(j).copied().unwrap_or(0.0), dt, p);
+            self.v_h[layer][j] = v;
+            if let Some(u) = self
+                .u_h
+                .as_mut()
+                .and_then(|u| u.get_mut(layer))
+                .and_then(|u| u.get_mut(j))
+            {
+                *u = 0.0;
+            }
+            if let Some(t) = self.thr_offset_h.get_mut(layer).and_then(|t| t.get_mut(j)) {
+                *t = 0.0;
+            }
+            if let Some(r) = self
+                .izh_refr_h
+                .as_mut()
+                .and_then(|r| r.get_mut(layer))
+                .and_then(|r| r.get_mut(j))
+            {
+                *r = 0;
+            }
+            if let Some(s) = spikes.get_mut(j) {
+                *s = 0;
+            }
+        }
+        spikes
+    }
+
+    /// Graded output (muscle) cells: integrate the graded membrane and emit
+    /// its activation as a pulse-density code (first-order sigma-delta at
+    /// `release_max_hz`). With 500 Hz and two 1 ms steps per 2 ms body frame
+    /// the fraction of frames carrying an event equals the activation.
+    fn finish_graded_output(
+        &mut self,
+        pre: &[(usize, f64, GradedParams)],
+        currents: &Array1<f64>,
+        mut spikes: Array1<i8>,
+    ) -> Array1<i8> {
+        if self.graded_phase_o.len() != self.v_o.len() {
+            self.graded_phase_o.resize(self.v_o.len(), 0.0);
+        }
+        let dt = self.lif.dt;
+        for &(k, v_old, p) in pre {
+            let v = graded_transition(v_old, currents.get(k).copied().unwrap_or(0.0), dt, p);
+            self.v_o[k] = v;
+            if let Some(u) = self.u_o.as_mut().and_then(|u| u.get_mut(k)) {
+                *u = 0.0;
+            }
+            if let Some(t) = self.thr_offset_o.get_mut(k) {
+                *t = 0.0;
+            }
+            if let Some(r) = self.izh_refr_o.as_mut().and_then(|r| r.get_mut(k)) {
+                *r = 0;
+            }
+            let phase =
+                self.graded_phase_o[k] + graded_release(v, p) * p.release_max_hz * dt / 1000.0;
+            let fire = phase >= 1.0;
+            self.graded_phase_o[k] = if fire { phase - 1.0 } else { phase }.clamp(0.0, 1.0);
+            if let Some(s) = spikes.get_mut(k) {
+                *s = i8::from(fire);
+            }
+        }
+        spikes
+    }
+
+    /// Transmitter release in [0, 1] of each hidden cell of `layer`; `None`
+    /// for spiking cells.
+    pub fn graded_release_h(&self, layer: usize) -> Vec<Option<f64>> {
+        let n = self.v_h.get(layer).map_or(0, |v| v.len());
+        (0..n)
+            .map(|j| {
+                self.graded_params_h(layer, j)
+                    .map(|p| graded_release(self.v_h[layer][j], p))
+            })
+            .collect()
+    }
+
+    /// Spike-equivalent rate (Hz) of each graded hidden cell of `layer`
+    /// (`release * release_max_hz`); `None` for spiking cells.
+    pub fn graded_equivalent_rate_h(&self, layer: usize) -> Vec<Option<f64>> {
+        let n = self.v_h.get(layer).map_or(0, |v| v.len());
+        (0..n)
+            .map(|j| {
+                self.graded_params_h(layer, j)
+                    .map(|p| graded_release(self.v_h[layer][j], p) * p.release_max_hz)
+            })
+            .collect()
+    }
+
+    /// Activation in [0, 1] of each output cell; `None` for spiking cells.
+    pub fn graded_activation_o(&self) -> Vec<Option<f64>> {
+        (0..self.v_o.len())
+            .map(|k| {
+                self.graded_params_o(k)
+                    .map(|p| graded_release(self.v_o[k], p))
+            })
+            .collect()
+    }
+
+    /// Encoding of the output events sent to an embodiment:
+    /// `Some("pulse_density")` when every output cell is graded (event
+    /// density per body frame = activation), `None` for spike trains.
+    pub fn output_code(&self) -> Option<&'static str> {
+        let n = self.v_o.len();
+        (n > 0 && (0..n).all(|k| self.graded_params_o(k).is_some())).then_some("pulse_density")
+    }
+
     #[inline]
     fn apply_gap_junction_coupling(curr: &mut Array1<f64>, v: &Array1<f64>, strength: f64) {
         apply_gap_junction_mean_field(curr, v, strength);
     }
 
+    /// Polarity of a cell type name.
+    ///
+    /// An explicit transmitter qualifier after `:` (as written by connectome
+    /// importers, e.g. `Interneuron:acetylcholine`, `Motor:GABA`) is
+    /// authoritative: only GABA/glycine are inhibitory. Unqualified names fall
+    /// back to the mammalian-cortex heuristic, where "interneuron" denotes a
+    /// GABAergic cell; that heuristic is wrong for invertebrate interneurons,
+    /// which are mostly cholinergic or glutamatergic.
     #[cfg(feature = "growth3d")]
     #[inline]
     fn is_inhibitory_type_name(name: &str) -> bool {
         let n = name.to_ascii_lowercase();
+        if let Some((_, transmitter)) = n.split_once(':') {
+            return transmitter.contains("gaba") || transmitter.contains("glycine");
+        }
         n.contains("interneuron")
             || n.contains("gaba")
             || n.contains("pv")
@@ -2869,13 +3471,48 @@ impl Runner {
             return;
         }
 
-        Self::enforce_dale_matrix_cols(
-            &mut self.w_in,
-            inhibitory_fraction,
-            strictness,
-            max_abs_w,
-            0x1111,
-        );
+        // Sensory columns are transducer channels. When the topology types
+        // them explicitly, their polarity comes from those types; the hashed
+        // fallback would otherwise invert a fixed fraction of input channels.
+        #[cfg(feature = "growth3d")]
+        let sensory_typed = !self.topo.sensory_nodes.is_empty()
+            && self.topo.sensory_nodes.len() == self.w_in.ncols()
+            && self
+                .topo
+                .sensory_nodes
+                .iter()
+                .all(|n| n.type_name.is_some());
+        #[cfg(not(feature = "growth3d"))]
+        let sensory_typed = false;
+        if sensory_typed {
+            #[cfg(feature = "growth3d")]
+            {
+                let mask: Vec<bool> = self
+                    .topo
+                    .sensory_nodes
+                    .iter()
+                    .map(|n| {
+                        n.type_name
+                            .as_deref()
+                            .is_some_and(Self::is_inhibitory_type_name)
+                    })
+                    .collect();
+                Self::enforce_dale_matrix_cols_with_mask(
+                    &mut self.w_in,
+                    &mask,
+                    strictness,
+                    max_abs_w,
+                );
+            }
+        } else {
+            Self::enforce_dale_matrix_cols(
+                &mut self.w_in,
+                inhibitory_fraction,
+                strictness,
+                max_abs_w,
+                0x1111,
+            );
+        }
 
         #[cfg(feature = "growth3d")]
         {
@@ -5269,10 +5906,20 @@ impl Runner {
             thr_offset_o,
             rate_ema_h,
             rate_ema_o,
+            rate_homeostat: RateHomeostat::default(),
             stp_u_s,
             stp_x_s,
             stp_u_h,
             stp_x_h,
+            stp_rel_hist_s: VecDeque::new(),
+            w_gap: Vec::new(),
+            gap_routes: Vec::new(),
+            graded_phase_o: Vec::new(),
+            stp_rel_hist_h: Vec::new(),
+            remote_hidden: Vec::new(),
+            remote_output: RemoteLayerSlot::default(),
+            neuron_shard: None,
+            shard_rows: None,
             dend_ca_h: (0..l_count).map(|_| Array1::<f64>::zeros(h_size)).collect(),
             dend_plateau_h: (0..l_count).map(|_| Array1::<f64>::zeros(h_size)).collect(),
             x_pre_in,
@@ -5356,6 +6003,8 @@ impl Runner {
             syn_ax_steps: Vec::new(),
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             syn_den_steps: Vec::new(),
+            route_delay_steps_max: 0,
+            route_steps_depth: None,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             bouton_latency_steps: 0,
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -5659,6 +6308,7 @@ impl Runner {
                 this.ensure_sparse_io_connectivity_floor();
             }
         }
+        this.settle_izh_resting_state();
 
         this
     }
@@ -5712,6 +6362,7 @@ impl Runner {
             thr_offset_o: vec_from_arr1_f64(&self.thr_offset_o),
             rate_ema_h: vec_from_layers_f64(&self.rate_ema_h),
             rate_ema_o: vec_from_arr1_f64(&self.rate_ema_o),
+            rate_homeostat: Some(self.rate_homeostat.clone()),
             stp_u_s: vec_from_arr1_f64(&self.stp_u_s),
             stp_x_s: vec_from_arr1_f64(&self.stp_x_s),
             stp_u_h: vec_from_layers_f64(&self.stp_u_h),
@@ -5842,6 +6493,7 @@ impl Runner {
             w_hh_bwd: self.w_hh_bwd.iter().map(mat_from_nd).collect(),
             w_hh_rec: self.w_hh_rec.iter().map(mat_from_nd).collect(),
             w_out: mat_from_nd(&self.w_out),
+            w_gap: self.w_gap.iter().map(mat_from_nd).collect(),
             p_in: Some(mat_from_nd_u32(&self.conn_presence_in)),
             p_fwd: Some(self.conn_presence_fwd.iter().map(mat_from_nd_u32).collect()),
             p_bwd: Some(self.conn_presence_bwd.iter().map(mat_from_nd_u32).collect()),
@@ -5904,6 +6556,7 @@ impl Runner {
         self.thr_offset_o = array1_from_vec_f64(&state.thr_offset_o, self.net.num_output_neurons);
         self.rate_ema_h = layers_from_vec_f64(&state.rate_ema_h, &hidden_sizes);
         self.rate_ema_o = array1_from_vec_f64(&state.rate_ema_o, self.net.num_output_neurons);
+        self.rate_homeostat = state.rate_homeostat.clone().unwrap_or_default();
         self.stp_u_s = array1_from_vec_f64(&state.stp_u_s, self.net.num_sensory_neurons);
         self.stp_x_s = array1_from_vec_f64(&state.stp_x_s, self.net.num_sensory_neurons);
         self.stp_u_h = layers_from_vec_f64(&state.stp_u_h, &hidden_sizes);
@@ -6026,11 +6679,17 @@ impl Runner {
     }
 
     #[cfg(feature = "growth3d")]
+    /// Resolve every neuron's biology from the current network: its type's
+    /// parameters when the topology names a known type, the network default
+    /// otherwise. Every entry is rewritten; resizing alone kept entries from a
+    /// previously loaded network, so an untyped imported cell inherited the
+    /// biology (preset, gain) of whatever cell had that index before import.
     pub fn sync_bio_from_topo(&mut self) {
         let l_count = self.net.num_hidden_layers;
         self.bio_h.resize_with(l_count, Vec::new);
         for l in 0..l_count {
             let sz = self.layer_size(l);
+            self.bio_h[l].clear();
             self.bio_h[l].resize(sz, self.net.aarnn_bio.clone());
             if let Some(nodes) = self.topo.layers.get(l) {
                 for (j, node) in nodes.iter().enumerate() {
@@ -6048,6 +6707,7 @@ impl Runner {
         }
 
         let s_count = self.net.num_sensory_neurons;
+        self.bio_s.clear();
         self.bio_s.resize(s_count, self.net.aarnn_bio.clone());
         for (i, node) in self.topo.sensory_nodes.iter().enumerate() {
             if i < s_count {
@@ -6060,6 +6720,7 @@ impl Runner {
         }
 
         let o_count = self.net.num_output_neurons;
+        self.bio_o.clear();
         self.bio_o.resize(o_count, self.net.aarnn_bio.clone());
         for (k, node) in self.topo.output_nodes.iter().enumerate() {
             if k < o_count {
@@ -6437,6 +7098,13 @@ impl Runner {
 
     fn import_snapshot(&mut self, mut snap: Snapshot) -> anyhow::Result<()> {
         snap.net.deployment.migrate_legacy_import();
+        // Morphology reconstruction and route selection draw from the
+        // thread-local `fastrand` generator. Seed it from the snapshot so the
+        // same snapshot always yields the same anatomy (delays, attenuation);
+        // otherwise every load of a connectome produced different routes.
+        if let Some(seed) = snap.rng_seed {
+            fastrand::seed(seed);
+        }
         let snapshot_step = snap.t;
         let snapshot_time_ms = snap.t_ms.max(0.0);
         let snapshot_rng_seed = snap.rng_seed;
@@ -6474,6 +7142,11 @@ impl Runner {
             .map(nd_from_mat_owned)
             .collect::<anyhow::Result<_>>()?;
         self.w_out = nd_from_mat_owned(std::mem::take(&mut snap.w_out))?;
+        self.w_gap = std::mem::take(&mut snap.w_gap)
+            .into_iter()
+            .map(nd_from_mat_owned)
+            .collect::<anyhow::Result<_>>()?;
+        self.rebuild_gap_routes()?;
         // Sync top-level sizes from matrix shapes
         self.net.num_sensory_neurons = self.w_in.ncols();
         self.net.num_output_neurons = self.w_out.nrows();
@@ -6709,8 +7382,17 @@ impl Runner {
         // restore it from the authoritative imported topology before applying
         // the persisted runtime state.
         self.sync_bio_from_topo();
+        // Per-type presets are only known after the topology biology sync.
+        self.settle_izh_resting_state();
         if let Some(runtime_state) = snapshot_runtime_state {
             self.apply_snapshot_runtime_state(runtime_state);
+            // Restored route delays were quantised for the exporting run's
+            // depth/dt; re-quantise them for this configuration on the next
+            // step (same lengths, so an unchanged depth gives identical delays).
+            #[cfg(all(feature = "morpho", feature = "growth3d"))]
+            if self.net.use_morphology {
+                self.route_steps_depth = Some(usize::MAX);
+            }
         }
         #[cfg(feature = "growth3d")]
         self.ensure_biological_growth_state();
@@ -6775,7 +7457,14 @@ impl Runner {
         }
         let mut repaired = 0;
         for output in 0..self.w_out.nrows() {
-            if self.w_out.row(output).iter().any(|weight| *weight > 0.0) {
+            // Any synapse, excitatory or inhibitory, is a real connection; an
+            // inhibition-only muscle row must not receive a synthetic excitatory edge.
+            if self
+                .w_out
+                .row(output)
+                .iter()
+                .any(|weight| weight.abs() > 1.0e-12)
+            {
                 continue;
             }
             let hidden_index = output % hidden;
@@ -6948,6 +7637,8 @@ impl Runner {
             }
             self.topo.early_cells.clear();
             // reset spike histories to one zero frame with current sizes
+            self.stp_rel_hist_s.clear();
+            self.stp_rel_hist_h.clear();
             self.spk_hist_h.clear();
             for l in 0..num_hidden_layers {
                 let mut dq: VecDeque<Array1<i8>> = VecDeque::new();
@@ -7055,6 +7746,7 @@ impl Runner {
                 uh[l].fill(0.0);
             }
             self.u_o.as_mut().unwrap().fill(0.0);
+            self.settle_izh_resting_state();
         }
         self.sync_presence_sizes();
         self.conn_presence_in.fill(0);
@@ -8909,16 +9601,17 @@ impl Runner {
         };
         let mut fired = vec![0i8; layer_len];
         for index in 0..layer_len {
+            let nb = self.hidden_neuron_bio(layer, index).unwrap_or(bio);
             let transition = izh_transition(
                 old_v[index],
                 old_u[index],
                 currents[index],
-                params,
+                self.neuron_izh_params(Some(nb), params),
                 self.thr_offset_h[layer][index],
                 use_adaptive_threshold,
-                bio.adaptive_threshold_increment,
-                bio.adaptive_threshold_min,
-                bio.adaptive_threshold_max,
+                nb.adaptive_threshold_increment,
+                nb.adaptive_threshold_min,
+                nb.adaptive_threshold_max,
                 old_refractory.as_ref().map(|values| values[index]),
                 refractory_steps,
             );
@@ -8966,16 +9659,17 @@ impl Runner {
         };
         let mut fired = vec![0i8; neuron_count];
         for index in 0..neuron_count {
+            let nb = self.output_neuron_bio(index).unwrap_or(bio);
             let transition = izh_transition(
                 old_v[index],
                 old_u[index],
                 currents[index],
-                params,
+                self.neuron_izh_params(Some(nb), params),
                 self.thr_offset_o[index],
                 use_adaptive_threshold,
-                bio.adaptive_threshold_increment,
-                bio.adaptive_threshold_min,
-                bio.adaptive_threshold_max,
+                nb.adaptive_threshold_increment,
+                nb.adaptive_threshold_min,
+                nb.adaptive_threshold_max,
                 old_refractory.as_ref().map(|values| values[index]),
                 refractory_steps,
             );
@@ -9219,6 +9913,7 @@ impl Runner {
                 history.pop_back();
             }
         }
+        self.push_stp_release_frame_h(layer, spikes);
         let neuron_count = self
             .x_post_h
             .get(layer)
@@ -9229,6 +9924,22 @@ impl Runner {
             if spikes[index] != 0 {
                 self.x_post_h[layer][index] += 1.0;
                 self.x_pre_h[layer][index] += 1.0;
+            }
+        }
+        if self.net.aarnn_graded_plasticity_enabled {
+            // Graded cells: expected spikes this step feed the traces.
+            let dt_s = self.lif.dt / 1000.0;
+            for (index, hz) in self
+                .graded_equivalent_rate_h(layer)
+                .into_iter()
+                .enumerate()
+                .take(neuron_count)
+            {
+                if let Some(hz) = hz {
+                    let expected = (hz * dt_s).clamp(0.0, 1.0);
+                    self.x_post_h[layer][index] += expected;
+                    self.x_pre_h[layer][index] += expected;
+                }
             }
         }
         if use_homeostasis {
@@ -9286,6 +9997,15 @@ impl Runner {
         self.last_spk_o = spikes.clone();
         self.push_output_spike_history();
         let neuron_count = self.x_post_o.len().min(spikes.len());
+        if self.net.aarnn_graded_plasticity_enabled {
+            let dt_s = self.lif.dt / 1000.0;
+            for index in 0..neuron_count {
+                if let Some(p) = self.graded_params_o(index) {
+                    let hz = graded_release(self.v_o[index], p) * p.release_max_hz;
+                    self.x_post_o[index] += (hz * dt_s).clamp(0.0, 1.0);
+                }
+            }
+        }
         for index in 0..neuron_count {
             if spikes[index] != 0 {
                 self.x_post_o[index] += 1.0;
@@ -9345,6 +10065,164 @@ impl Runner {
     /// deterministic reference path; proposal generation never mutates a matrix,
     /// and commit validates captured base weights before applying clamped deltas.
     #[allow(unused_variables)]
+    /// Per-cell activity this step for long-term plasticity and its
+    /// homeostatic counterweight: 1 for a spike; with graded plasticity a
+    /// graded cell contributes its expected spikes (release x max rate x dt).
+    fn plasticity_activity(&self) -> (Vec<Vec<f64>>, Vec<f64>) {
+        let graded = self.net.aarnn_graded_plasticity_enabled;
+
+        let dt_s = self.lif.dt / 1000.0;
+        let act_h: Vec<Vec<f64>> = (0..self.last_spk_h.len())
+            .map(|l| {
+                let rates = if graded {
+                    self.graded_equivalent_rate_h(l)
+                } else {
+                    Vec::new()
+                };
+                self.last_spk_h[l]
+                    .iter()
+                    .enumerate()
+                    .map(|(j, s)| {
+                        if *s != 0 {
+                            1.0
+                        } else {
+                            rates
+                                .get(j)
+                                .copied()
+                                .flatten()
+                                .map_or(0.0, |hz| (hz * dt_s).clamp(0.0, 1.0))
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let act_o: Vec<f64> = self
+            .last_spk_o
+            .iter()
+            .enumerate()
+            .map(|(k, s)| {
+                if *s != 0 {
+                    1.0
+                } else if graded {
+                    self.graded_params_o(k).map_or(0.0, |p| {
+                        (graded_release(self.v_o[k], p) * p.release_max_hz * dt_s).clamp(0.0, 1.0)
+                    })
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        (act_h, act_o)
+    }
+
+    /// Homeostatic counterweight to long-term plasticity: per-cell
+    /// multiplicative synaptic scaling toward a firing-rate set point (see
+    /// `NetworkConfig::aarnn_rate_homeostasis_gain`). Rows of every learned
+    /// matrix are the synapses onto one cell, so each cell scales its own
+    /// inputs. Runs every step while plasticity is enabled; scales every
+    /// `HOMEOSTAT_CADENCE_MS`.
+    fn apply_rate_homeostasis(&mut self, in_l: usize) {
+        const HOMEOSTAT_CADENCE_MS: f64 = 10.0;
+        let gain = self.net.aarnn_rate_homeostasis_gain.max(0.0) as f64;
+        if gain <= 0.0 || !self.net.aarnn_plasticity_enabled {
+            return;
+        }
+        let dt_ms = self.lif.dt;
+        let tau_ms = (self.net.aarnn_rate_homeostasis_tau_ms as f64).max(dt_ms);
+        let warmup_ms = self.net.aarnn_rate_homeostasis_warmup_ms.max(0.0) as f64;
+        let target_hz = self.net.aarnn_rate_homeostasis_target_hz.max(0.0) as f64;
+        let (act_h, act_o) = self.plasticity_activity();
+        let n_hidden = act_h.len();
+        let sizes: Vec<usize> = act_h
+            .iter()
+            .map(Vec::len)
+            .chain(std::iter::once(act_o.len()))
+            .collect();
+        let h = &mut self.rate_homeostat;
+        h.fit(&sizes);
+        for (pop, a) in act_h.iter().chain(std::iter::once(&act_o)).enumerate() {
+            h.observe(pop, a, dt_ms, tau_ms, warmup_ms, target_hz);
+        }
+        h.since_scale_ms += dt_ms;
+        if h.since_scale_ms + 1.0e-9 < HOMEOSTAT_CADENCE_MS {
+            return;
+        }
+        let k = gain * h.since_scale_ms / tau_ms;
+        h.since_scale_ms = 0.0;
+        let mask = &self.net.aarnn_plastic_cells;
+        let err: Vec<Option<Vec<f64>>> = (0..=n_hidden)
+            .map(|p| {
+                h.rate_error(p).map(|mut e| {
+                    for (j, x) in e.iter_mut().enumerate() {
+                        let learns = if p < n_hidden {
+                            mask.hidden_learns(p, j)
+                        } else {
+                            mask.output_learns(j)
+                        };
+                        if !learns {
+                            *x = 0.0;
+                        }
+                    }
+                    e
+                })
+            })
+            .collect();
+        let w_max = self.stdp.w_max;
+        let scale = |mat: &mut Array2<f64>, e: Option<&Vec<f64>>| {
+            if let Some(e) = e {
+                if e.len() == mat.nrows() {
+                    homeostatic_scale_rows(mat, e, k, w_max);
+                }
+            }
+        };
+        scale(&mut self.w_in, err.get(in_l).and_then(Option::as_ref));
+        for l in 0..self.w_hh_rec.len() {
+            scale(&mut self.w_hh_rec[l], err.get(l).and_then(Option::as_ref));
+        }
+        for l in 0..self.w_hh_fwd.len() {
+            scale(&mut self.w_hh_fwd[l], err.get(l + 1).and_then(Option::as_ref));
+        }
+        for l in 0..self.w_hh_bwd.len() {
+            scale(&mut self.w_hh_bwd[l], err.get(l).and_then(Option::as_ref));
+        }
+        scale(&mut self.w_out, err.get(n_hidden).and_then(Option::as_ref));
+        #[cfg(feature = "opencl")]
+        self.mark_all_weights_dirty();
+    }
+
+    /// Long-term plasticity proposals for hidden layer `l`'s recurrent
+    /// synapses (pre and post in the same layer), honouring the plastic-cell
+    /// mask. Shared by the CPU reference path and the accelerator path.
+    fn recurrent_plasticity_proposals(
+        &self,
+        l: usize,
+        rule: PlasticityRule,
+        eta: f64,
+        act_h: &[Vec<f64>],
+    ) -> Vec<WeightProposal> {
+        let Some(mat) = self.w_hh_rec.get(l) else {
+            return Vec::new();
+        };
+        let mask = &self.net.aarnn_plastic_cells;
+        let act = |i: usize| act_h.get(l).and_then(|a| a.get(i)).copied().unwrap_or(0.0);
+        let trace =
+            |t: &[Array1<f64>], i: usize| t.get(l).and_then(|v| v.get(i)).copied().unwrap_or(0.0);
+        matrix_plasticity_proposals(
+            mat,
+            |row| mask.hidden_learns(l, row),
+            |row, col| {
+                (
+                    act(col),
+                    act(row),
+                    trace(&self.x_pre_h, col),
+                    trace(&self.x_post_h, row),
+                )
+            },
+            rule,
+            eta,
+        )
+    }
+
     fn apply_cpu_plasticity_proposals(
         &mut self,
         eta: f64,
@@ -9357,45 +10235,32 @@ impl Runner {
         let rule = runner_plasticity_rule(self.learning);
         let w_min = self.stdp.w_min;
         let w_max = self.stdp.w_max;
+        let (act_h, act_o) = self.plasticity_activity();
+
+        let mask = self.net.aarnn_plastic_cells.clone();
+        let trace = |t: &[Array1<f64>], l: usize, i: usize| -> f64 {
+            t.get(l).and_then(|v| v.get(i)).copied().unwrap_or(0.0)
+        };
+        let act = |l: usize, i: usize| -> f64 {
+            act_h.get(l).and_then(|a| a.get(i)).copied().unwrap_or(0.0)
+        };
 
         if in_l == 0 && self.is_layer_assigned(0) && !self.w_in.is_empty() {
-            let (rows, cols) = self.w_in.dim();
-            let mut proposals = Vec::with_capacity(rows.saturating_mul(cols));
-            for row in 0..rows {
-                for col in 0..cols {
+            let proposals = matrix_plasticity_proposals(
+                &self.w_in,
+                |row| mask.hidden_learns(0, row),
+                |row, col| {
                     let pre = if sensory_spikes.get(col).copied().unwrap_or(0) != 0 {
                         1.0
                     } else {
                         0.0
                     };
-                    let post = if self
-                        .last_spk_h
-                        .get(0)
-                        .and_then(|spikes| spikes.get(row))
-                        .copied()
-                        .unwrap_or(0)
-                        != 0
-                    {
-                        1.0
-                    } else {
-                        0.0
-                    };
                     let pre_trace = self.x_pre_in.get(col).copied().unwrap_or(0.0);
-                    let post_trace = self
-                        .x_post_h
-                        .get(0)
-                        .and_then(|trace| trace.get(row))
-                        .copied()
-                        .unwrap_or(0.0);
-                    let current = self.w_in[(row, col)];
-                    proposals.push(WeightProposal::new(
-                        row,
-                        col,
-                        current,
-                        weight_delta(rule, eta, pre, post, pre_trace, post_trace, current),
-                    ));
-                }
-            }
+                    (pre, act(0, row), pre_trace, trace(&self.x_post_h, 0, row))
+                },
+                rule,
+                eta,
+            );
             commit_weight_proposals(&mut self.w_in, &proposals, w_min, w_max)
                 .expect("CPU input plasticity proposals must commit atomically");
             #[cfg(feature = "opencl")]
@@ -9404,164 +10269,47 @@ impl Runner {
             }
         }
 
-        for l in 0..num_hidden_layers.saturating_sub(1) {
-            if l >= self.w_hh_fwd.len() || l >= self.w_hh_bwd.len() {
-                continue;
+        // Every hidden layer learns its own recurrent synapses (the last one
+        // was skipped before, so a single-layer connectome never learned
+        // its recurrent wiring); fwd/bwd connect each pair of layers.
+        for l in 0..num_hidden_layers {
+            if l + 1 < num_hidden_layers && l < self.w_hh_fwd.len() && l < self.w_hh_bwd.len() {
+                let fwd = matrix_plasticity_proposals(
+                    &self.w_hh_fwd[l],
+                    |row| mask.hidden_learns(l + 1, row),
+                    |row, col| {
+                        (
+                            act(l, col),
+                            act(l + 1, row),
+                            trace(&self.x_pre_h, l, col),
+                            trace(&self.x_post_h, l + 1, row),
+                        )
+                    },
+                    rule,
+                    eta,
+                );
+                commit_weight_proposals(&mut self.w_hh_fwd[l], &fwd, w_min, w_max)
+                    .expect("CPU forward plasticity proposals must commit atomically");
+                let bwd = matrix_plasticity_proposals(
+                    &self.w_hh_bwd[l],
+                    |row| mask.hidden_learns(l, row),
+                    |row, col| {
+                        (
+                            act(l + 1, col),
+                            act(l, row),
+                            trace(&self.x_pre_h, l + 1, col),
+                            trace(&self.x_post_h, l, row),
+                        )
+                    },
+                    rule,
+                    eta,
+                );
+                commit_weight_proposals(&mut self.w_hh_bwd[l], &bwd, w_min, w_max)
+                    .expect("CPU backward plasticity proposals must commit atomically");
             }
-            let (fwd_rows, fwd_cols) = self.w_hh_fwd[l].dim();
-            let mut fwd_proposals = Vec::with_capacity(fwd_rows.saturating_mul(fwd_cols));
-            for row in 0..fwd_rows {
-                for col in 0..fwd_cols {
-                    let pre = if self
-                        .last_spk_h
-                        .get(l)
-                        .and_then(|spikes| spikes.get(col))
-                        .copied()
-                        .unwrap_or(0)
-                        != 0
-                    {
-                        1.0
-                    } else {
-                        0.0
-                    };
-                    let post = if self
-                        .last_spk_h
-                        .get(l + 1)
-                        .and_then(|spikes| spikes.get(row))
-                        .copied()
-                        .unwrap_or(0)
-                        != 0
-                    {
-                        1.0
-                    } else {
-                        0.0
-                    };
-                    let pre_trace = self
-                        .x_pre_h
-                        .get(l)
-                        .and_then(|trace| trace.get(col))
-                        .copied()
-                        .unwrap_or(0.0);
-                    let post_trace = self
-                        .x_post_h
-                        .get(l + 1)
-                        .and_then(|trace| trace.get(row))
-                        .copied()
-                        .unwrap_or(0.0);
-                    let current = self.w_hh_fwd[l][(row, col)];
-                    fwd_proposals.push(WeightProposal::new(
-                        row,
-                        col,
-                        current,
-                        weight_delta(rule, eta, pre, post, pre_trace, post_trace, current),
-                    ));
-                }
-            }
-            commit_weight_proposals(&mut self.w_hh_fwd[l], &fwd_proposals, w_min, w_max)
-                .expect("CPU forward plasticity proposals must commit atomically");
-
-            let (bwd_rows, bwd_cols) = self.w_hh_bwd[l].dim();
-            let mut bwd_proposals = Vec::with_capacity(bwd_rows.saturating_mul(bwd_cols));
-            for row in 0..bwd_rows {
-                for col in 0..bwd_cols {
-                    let pre = if self
-                        .last_spk_h
-                        .get(l + 1)
-                        .and_then(|spikes| spikes.get(col))
-                        .copied()
-                        .unwrap_or(0)
-                        != 0
-                    {
-                        1.0
-                    } else {
-                        0.0
-                    };
-                    let post = if self
-                        .last_spk_h
-                        .get(l)
-                        .and_then(|spikes| spikes.get(row))
-                        .copied()
-                        .unwrap_or(0)
-                        != 0
-                    {
-                        1.0
-                    } else {
-                        0.0
-                    };
-                    let pre_trace = self
-                        .x_pre_h
-                        .get(l + 1)
-                        .and_then(|trace| trace.get(col))
-                        .copied()
-                        .unwrap_or(0.0);
-                    let post_trace = self
-                        .x_post_h
-                        .get(l)
-                        .and_then(|trace| trace.get(row))
-                        .copied()
-                        .unwrap_or(0.0);
-                    let current = self.w_hh_bwd[l][(row, col)];
-                    bwd_proposals.push(WeightProposal::new(
-                        row,
-                        col,
-                        current,
-                        weight_delta(rule, eta, pre, post, pre_trace, post_trace, current),
-                    ));
-                }
-            }
-            commit_weight_proposals(&mut self.w_hh_bwd[l], &bwd_proposals, w_min, w_max)
-                .expect("CPU backward plasticity proposals must commit atomically");
             if l < self.w_hh_rec.len() {
-                let (rec_rows, rec_cols) = self.w_hh_rec[l].dim();
-                let mut rec_proposals = Vec::with_capacity(rec_rows.saturating_mul(rec_cols));
-                for row in 0..rec_rows {
-                    for col in 0..rec_cols {
-                        let pre = if self
-                            .last_spk_h
-                            .get(l)
-                            .and_then(|spikes| spikes.get(col))
-                            .copied()
-                            .unwrap_or(0)
-                            != 0
-                        {
-                            1.0
-                        } else {
-                            0.0
-                        };
-                        let post = if self
-                            .last_spk_h
-                            .get(l)
-                            .and_then(|spikes| spikes.get(row))
-                            .copied()
-                            .unwrap_or(0)
-                            != 0
-                        {
-                            1.0
-                        } else {
-                            0.0
-                        };
-                        let pre_trace = self
-                            .x_pre_h
-                            .get(l)
-                            .and_then(|trace| trace.get(col))
-                            .copied()
-                            .unwrap_or(0.0);
-                        let post_trace = self
-                            .x_post_h
-                            .get(l)
-                            .and_then(|trace| trace.get(row))
-                            .copied()
-                            .unwrap_or(0.0);
-                        let current = self.w_hh_rec[l][(row, col)];
-                        rec_proposals.push(WeightProposal::new(
-                            row,
-                            col,
-                            current,
-                            weight_delta(rule, eta, pre, post, pre_trace, post_trace, current),
-                        ));
-                    }
-                }
-                commit_weight_proposals(&mut self.w_hh_rec[l], &rec_proposals, w_min, w_max)
+                let rec = self.recurrent_plasticity_proposals(l, rule, eta, &act_h);
+                commit_weight_proposals(&mut self.w_hh_rec[l], &rec, w_min, w_max)
                     .expect("CPU recurrent plasticity proposals must commit atomically");
             }
             #[cfg(feature = "opencl")]
@@ -9579,43 +10327,20 @@ impl Runner {
         }
 
         if self.is_output_stage_assigned(out_l) && out_l < self.net.num_hidden_layers + 1 {
-            let (rows, cols) = self.w_out.dim();
-            let mut proposals = Vec::with_capacity(rows.saturating_mul(cols));
-            for row in 0..rows {
-                for col in 0..cols {
-                    let pre = if self
-                        .last_spk_h
-                        .get(out_l)
-                        .and_then(|spikes| spikes.get(col))
-                        .copied()
-                        .unwrap_or(0)
-                        != 0
-                    {
-                        1.0
-                    } else {
-                        0.0
-                    };
-                    let post = if self.last_spk_o.get(row).copied().unwrap_or(0) != 0 {
-                        1.0
-                    } else {
-                        0.0
-                    };
-                    let pre_trace = self
-                        .x_pre_h
-                        .get(out_l)
-                        .and_then(|trace| trace.get(col))
-                        .copied()
-                        .unwrap_or(0.0);
-                    let post_trace = self.x_post_o.get(row).copied().unwrap_or(0.0);
-                    let current = self.w_out[(row, col)];
-                    proposals.push(WeightProposal::new(
-                        row,
-                        col,
-                        current,
-                        weight_delta(rule, eta, pre, post, pre_trace, post_trace, current),
-                    ));
-                }
-            }
+            let proposals = matrix_plasticity_proposals(
+                &self.w_out,
+                |row| mask.output_learns(row),
+                |row, col| {
+                    (
+                        act(out_l, col),
+                        act_o.get(row).copied().unwrap_or(0.0),
+                        trace(&self.x_pre_h, out_l, col),
+                        self.x_post_o.get(row).copied().unwrap_or(0.0),
+                    )
+                },
+                rule,
+                eta,
+            );
             commit_weight_proposals(&mut self.w_out, &proposals, w_min, w_max)
                 .expect("CPU output plasticity proposals must commit atomically");
             #[cfg(feature = "opencl")]
@@ -9636,6 +10361,9 @@ impl Runner {
     /// deliberately does not own or advance logical time; the facade/executor
     /// commits the tick only after this method returns.
     fn run_legacy_biological_kernel(&mut self, s_t_external: Option<&[i8]>) -> StepOut {
+        if self.neuron_shard.is_some() {
+            self.begin_neuron_shard_step(s_t_external);
+        }
         fastrand::seed(self.rng.get_seed());
         let (in_l, out_l) = self.get_io_layers();
 
@@ -9709,6 +10437,17 @@ impl Runner {
         if self.net.use_morphology && !self.morphology_route_cache_matches_topology() {
             self.rebuild_syn_maps_from_morph();
         }
+        // Route delays are depth dependent (velocities, latency, jitter); a
+        // run-time depth change (UI slider, distributed lag controller) must
+        // re-quantise them instead of keeping the previous depth's delays.
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        if self.net.use_morphology
+            && self
+                .route_steps_depth
+                .is_some_and(|d| d != self.net.aarnn_layer_depth)
+        {
+            self.recompute_route_steps();
+        }
 
         let is_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
         let depth = self.net.aarnn_layer_depth;
@@ -9725,9 +10464,11 @@ impl Runner {
         let neuromod_state_s = self.neuromod_serotonin.max(0.0) as f64;
         let neuromod_state_a = self.neuromod_ach.max(0.0) as f64;
         let neuromod_plasticity_gain = if use_aarnn_bio && bio.neuromodulation_enabled {
+            // Dopamine/serotonin ratio. Bounded: a near-zero serotonin state
+            // previously multiplied the learning rate by up to 1e6.
             ((bio.dopamine_gain * neuromod_state_d)
                 / (bio.serotonin_gain * neuromod_state_s).max(1e-6))
-            .max(0.0)
+            .clamp(0.0, 10.0)
         } else {
             1.0
         };
@@ -9772,6 +10513,11 @@ impl Runner {
                 && sim_parallel.worker_budget > 1
                 && rows.saturating_mul(cols) >= sim_parallel.matrix_ops_threshold
         };
+        // Layer shard: admit the previous-step state of layers (and the
+        // output stage) that the single-node kernel evaluates after ours.
+        if self.layer_range.is_some() {
+            self.admit_staged_downstream_state();
+        }
         let prev_spk_h = self
             .last_spk_h
             .iter()
@@ -10030,6 +10776,29 @@ impl Runner {
                 !stp_gpu_updated_s,
                 &stp_gpu_updated_h,
             );
+            // Transmission uses release relative to the resting utilisation:
+            // the stored weight is the synapse's resting efficacy, so an
+            // isolated spike transmits `w` and STP only adds facilitation and
+            // depression around it. The raw Tsodyks-Markram release `u * x`
+            // (0.2 at rest by default) silently cut every synapse five-fold
+            // the moment depth 1 enabled STP.
+            for (i, r) in stp_release_s.iter_mut().enumerate() {
+                *r /= self.stp_baseline_s(i);
+            }
+            for (l, release) in stp_release_h.iter_mut().enumerate() {
+                for (j, r) in release.iter_mut().enumerate() {
+                    *r /= self.stp_baseline_h(l, j);
+                }
+            }
+            // `stp_release_h` is the exact release of the frame emitted last
+            // step, which is now the newest entry of each hidden history.
+            for (l, release) in stp_release_h.iter().enumerate() {
+                if let Some(front) = self.stp_rel_hist_h.get_mut(l).and_then(|dq| dq.front_mut())
+                    && front.len() == release.len()
+                {
+                    front.copy_from_slice(release);
+                }
+            }
         }
 
         self.decay_threshold_homeostasis_phase(
@@ -10226,6 +10995,12 @@ impl Runner {
             self.spk_hist_s.push_front(Array1::from_vec(s_t.clone()));
             while self.spk_hist_s.len() > self.hist_len {
                 self.spk_hist_s.pop_back();
+            }
+            if use_stp {
+                self.stp_rel_hist_s.push_front(stp_release_s.clone());
+                while self.stp_rel_hist_s.len() > self.hist_len.max(1) {
+                    self.stp_rel_hist_s.pop_back();
+                }
             }
         }
 
@@ -11049,14 +11824,19 @@ impl Runner {
 
             if !gpu_success {
                 self.log_gpu_cpu_fallback("hidden_input_accumulation");
+                // A neuron shard computes the input of its own cells only.
+                let rows_h0 = self.neuron_shard_rows(num_hidden_0_neurons);
+                // First stored weight row (a partition-stored shard keeps only its own).
+                let row0_h = self.shard_row_offset(0);
                 observe_time!("Runner::step/i_h0/accum");
                 if can_parallel_light(num_hidden_0_neurons) {
                     // Parallel over postsynaptic neurons j. Accumulate directly into i_h0[j].
                     #[cfg(all(feature = "morpho", feature = "growth3d"))]
                     {
-                        let events_tls: Vec<(usize, f64, Vec<ReleasedEvent>)> = (0..num_hidden_0_neurons)
+                        let events_tls: Vec<(usize, f64, Vec<ReleasedEvent>)> = rows_h0.clone()
                             .into_par_iter()
                             .map(|j| {
+                                let jw = j - row0_h;
                                 let mut acc = 0.0f64;
                                 let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
                                 let mut events: Vec<ReleasedEvent> = Vec::new();
@@ -11065,7 +11845,7 @@ impl Runner {
                                     let mut has_sparse_sensory_route = false;
                                     if in_l == 0 {
                                         for &(i, syn_idx) in self.recv_in.get(j).map(|v| v.as_slice()).unwrap_or(&[]) {
-                                            let w_val = self.w_in.get((j, i)).copied().unwrap_or_else(|| {
+                                            let w_val = self.w_in.get((jw, i)).copied().unwrap_or_else(|| {
                                                 nm_log!("[warn] w_in event acc out of bounds: ({}, {})", j, i);
                                                 0.0
                                             });
@@ -11076,7 +11856,7 @@ impl Runner {
                                             let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                                             let s = self.hist_s_at(steps, i);
                                             if s != 0 {
-                                                let stp_scale = if use_stp { stp_release_s.get(i).copied().unwrap_or(0.0) } else { 1.0 };
+                                                let stp_scale = if use_stp { self.stp_release_s_at(steps, i) } else { 1.0 };
                                                 if self.should_release(syn_idx) {
                                                     acc += w_val * atten * stp_scale;
                                                     events.push(ReleasedEvent{
@@ -11093,7 +11873,7 @@ impl Runner {
                                         if !has_sparse_sensory_route {
                                             for &i in &active_s_indices {
                                                 let stp_scale = if use_stp { stp_release_s.get(i).copied().unwrap_or(0.0) } else { 1.0 };
-                                                acc += self.w_in.get((j, i)).copied().unwrap_or(0.0) * stp_scale;
+                                                acc += self.w_in.get((jw, i)).copied().unwrap_or(0.0) * stp_scale;
                                             }
                                         }
                                     }
@@ -11101,9 +11881,9 @@ impl Runner {
                                     for &(i, si) in self.recv_rec.get(0).and_then(|v| v.get(j)).map(|v| v.as_slice()).unwrap_or(&[]) {
                                         let (steps, atten) = self.syn_delay_and_atten(si);
                                         if self.hist_h_at(0, steps, i) != 0 {
-                                            let stp_scale = if use_stp { stp_release_h.get(0).and_then(|v| v.get(i)).copied().unwrap_or(0.0) } else { 1.0 };
+                                            let stp_scale = if use_stp { self.stp_release_h_at(0, steps, i) } else { 1.0 };
                                             if self.should_release(si) {
-                                                let w_val = self.w_hh_rec.get(0).and_then(|m| m.get((j, i))).copied().unwrap_or(0.0);
+                                                let w_val = self.w_hh_rec.get(0).and_then(|m| m.get((jw, i))).copied().unwrap_or(0.0);
                                                 acc += w_val * atten * stp_scale;
                                                 events.push(ReleasedEvent{
                                                         kind: ReleasedKind::HiddenRec { layer: 0 },
@@ -11117,7 +11897,14 @@ impl Runner {
                                         }
                                     }
                                 } else if use_aarnn {
-                                    if in_l == 0 {
+                                    if in_l == 0 && self.net.use_morphology {
+                                        // Morphology without sensory routes: the serial
+                                        // path's per-neuron dense fallback.
+                                        for &i in &active_s_indices {
+                                            let stp_scale = if use_stp { stp_release_s.get(i).copied().unwrap_or(0.0) } else { 1.0 };
+                                            acc += self.w_in.get((jw, i)).copied().unwrap_or(0.0) * stp_scale;
+                                        }
+                                    } else if in_l == 0 {
                                         // Legacy AARNN path — use pre-computed delay cache
                                         // instead of recomputing sqrt every step.
                                         for i in 0..self.net.num_sensory_neurons {
@@ -11132,8 +11919,39 @@ impl Runner {
                                                 { s_t[i] }
                                             };
                                             if s != 0 {
-                                                let stp_scale = if use_stp { stp_release_s.get(i).copied().unwrap_or(0.0) } else { 1.0 };
-                                                acc += self.w_in[(j,i)] * stp_scale;
+                                                let stp_scale = if use_stp { self.stp_release_s_at(steps_delay, i) } else { 1.0 };
+                                                acc += self.w_in[(jw,i)] * stp_scale;
+                                            }
+                                        }
+                                    }
+                                    // Recurrent current for Layer 0, identical to the
+                                    // serial path: routed when morphology is active,
+                                    // dense over last-step spikes otherwise. This
+                                    // branch previously dropped recurrence entirely.
+                                    if self.net.use_morphology {
+                                        for &(i, si) in self.recv_rec.get(0).and_then(|v| v.get(j)).map(|v| v.as_slice()).unwrap_or(&[]) {
+                                            let (steps, atten) = self.syn_delay_and_atten(si);
+                                            if self.hist_h_at(0, steps, i) != 0 {
+                                                let stp_scale = if use_stp { self.stp_release_h_at(0, steps, i) } else { 1.0 };
+                                                if self.should_release(si) {
+                                                    let w_val = self.w_hh_rec.get(0).and_then(|m| m.get((jw, i))).copied().unwrap_or(0.0);
+                                                    acc += w_val * atten * stp_scale;
+                                                    events.push(ReleasedEvent{
+                                                            kind: ReleasedKind::HiddenRec { layer: 0 },
+                                                            pre_layer: 0,
+                                                            post_layer: 0,
+                                                            pre_id: i,
+                                                            post_id: j,
+                                                            syn_idx: Some(si),
+                                                        });
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        for i in 0..num_hidden_0_neurons {
+                                            if self.last_spk_h.get(0).and_then(|v| v.get(i)).copied().unwrap_or(0) != 0 {
+                                                let stp_scale = if use_stp { stp_release_h.get(0).and_then(|v| v.get(i)).copied().unwrap_or(0.0) } else { 1.0 };
+                                                acc += self.w_hh_rec.get(0).and_then(|m| m.get((jw, i))).copied().unwrap_or(0.0) * stp_scale;
                                             }
                                         }
                                     }
@@ -11141,7 +11959,7 @@ impl Runner {
                                     if in_l == 0 {
                                         for &i in &active_s_indices {
                                             let stp_scale = if use_stp { stp_release_s.get(i).copied().unwrap_or(0.0) } else { 1.0 };
-                                            acc += self.w_in.get((j, i)).copied().unwrap_or(0.0) * stp_scale;
+                                            acc += self.w_in.get((jw, i)).copied().unwrap_or(0.0) * stp_scale;
                                         }
                                     }
                                 }
@@ -11157,9 +11975,11 @@ impl Runner {
                     }
                     #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
                     {
-                        let results_simple: Vec<(usize, f64)> = (0..num_hidden_0_neurons)
+                        let results_simple: Vec<(usize, f64)> = rows_h0
+                            .clone()
                             .into_par_iter()
                             .map(|j| {
+                                let jw = j - row0_h;
                                 let mut acc = 0.0f64;
                                 let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
                                 #[allow(unused_variables)]
@@ -11212,11 +12032,11 @@ impl Runner {
                                         };
                                         if s != 0 {
                                             let stp_scale = if use_stp {
-                                                stp_release_s.get(i).copied().unwrap_or(0.0)
+                                                self.stp_release_s_at(steps_delay, i)
                                             } else {
                                                 1.0
                                             };
-                                            acc += self.w_in[(j, i)] * stp_scale;
+                                            acc += self.w_in[(jw, i)] * stp_scale;
                                         }
                                     }
                                     // Sparse recurrent for Layer 0
@@ -11233,7 +12053,7 @@ impl Runner {
                                         acc += self
                                             .w_hh_rec
                                             .get(0)
-                                            .and_then(|m| m.get((j, i)))
+                                            .and_then(|m| m.get((jw, i)))
                                             .copied()
                                             .unwrap_or(0.0)
                                             * stp_scale;
@@ -11245,7 +12065,7 @@ impl Runner {
                                         } else {
                                             1.0
                                         };
-                                        acc += self.w_in.get((j, i)).copied().unwrap_or(0.0)
+                                        acc += self.w_in.get((jw, i)).copied().unwrap_or(0.0)
                                             * stp_scale;
                                     }
                                 }
@@ -11257,7 +12077,8 @@ impl Runner {
                         }
                     }
                 } else {
-                    for j in 0..num_hidden_0_neurons {
+                    for j in rows_h0.clone() {
+                        let jw = j - row0_h;
                         let mut acc = 0.0;
                         let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
                         #[allow(unused_variables)]
@@ -11270,7 +12091,7 @@ impl Runner {
                                     for &(i, syn_idx) in
                                         self.recv_in.get(j).map(|v| v.as_slice()).unwrap_or(&[])
                                     {
-                                        let w_val = self.w_in.get((j, i)).copied().unwrap_or(0.0);
+                                        let w_val = self.w_in.get((jw, i)).copied().unwrap_or(0.0);
                                         if w_val.abs() <= 1.0e-12 {
                                             continue;
                                         }
@@ -11279,7 +12100,7 @@ impl Runner {
                                         let s = self.hist_s_at(steps, i);
                                         if s != 0 {
                                             let stp_scale = if use_stp {
-                                                stp_release_s.get(i).copied().unwrap_or(0.0)
+                                                self.stp_release_s_at(steps, i)
                                             } else {
                                                 1.0
                                             };
@@ -11303,7 +12124,7 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            acc += self.w_in.get((j, i)).copied().unwrap_or(0.0)
+                                            acc += self.w_in.get((jw, i)).copied().unwrap_or(0.0)
                                                 * stp_scale;
                                         }
                                     }
@@ -11328,11 +12149,11 @@ impl Runner {
                                         };
                                         if s != 0 {
                                             let stp_scale = if use_stp {
-                                                stp_release_s.get(i).copied().unwrap_or(0.0)
+                                                self.stp_release_s_at(steps_delay, i)
                                             } else {
                                                 1.0
                                             };
-                                            acc += self.w_in[(j, i)] * stp_scale;
+                                            acc += self.w_in[(jw, i)] * stp_scale;
                                         }
                                     }
                                 }
@@ -11358,11 +12179,11 @@ impl Runner {
                                         };
                                         if s != 0 {
                                             let stp_scale = if use_stp {
-                                                stp_release_s.get(i).copied().unwrap_or(0.0)
+                                                self.stp_release_s_at(steps_delay, i)
                                             } else {
                                                 1.0
                                             };
-                                            acc += self.w_in[(j, i)] * stp_scale;
+                                            acc += self.w_in[(jw, i)] * stp_scale;
                                         }
                                     }
                                 }
@@ -11375,7 +12196,7 @@ impl Runner {
                                     } else {
                                         1.0
                                     };
-                                    let w_val = self.w_in.get((j, i)).copied().unwrap_or(0.0);
+                                    let w_val = self.w_in.get((jw, i)).copied().unwrap_or(0.0);
                                     acc += w_val * stp_scale;
                                 }
                             }
@@ -11395,11 +12216,7 @@ impl Runner {
                                         let (steps, atten) = self.syn_delay_and_atten(si);
                                         if self.hist_h_at(0, steps, i) != 0 {
                                             let stp_scale = if use_stp {
-                                                stp_release_h
-                                                    .get(0)
-                                                    .and_then(|v| v.get(i))
-                                                    .copied()
-                                                    .unwrap_or(0.0)
+                                                self.stp_release_h_at(0, steps, i)
                                             } else {
                                                 1.0
                                             };
@@ -11407,7 +12224,7 @@ impl Runner {
                                                 let w_val = self
                                                     .w_hh_rec
                                                     .get(0)
-                                                    .and_then(|m| m.get((j, i)))
+                                                    .and_then(|m| m.get((jw, i)))
                                                     .copied()
                                                     .unwrap_or(0.0);
                                                 acc += w_val * atten * stp_scale;
@@ -11445,7 +12262,7 @@ impl Runner {
                                         let w_val = self
                                             .w_hh_rec
                                             .get(0)
-                                            .and_then(|m| m.get((j, i)))
+                                            .and_then(|m| m.get((jw, i)))
                                             .copied()
                                             .unwrap_or(0.0);
                                         acc += w_val * stp_scale;
@@ -11455,6 +12272,27 @@ impl Runner {
                         }
                         i_h0[j] += acc;
                     }
+                }
+            }
+            // Graded presynaptic cells (tonic release) join the spike drive
+            // before the depth-gated synaptic stage.
+            let mut graded_h0_post: Option<Array1<f64>> = None;
+            if let Some(raw) = self.graded_drive_hidden(0) {
+                if gpu_filtered_h0 {
+                    graded_h0_post = Some(Self::apply_depth0_synaptic_charge(
+                        self.lif.dt,
+                        &self.net.aarnn_bio,
+                        &raw,
+                        Some(&self.v_h[0]),
+                        self.net.aarnn_nmda_voltage_sensitivity.max(0.0) as f64,
+                        #[cfg(feature = "growth3d")]
+                        Some(&self.bio_h[0]),
+                        #[cfg(not(feature = "growth3d"))]
+                        None,
+                        &default_decays,
+                    ));
+                } else {
+                    i_h0 += &raw;
                 }
             }
             #[cfg(any(feature = "ui", feature = "growth3d"))]
@@ -11479,7 +12317,24 @@ impl Runner {
                     None,
                     &default_decays,
                 );
+            } else if is_aarnn && !use_synaptic_filter && num_hidden_0_neurons > 0 {
+                i_h0 = Self::apply_depth0_synaptic_charge(
+                    self.lif.dt,
+                    &self.net.aarnn_bio,
+                    &i_h0,
+                    Some(&self.v_h[0]),
+                    self.net.aarnn_nmda_voltage_sensitivity.max(0.0) as f64,
+                    #[cfg(feature = "growth3d")]
+                    Some(&self.bio_h[0]),
+                    #[cfg(not(feature = "growth3d"))]
+                    None,
+                    &default_decays,
+                );
             }
+            if let Some(g) = graded_h0_post {
+                i_h0 += &g;
+            }
+            self.apply_connectome_gap_currents(0, &mut i_h0);
             if is_aarnn && num_hidden_0_neurons > 1 {
                 observe_time!("Runner::step/i_h0/gap_junction");
                 let g_gap = self.net.aarnn_gap_junction_strength.max(0.0) as f64;
@@ -11496,9 +12351,11 @@ impl Runner {
                 observe_time!("Runner::step/i_h0/active_dend");
                 self.apply_active_dendritic_compartments_layer(0, &mut i_h0);
             }
+            self.add_tonic_currents_h(0, &mut i_h0);
             Self::sanitize_current_array(&mut i_h0);
 
             // Update hidden layer 0 (parallel-friendly via temporary buffers)
+            let graded_pre_h0 = self.graded_pre_state_h(0);
             let spk_h0 = {
                 observe_time!("Runner::step/spk_h0");
                 #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
@@ -11722,16 +12579,17 @@ impl Runner {
                                 let res: Vec<(f64, f64, f64, i32, i8)> = (0..num_hidden_0_neurons)
                                     .into_par_iter()
                                     .map(|j| {
+                                        let nb = self.hidden_neuron_bio(0, j).unwrap_or(&bio);
                                         let transition = izh_transition(
                                             old_v[j],
                                             old_u[j],
                                             i_h0[j],
-                                            p,
+                                            self.neuron_izh_params(Some(nb), p),
                                             self.thr_offset_h[0][j],
                                             use_adaptive_threshold,
-                                            bio.adaptive_threshold_increment,
-                                            bio.adaptive_threshold_min,
-                                            bio.adaptive_threshold_max,
+                                            nb.adaptive_threshold_increment,
+                                            nb.adaptive_threshold_min,
+                                            nb.adaptive_threshold_max,
                                             if use_izh_refractory {
                                                 Some(old_refr[j])
                                             } else {
@@ -11783,6 +12641,12 @@ impl Runner {
                     }
                 }
             };
+            let spk_h0 = if graded_pre_h0.is_empty() {
+                spk_h0
+            } else {
+                self.finish_graded_hidden(0, &graded_pre_h0, &i_h0, spk_h0)
+            };
+            let spk_h0 = self.merge_neuron_shard_hidden(0, spk_h0);
             self.record_hidden_spike_phase(
                 0,
                 &spk_h0,
@@ -11799,6 +12663,9 @@ impl Runner {
                     self.since_growth_ms[0][j] += dt_ms;
                 }
             }
+        } else {
+            // Layer shard: layer 0 is owned upstream; admit its current step.
+            self.admit_staged_remote_layer(0);
         }
 
         // Next layers 1..num_hidden_layers-1
@@ -11806,10 +12673,15 @@ impl Runner {
             observe_time!("Runner::step/hidden_layers");
             for l in 1..num_hidden_layers {
                 if !self.is_layer_assigned(l) {
+                    // Layer shard: admit an upstream layer's current step at
+                    // the point where the single-node kernel computes it.
+                    self.admit_staged_remote_layer(l);
                     continue;
                 }
                 let num_current_hidden_neurons = self.layer_size(l);
                 let num_previous_hidden_neurons = self.layer_size(l - 1);
+                // First stored weight row (a partition-stored shard keeps only its own).
+                let row0_h = self.shard_row_offset(l);
                 let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
 
                 #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
@@ -12843,10 +13715,11 @@ impl Runner {
                     } else if can_parallel_light(num_current_hidden_neurons) {
                         #[cfg(all(feature = "morpho", feature = "growth3d"))]
                         {
-                            let results: Vec<(usize, f64, f64, f64, Vec<ReleasedEvent>)> = (0
-                                ..num_current_hidden_neurons)
+                            let results: Vec<(usize, f64, f64, f64, Vec<ReleasedEvent>)> = self
+                                .neuron_shard_rows(num_current_hidden_neurons)
                                 .into_par_iter()
                                 .map(|j| {
+                                    let jw = j - row0_h;
                                     let mut acc_f = 0.0;
                                     let mut acc_b = 0.0;
                                     let mut acc_r = 0.0;
@@ -12863,24 +13736,20 @@ impl Runner {
                                             .map(|v| v.as_slice())
                                             .unwrap_or(&[])
                                         {
-                                            let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                                            let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                                             let s = self.hist_h_at(l - 1, steps, i);
                                             if s != 0 {
                                                 let stp_scale = if use_stp {
-                                                    stp_release_h
-                                                        .get(l - 1)
-                                                        .and_then(|v| v.get(i))
-                                                        .copied()
-                                                        .unwrap_or(0.0)
+                                                    self.stp_release_h_at(l - 1, steps, i)
                                                 } else {
                                                     1.0
                                                 };
                                                 if self.should_release(syn_idx) {
                                                     let w_val = self.w_hh_fwd[l - 1]
-                                                        .get((j, i))
+                                                        .get((jw, i))
                                                         .copied()
                                                         .unwrap_or(0.0);
-                                                    acc_f += w_val * stp_scale;
+                                                    acc_f += w_val * atten * stp_scale;
                                                     events.push(ReleasedEvent {
                                                         kind: ReleasedKind::Fwd { layer: l - 1 },
                                                         pre_layer: l as isize - 1,
@@ -12900,21 +13769,22 @@ impl Runner {
                                                 .map(|v| v.as_slice())
                                                 .unwrap_or(&[])
                                             {
-                                                let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                                                let (steps, atten) =
+                                                    self.syn_delay_and_atten(syn_idx);
                                                 let s = self.hist_s_at(steps, i);
                                                 if s != 0 {
                                                     let stp_scale = if use_stp {
-                                                        stp_release_s.get(i).copied().unwrap_or(0.0)
+                                                        self.stp_release_s_at(steps, i)
                                                     } else {
                                                         1.0
                                                     };
                                                     if self.should_release(syn_idx) {
                                                         let w_val = self
                                                             .w_in
-                                                            .get((j, i))
+                                                            .get((jw, i))
                                                             .copied()
                                                             .unwrap_or(0.0);
-                                                        acc_f += w_val * stp_scale;
+                                                        acc_f += w_val * atten * stp_scale;
                                                         events.push(ReleasedEvent {
                                                             kind: ReleasedKind::In,
                                                             pre_layer: -1,
@@ -12938,7 +13808,7 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            acc_f += self.w_hh_fwd[l - 1][(j, i)] * stp_scale;
+                                            acc_f += self.w_hh_fwd[l - 1][(jw, i)] * stp_scale;
                                         }
                                         if use_aarnn && l == in_l {
                                             // Legacy distance-based AARNN sensory input to designated input layer
@@ -12992,11 +13862,11 @@ impl Runner {
                                                 };
                                                 if s != 0 {
                                                     let stp_scale = if use_stp {
-                                                        stp_release_s.get(i).copied().unwrap_or(0.0)
+                                                        self.stp_release_s_at(steps_delay, i)
                                                     } else {
                                                         1.0
                                                     };
-                                                    acc_f += self.w_in[(j, i)] * stp_scale;
+                                                    acc_f += self.w_in[(jw, i)] * stp_scale;
                                                 }
                                             }
                                         }
@@ -13014,20 +13884,18 @@ impl Runner {
                                                 .map(|v| v.as_slice())
                                                 .unwrap_or(&[])
                                             {
-                                                let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                                                let (steps, atten) =
+                                                    self.syn_delay_and_atten(syn_idx);
                                                 let s = self.hist_h_at(l + 1, steps, next_j);
                                                 if s != 0 {
                                                     let stp_scale = if use_stp {
-                                                        stp_release_h
-                                                            .get(l + 1)
-                                                            .and_then(|v| v.get(next_j))
-                                                            .copied()
-                                                            .unwrap_or(0.0)
+                                                        self.stp_release_h_at(l + 1, steps, next_j)
                                                     } else {
                                                         1.0
                                                     };
                                                     if self.should_release(syn_idx) {
-                                                        acc_b += self.w_hh_bwd[l][(j, next_j)]
+                                                        acc_b += self.w_hh_bwd[l][(jw, next_j)]
+                                                            * atten
                                                             * stp_scale;
                                                         events.push(ReleasedEvent {
                                                             kind: ReleasedKind::Bwd { layer: l },
@@ -13051,7 +13919,7 @@ impl Runner {
                                                 } else {
                                                     1.0
                                                 };
-                                                acc_b += self.w_hh_bwd[l][(j, next_j)] * stp_scale;
+                                                acc_b += self.w_hh_bwd[l][(jw, next_j)] * stp_scale;
                                             }
                                         }
                                     }
@@ -13065,15 +13933,12 @@ impl Runner {
                                                 .map(|v| v.as_slice())
                                                 .unwrap_or(&[])
                                             {
-                                                let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                                                let (steps, atten) =
+                                                    self.syn_delay_and_atten(syn_idx);
                                                 let s = self.hist_h_at(l, steps, pre_id);
                                                 if s != 0 {
                                                     let stp_scale = if use_stp {
-                                                        stp_release_h
-                                                            .get(l)
-                                                            .and_then(|v| v.get(pre_id))
-                                                            .copied()
-                                                            .unwrap_or(0.0)
+                                                        self.stp_release_h_at(l, steps, pre_id)
                                                     } else {
                                                         1.0
                                                     };
@@ -13081,10 +13946,10 @@ impl Runner {
                                                         let w_val = self
                                                             .w_hh_rec
                                                             .get(l)
-                                                            .and_then(|m| m.get((j, pre_id)))
+                                                            .and_then(|m| m.get((jw, pre_id)))
                                                             .copied()
                                                             .unwrap_or(0.0);
-                                                        acc_r += w_val * stp_scale;
+                                                        acc_r += w_val * atten * stp_scale;
                                                         events.push(ReleasedEvent {
                                                             kind: ReleasedKind::HiddenRec {
                                                                 layer: l,
@@ -13112,7 +13977,7 @@ impl Runner {
                                                 let w_val = self
                                                     .w_hh_rec
                                                     .get(l)
-                                                    .and_then(|m| m.get((j, pre_id)))
+                                                    .and_then(|m| m.get((jw, pre_id)))
                                                     .copied()
                                                     .unwrap_or(0.0);
                                                 acc_r += w_val * stp_scale;
@@ -13136,10 +14001,11 @@ impl Runner {
                         }
                         #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
                         {
-                            let results: Vec<(usize, f64, f64, f64)> = (0
-                                ..num_current_hidden_neurons)
+                            let results: Vec<(usize, f64, f64, f64)> = self
+                                .neuron_shard_rows(num_current_hidden_neurons)
                                 .into_par_iter()
                                 .map(|j| {
+                                    let jw = j - row0_h;
                                     let mut acc_f = 0.0;
                                     for i in 0..num_previous_hidden_neurons {
                                         if self.last_spk_h[l - 1][i] != 0 {
@@ -13152,7 +14018,7 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            acc_f += self.w_hh_fwd[l - 1][(j, i)] * stp_scale;
+                                            acc_f += self.w_hh_fwd[l - 1][(jw, i)] * stp_scale;
                                         }
                                     }
                                     let mut acc_b = 0.0;
@@ -13169,7 +14035,7 @@ impl Runner {
                                                 } else {
                                                     1.0
                                                 };
-                                                acc_b += self.w_hh_bwd[l][(j, next_j)] * stp_scale;
+                                                acc_b += self.w_hh_bwd[l][(jw, next_j)] * stp_scale;
                                             }
                                         }
                                     }
@@ -13196,7 +14062,7 @@ impl Runner {
                                                 let w_val = self
                                                     .w_hh_rec
                                                     .get(l)
-                                                    .and_then(|m| m.get((j, pre_id)))
+                                                    .and_then(|m| m.get((jw, pre_id)))
                                                     .copied()
                                                     .unwrap_or(0.0);
                                                 acc_r += w_val * stp_scale;
@@ -13220,7 +14086,8 @@ impl Runner {
                         let mut i_f = Array1::<f64>::zeros(num_current_hidden_neurons);
                         let mut i_b = Array1::<f64>::zeros(num_current_hidden_neurons);
                         let mut i_r = Array1::<f64>::zeros(num_current_hidden_neurons);
-                        for j in 0..num_current_hidden_neurons {
+                        for j in self.neuron_shard_rows(num_current_hidden_neurons) {
+                            let jw = j - row0_h;
                             let mut acc_f = 0.0;
                             if use_aarnn {
                                 #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -13232,15 +14099,11 @@ impl Runner {
                                         .map(|v| v.as_slice())
                                         .unwrap_or(&[])
                                     {
-                                        let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                                        let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                                         let s = self.hist_h_at(l - 1, steps, i);
                                         if s != 0 {
                                             let stp_scale = if use_stp {
-                                                stp_release_h
-                                                    .get(l - 1)
-                                                    .and_then(|v| v.get(i))
-                                                    .copied()
-                                                    .unwrap_or(0.0)
+                                                self.stp_release_h_at(l - 1, steps, i)
                                             } else {
                                                 1.0
                                             };
@@ -13248,9 +14111,10 @@ impl Runner {
                                                 acc_f += self
                                                     .w_hh_fwd
                                                     .get(l - 1)
-                                                    .and_then(|m| m.get((j, i)))
+                                                    .and_then(|m| m.get((jw, i)))
                                                     .copied()
                                                     .unwrap_or(0.0)
+                                                    * atten
                                                     * stp_scale;
                                                 self.released_events.push(ReleasedEvent {
                                                     kind: ReleasedKind::Fwd { layer: l - 1 },
@@ -13268,21 +14132,21 @@ impl Runner {
                                         for &(i, syn_idx) in
                                             self.recv_in.get(j).map(|v| v.as_slice()).unwrap_or(&[])
                                         {
-                                            let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                                            let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                                             let s = self.hist_s_at(steps, i);
                                             if s != 0 {
                                                 let stp_scale = if use_stp {
-                                                    stp_release_s.get(i).copied().unwrap_or(0.0)
+                                                    self.stp_release_s_at(steps, i)
                                                 } else {
                                                     1.0
                                                 };
                                                 if self.should_release(syn_idx) {
                                                     let w_val = self
                                                         .w_in
-                                                        .get((j, i))
+                                                        .get((jw, i))
                                                         .copied()
                                                         .unwrap_or(0.0);
-                                                    acc_f += w_val * stp_scale;
+                                                    acc_f += w_val * atten * stp_scale;
                                                     self.released_events.push(ReleasedEvent {
                                                         kind: ReleasedKind::In,
                                                         pre_layer: -1,
@@ -13307,7 +14171,7 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            acc_f += self.w_hh_fwd[l - 1][(j, i)] * stp_scale;
+                                            acc_f += self.w_hh_fwd[l - 1][(jw, i)] * stp_scale;
                                         }
                                     }
                                     if l == in_l {
@@ -13359,11 +14223,11 @@ impl Runner {
                                             };
                                             if s != 0 {
                                                 let stp_scale = if use_stp {
-                                                    stp_release_s.get(i).copied().unwrap_or(0.0)
+                                                    self.stp_release_s_at(steps_delay, i)
                                                 } else {
                                                     1.0
                                                 };
-                                                acc_f += self.w_in[(j, i)] * stp_scale;
+                                                acc_f += self.w_in[(jw, i)] * stp_scale;
                                             }
                                         }
                                     }
@@ -13381,7 +14245,7 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            acc_f += self.w_hh_fwd[l - 1][(j, i)] * stp_scale;
+                                            acc_f += self.w_hh_fwd[l - 1][(jw, i)] * stp_scale;
                                         }
                                     }
                                     if l == in_l {
@@ -13433,11 +14297,11 @@ impl Runner {
                                             };
                                             if s != 0 {
                                                 let stp_scale = if use_stp {
-                                                    stp_release_s.get(i).copied().unwrap_or(0.0)
+                                                    self.stp_release_s_at(steps_delay, i)
                                                 } else {
                                                     1.0
                                                 };
-                                                acc_f += self.w_in[(j, i)] * stp_scale;
+                                                acc_f += self.w_in[(jw, i)] * stp_scale;
                                             }
                                         }
                                     }
@@ -13454,7 +14318,7 @@ impl Runner {
                                         } else {
                                             1.0
                                         };
-                                        acc_f += self.w_hh_fwd[l - 1][(j, i)] * stp_scale;
+                                        acc_f += self.w_hh_fwd[l - 1][(jw, i)] * stp_scale;
                                     }
                                 }
                             }
@@ -13472,21 +14336,18 @@ impl Runner {
                                             .map(|v| v.as_slice())
                                             .unwrap_or(&[])
                                         {
-                                            let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                                            let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                                             let s = self.hist_h_at(l + 1, steps, next_j);
                                             if s != 0 {
                                                 let stp_scale = if use_stp {
-                                                    stp_release_h
-                                                        .get(l + 1)
-                                                        .and_then(|v| v.get(next_j))
-                                                        .copied()
-                                                        .unwrap_or(0.0)
+                                                    self.stp_release_h_at(l + 1, steps, next_j)
                                                 } else {
                                                     1.0
                                                 };
                                                 if self.should_release(syn_idx) {
-                                                    acc_b +=
-                                                        self.w_hh_bwd[l][(j, next_j)] * stp_scale;
+                                                    acc_b += self.w_hh_bwd[l][(jw, next_j)]
+                                                        * atten
+                                                        * stp_scale;
                                                     self.released_events.push(ReleasedEvent {
                                                         kind: ReleasedKind::Bwd { layer: l },
                                                         pre_layer: l as isize + 1,
@@ -13511,7 +14372,7 @@ impl Runner {
                                                 } else {
                                                     1.0
                                                 };
-                                                acc_b += self.w_hh_bwd[l][(j, next_j)] * stp_scale;
+                                                acc_b += self.w_hh_bwd[l][(jw, next_j)] * stp_scale;
                                             }
                                         }
                                     }
@@ -13529,7 +14390,7 @@ impl Runner {
                                                 } else {
                                                     1.0
                                                 };
-                                                acc_b += self.w_hh_bwd[l][(j, next_j)] * stp_scale;
+                                                acc_b += self.w_hh_bwd[l][(jw, next_j)] * stp_scale;
                                             }
                                         }
                                     }
@@ -13546,7 +14407,7 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            acc_b += self.w_hh_bwd[l][(j, next_j)] * stp_scale;
+                                            acc_b += self.w_hh_bwd[l][(jw, next_j)] * stp_scale;
                                         }
                                     }
                                 }
@@ -13564,20 +14425,18 @@ impl Runner {
                                         .map(|v| v.as_slice())
                                         .unwrap_or(&[])
                                     {
-                                        let (steps, _) = self.syn_delay_and_atten(syn_idx);
+                                        let (steps, atten) = self.syn_delay_and_atten(syn_idx);
                                         let s = self.hist_h_at(l, steps, pre_id);
                                         if s != 0 {
                                             let stp_scale = if use_stp {
-                                                stp_release_h
-                                                    .get(l)
-                                                    .and_then(|v| v.get(pre_id))
-                                                    .copied()
-                                                    .unwrap_or(0.0)
+                                                self.stp_release_h_at(l, steps, pre_id)
                                             } else {
                                                 1.0
                                             };
                                             if self.should_release(syn_idx) {
-                                                acc_r += self.w_hh_rec[l][(j, pre_id)] * stp_scale;
+                                                acc_r += self.w_hh_rec[l][(jw, pre_id)]
+                                                    * atten
+                                                    * stp_scale;
                                                 self.released_events.push(ReleasedEvent {
                                                     kind: ReleasedKind::HiddenRec { layer: l },
                                                     pre_layer: l as isize,
@@ -13601,7 +14460,7 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            acc_r += self.w_hh_rec[l][(j, pre_id)] * stp_scale;
+                                            acc_r += self.w_hh_rec[l][(jw, pre_id)] * stp_scale;
                                         }
                                     }
                                 }
@@ -13618,7 +14477,7 @@ impl Runner {
                                             } else {
                                                 1.0
                                             };
-                                            acc_r += self.w_hh_rec[l][(j, pre_id)] * stp_scale;
+                                            acc_r += self.w_hh_rec[l][(jw, pre_id)] * stp_scale;
                                         }
                                     }
                                 }
@@ -13629,6 +14488,25 @@ impl Runner {
                     }
                 };
                 let (mut i_f, mut i_b) = (i_f, i_b);
+                let mut graded_l_post: Option<Array1<f64>> = None;
+                if let Some(raw) = self.graded_drive_hidden(l) {
+                    if gpu_filtered {
+                        graded_l_post = Some(Self::apply_depth0_synaptic_charge(
+                            self.lif.dt,
+                            &self.net.aarnn_bio,
+                            &raw,
+                            Some(&self.v_h[l]),
+                            self.net.aarnn_nmda_voltage_sensitivity.max(0.0) as f64,
+                            #[cfg(feature = "growth3d")]
+                            Some(&self.bio_h[l]),
+                            #[cfg(not(feature = "growth3d"))]
+                            None,
+                            &default_decays,
+                        ));
+                    } else {
+                        i_f += &raw;
+                    }
+                }
                 if use_synaptic_filter && num_current_hidden_neurons > 0 && !gpu_filtered {
                     let mut combined = i_f.clone();
                     for j in 0..num_current_hidden_neurons {
@@ -13651,7 +14529,29 @@ impl Runner {
                     );
                     i_f = filtered;
                     i_b.fill(0.0);
+                } else if is_aarnn && !use_synaptic_filter && num_current_hidden_neurons > 0 {
+                    let mut combined = i_f.clone();
+                    for j in 0..num_current_hidden_neurons {
+                        combined[j] += i_b[j];
+                    }
+                    i_f = Self::apply_depth0_synaptic_charge(
+                        self.lif.dt,
+                        &self.net.aarnn_bio,
+                        &combined,
+                        Some(&self.v_h[l]),
+                        self.net.aarnn_nmda_voltage_sensitivity.max(0.0) as f64,
+                        #[cfg(feature = "growth3d")]
+                        Some(&self.bio_h[l]),
+                        #[cfg(not(feature = "growth3d"))]
+                        None,
+                        &default_decays,
+                    );
+                    i_b.fill(0.0);
                 }
+                if let Some(g) = graded_l_post {
+                    i_f += &g;
+                }
+                self.apply_connectome_gap_currents(l, &mut i_f);
                 if is_aarnn && num_current_hidden_neurons > 1 {
                     let g_gap = self.net.aarnn_gap_junction_strength.max(0.0) as f64;
                     self.apply_gap_junction_coupling_layer(&mut i_f, &self.v_h[l], l, g_gap);
@@ -13665,6 +14565,7 @@ impl Runner {
                 if is_aarnn {
                     self.apply_active_dendritic_compartments_layer(l, &mut i_f);
                 }
+                self.add_tonic_currents_h(l, &mut i_f);
                 Self::sanitize_current_array(&mut i_f);
                 Self::sanitize_current_array(&mut i_b);
 
@@ -13677,6 +14578,7 @@ impl Runner {
                     self.last_i_f[l] = i_f.clone();
                 }
 
+                let graded_pre_l = self.graded_pre_state_h(l);
                 let spk = {
                     #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
                     #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
@@ -14036,6 +14938,12 @@ impl Runner {
                         spk
                     }
                 };
+                let spk = if graded_pre_l.is_empty() {
+                    spk
+                } else {
+                    self.finish_graded_hidden(l, &graded_pre_l, &i_f, spk)
+                };
+                let spk = self.merge_neuron_shard_hidden(l, spk);
                 self.record_hidden_spike_phase(
                     l,
                     &spk,
@@ -14101,7 +15009,10 @@ impl Runner {
         let mut gpu_filtered_o = false;
         let mut i_o = Array1::<f64>::zeros(num_output_neurons);
         let out_conn_layer = out_l;
-        if out_conn_layer < num_hidden_layers && self.is_layer_assigned(out_conn_layer) {
+        // The output-stage owner computes the readout; with biological I/O
+        // that owner may differ from the owner of `out_conn_layer`, whose
+        // spikes it then receives as an upstream boundary layer.
+        if out_conn_layer < num_hidden_layers && self.is_output_stage_assigned(out_conn_layer) {
             observe_time!("Runner::step/output_layer");
             let num_last_layer_neurons = self.layer_size(out_conn_layer);
             #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
@@ -14543,13 +15454,17 @@ impl Runner {
 
             if !gpu_success {
                 self.log_gpu_cpu_fallback("output_input_accumulation");
+                // A neuron shard computes the input of its own output cells.
+                let rows_o = self.neuron_shard_output_rows(num_output_neurons);
+                let row0_o = self.shard_output_row_offset();
                 if can_parallel_light(num_output_neurons) {
                     #[cfg(all(feature = "morpho", feature = "growth3d"))]
                     {
-                        let results: Vec<(usize, f64, Vec<ReleasedEvent>)> = (0
-                            ..num_output_neurons)
+                        let results: Vec<(usize, f64, Vec<ReleasedEvent>)> = rows_o
+                            .clone()
                             .into_par_iter()
                             .map(|k| {
+                                let kw = k - row0_o;
                                 let mut acc = 0.0f64;
                                 let mut events = Vec::new();
                                 let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
@@ -14622,15 +15537,15 @@ impl Runner {
                                         };
                                         if s != 0 {
                                             let stp_scale = if use_stp {
-                                                stp_release_h
-                                                    .get(out_conn_layer)
-                                                    .and_then(|v| v.get(j))
-                                                    .copied()
-                                                    .unwrap_or(0.0)
+                                                self.stp_release_h_at(
+                                                    out_conn_layer,
+                                                    steps_delay,
+                                                    j,
+                                                )
                                             } else {
                                                 1.0
                                             };
-                                            acc += self.w_out[(k, j)] * stp_scale;
+                                            acc += self.w_out[(kw, j)] * stp_scale;
                                         }
                                     }
                                 } else {
@@ -14644,7 +15559,7 @@ impl Runner {
                                         } else {
                                             1.0
                                         };
-                                        acc += self.w_out[(k, j)] * stp_scale;
+                                        acc += self.w_out[(kw, j)] * stp_scale;
                                     }
                                 }
                                 (k, acc, events)
@@ -14658,9 +15573,11 @@ impl Runner {
                     }
                     #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
                     {
-                        let results: Vec<(usize, f64)> = (0..num_output_neurons)
+                        let results: Vec<(usize, f64)> = rows_o
+                            .clone()
                             .into_par_iter()
                             .map(|k| {
+                                let kw = k - row0_o;
                                 let mut acc = 0.0;
                                 let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
                                 if use_aarnn {
@@ -14721,15 +15638,15 @@ impl Runner {
                                         };
                                         if s != 0 {
                                             let stp_scale = if use_stp {
-                                                stp_release_h
-                                                    .get(out_conn_layer)
-                                                    .and_then(|v| v.get(j))
-                                                    .copied()
-                                                    .unwrap_or(0.0)
+                                                self.stp_release_h_at(
+                                                    out_conn_layer,
+                                                    steps_delay,
+                                                    j,
+                                                )
                                             } else {
                                                 1.0
                                             };
-                                            acc += self.w_out[(k, j)] * stp_scale;
+                                            acc += self.w_out[(kw, j)] * stp_scale;
                                         }
                                     }
                                 } else {
@@ -14743,7 +15660,7 @@ impl Runner {
                                         } else {
                                             1.0
                                         };
-                                        acc += self.w_out[(k, j)] * stp_scale;
+                                        acc += self.w_out[(kw, j)] * stp_scale;
                                     }
                                 }
                                 (k, acc)
@@ -14754,7 +15671,8 @@ impl Runner {
                         }
                     }
                 } else {
-                    for k in 0..num_output_neurons {
+                    for k in rows_o.clone() {
+                        let kw = k - row0_o;
                         let mut acc = 0.0;
                         let use_aarnn = matches!(self.neuron_model, NeuronModel::Aarnn);
                         if use_aarnn {
@@ -14824,15 +15742,11 @@ impl Runner {
                                     };
                                     if s != 0 {
                                         let stp_scale = if use_stp {
-                                            stp_release_h
-                                                .get(out_conn_layer)
-                                                .and_then(|v| v.get(j))
-                                                .copied()
-                                                .unwrap_or(0.0)
+                                            self.stp_release_h_at(out_conn_layer, steps_delay, j)
                                         } else {
                                             1.0
                                         };
-                                        acc += self.w_out[(k, j)] * stp_scale;
+                                        acc += self.w_out[(kw, j)] * stp_scale;
                                     }
                                 }
                             }
@@ -14892,15 +15806,11 @@ impl Runner {
                                     };
                                     if s != 0 {
                                         let stp_scale = if use_stp {
-                                            stp_release_h
-                                                .get(out_conn_layer)
-                                                .and_then(|v| v.get(j))
-                                                .copied()
-                                                .unwrap_or(0.0)
+                                            self.stp_release_h_at(out_conn_layer, steps_delay, j)
                                         } else {
                                             1.0
                                         };
-                                        acc += self.w_out[(k, j)] * stp_scale;
+                                        acc += self.w_out[(kw, j)] * stp_scale;
                                     }
                                 }
                             }
@@ -14916,7 +15826,7 @@ impl Runner {
                                     } else {
                                         1.0
                                     };
-                                    acc += self.w_out[(k, j)] * stp_scale;
+                                    acc += self.w_out[(kw, j)] * stp_scale;
                                 }
                             }
                         }
@@ -14926,6 +15836,25 @@ impl Runner {
             }
         }
 
+        let mut graded_o_post: Option<Array1<f64>> = None;
+        if let Some(raw) = self.graded_drive_output(out_conn_layer) {
+            if gpu_filtered_o {
+                graded_o_post = Some(Self::apply_depth0_synaptic_charge(
+                    self.lif.dt,
+                    &self.net.aarnn_bio,
+                    &raw,
+                    Some(&self.v_o),
+                    self.net.aarnn_nmda_voltage_sensitivity.max(0.0) as f64,
+                    #[cfg(feature = "growth3d")]
+                    Some(&self.bio_o),
+                    #[cfg(not(feature = "growth3d"))]
+                    None,
+                    &default_decays,
+                ));
+            } else {
+                i_o += &raw;
+            }
+        }
         if use_synaptic_filter && num_output_neurons > 0 && !gpu_filtered_o {
             i_o = Self::apply_synaptic_filter(
                 self.lif.dt,
@@ -14942,12 +15871,28 @@ impl Runner {
                 None,
                 &default_decays,
             );
+        } else if is_aarnn && !use_synaptic_filter && num_output_neurons > 0 {
+            i_o = Self::apply_depth0_synaptic_charge(
+                self.lif.dt,
+                &self.net.aarnn_bio,
+                &i_o,
+                Some(&self.v_o),
+                self.net.aarnn_nmda_voltage_sensitivity.max(0.0) as f64,
+                #[cfg(feature = "growth3d")]
+                Some(&self.bio_o),
+                #[cfg(not(feature = "growth3d"))]
+                None,
+                &default_decays,
+            );
+        }
+        if let Some(g) = graded_o_post {
+            i_o += &g;
         }
         // Morphology-driven compact profiles (e.g. C. elegans / insect robots) can
         // produce very small post-filter output currents despite active hidden
         // spiking, especially when output fan-in is sparse. Apply a bounded gain
         // floor so actuator-facing neurons remain excitable.
-        if is_aarnn && num_output_neurons > 0 {
+        if is_aarnn && num_output_neurons > 0 && self.net.aarnn_output_gain_floor_enabled {
             let src_spike_count = self
                 .last_spk_h
                 .get(out_conn_layer)
@@ -14980,12 +15925,14 @@ impl Runner {
                 }
             }
         }
+        self.add_tonic_currents_o(&mut i_o);
         Self::sanitize_current_array(&mut i_o);
         #[cfg(any(feature = "ui", feature = "growth3d"))]
         {
             self.last_i_o = Some(i_o.clone());
         }
 
+        let graded_pre_o = self.graded_pre_state_o();
         let spk_o = {
             observe_time!("Runner::step/spk_o");
             #[cfg_attr(not(feature = "opencl"), allow(unused_mut))]
@@ -15208,16 +16155,17 @@ impl Runner {
                             let res: Vec<(f64, f64, f64, i32, i8)> = (0..num_output_neurons)
                                 .into_par_iter()
                                 .map(|k| {
+                                    let nb = self.output_neuron_bio(k).unwrap_or(&bio);
                                     let transition = izh_transition(
                                         old_v[k],
                                         old_u[k],
                                         i_o[k],
-                                        p,
+                                        self.neuron_izh_params(Some(nb), p),
                                         self.thr_offset_o[k],
                                         use_adaptive_threshold,
-                                        bio.adaptive_threshold_increment,
-                                        bio.adaptive_threshold_min,
-                                        bio.adaptive_threshold_max,
+                                        nb.adaptive_threshold_increment,
+                                        nb.adaptive_threshold_min,
+                                        nb.adaptive_threshold_max,
                                         if use_izh_refractory {
                                             Some(old_refr[k])
                                         } else {
@@ -15267,6 +16215,12 @@ impl Runner {
                 }
             }
         };
+        let spk_o = if graded_pre_o.is_empty() {
+            spk_o
+        } else {
+            self.finish_graded_output(&graded_pre_o, &i_o, spk_o)
+        };
+        let spk_o = self.merge_neuron_shard_output(spk_o);
         self.record_output_spike_phase(
             &spk_o,
             use_homeostasis,
@@ -15278,7 +16232,11 @@ impl Runner {
         // Learning updates (local, online)
         {
             observe_time!("Runner::step/learning");
-            let mut eta = self.stdp.eta * neuromod_plasticity_gain;
+            let mut eta = if self.net.aarnn_plasticity_enabled {
+                self.stdp.eta * neuromod_plasticity_gain
+            } else {
+                0.0
+            };
             if matches!(self.learning, Learning::Stdp | Learning::Aarnn) && is_aarnn {
                 let ltp_gain = self.net.aarnn_triplet_ltp_gain.max(0.0) as f64;
                 let ltd_gain = self.net.aarnn_triplet_ltd_gain.max(0.0) as f64;
@@ -15325,7 +16283,9 @@ impl Runner {
                 // kernel as the other learning modes.  Morphological and
                 // topology-specific proposals still fall back per matrix when
                 // their device representation is unavailable.
-                let use_cpu_reference_plasticity = self.cl.is_none();
+                // A plastic-cell mask is honoured only by the reference path.
+                let use_cpu_reference_plasticity =
+                    self.cl.is_none() || self.net.aarnn_plastic_cells.enabled;
                 #[cfg(not(feature = "opencl"))]
                 let use_cpu_reference_plasticity = true;
 
@@ -15987,6 +16947,27 @@ impl Runner {
                             }
                         }
                     }
+                    // The last hidden layer's recurrent synapses have no
+                    // fwd/bwd partner in the loop above; learn them on the
+                    // reference path (a single-layer connectome otherwise
+                    // never learned its recurrent wiring).
+                    if num_hidden_layers > 0 && num_hidden_layers - 1 < self.w_hh_rec.len() {
+                        let last = num_hidden_layers - 1;
+                        let (act_h_now, _) = self.plasticity_activity();
+                        let rule = runner_plasticity_rule(self.learning);
+                        let rec = self.recurrent_plasticity_proposals(last, rule, eta, &act_h_now);
+                        commit_weight_proposals(
+                            &mut self.w_hh_rec[last],
+                            &rec,
+                            self.stdp.w_min,
+                            self.stdp.w_max,
+                        )
+                        .expect("recurrent plasticity proposals must commit atomically");
+                        #[cfg(feature = "opencl")]
+                        if last < self.cl_w_hh_rec_dirty.len() {
+                            self.cl_w_hh_rec_dirty[last] = true;
+                        }
+                    }
                     // W_out uses out_l layer
                     if self.is_output_stage_assigned(out_l) {
                         let out_conn_layer = out_l;
@@ -16184,6 +17165,8 @@ impl Runner {
                 }
             }
         }
+        // Homeostatic counterweight to the learning above (rate set points).
+        self.apply_rate_homeostasis(in_l);
         if is_aarnn {
             #[cfg(all(feature = "morpho", feature = "growth3d"))]
             let skip_weight_maintenance = realtime_ipc_policy().disable_weight_maintenance;
@@ -16709,7 +17692,8 @@ impl Runner {
         #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
         let skip_connection_presence = false;
 
-        if !skip_connection_presence {
+        // Partition-stored shards keep no presence counters (frozen networks).
+        if !skip_connection_presence && self.shard_rows.is_none() {
             observe_time!("Runner::step/connection_presence");
             for ((j, i), &w) in self.w_in.indexed_iter() {
                 if w.abs() > 1e-8 {
@@ -16806,6 +17790,9 @@ impl Runner {
         }
 
         self.rng.seed(fastrand::get_seed());
+        if let Some(shard) = self.neuron_shard.as_mut() {
+            shard.exchange.end_step(self.t);
+        }
         self.stage_output_phase()
     }
 
@@ -17351,9 +18338,31 @@ impl Runner {
         } else {
             1.0
         };
-        let steps_delay_max = ((max_dist * myelin_delay_scale) / (vel * dt)).ceil() as usize;
+        let geometric_steps = ((max_dist * myelin_delay_scale) / (vel * dt)).ceil() as usize;
+        // Routed delays use the slower axon/dendrite velocities plus latency,
+        // and at depth >= 2/3 can grow by jitter and by up to 1.5x fatigue;
+        // the history must hold the longest of them or `hist_*_at` silently
+        // clamps late deliveries to the oldest frame.
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        let routed_steps = if self.net.use_morphology {
+            ((self.route_delay_steps_max as f64) * 1.5 * f64::from(myelin_delay_scale)).ceil()
+                as usize
+                + self.bouton_jitter_steps
+                + 1
+        } else {
+            0
+        };
+        #[cfg(not(all(feature = "morpho", feature = "growth3d")))]
+        let routed_steps = 0usize;
+        let steps_delay_max = geometric_steps.max(routed_steps);
         // hist_len must be at least steps_delay_max + 1 so index steps_delay is valid
-        let new_hist = (steps_delay_max + 1).clamp(2, 128);
+        let new_hist = (steps_delay_max + 1).clamp(2, 256);
+        if steps_delay_max + 1 > 256 {
+            nm_log!(
+                "[delays] route delay {} steps exceeds the 256-frame history; longer deliveries clamp",
+                steps_delay_max
+            );
+        }
         if new_hist == self.hist_len {
             return;
         }
@@ -17885,7 +18894,19 @@ impl Runner {
             }
         }
 
-        // Precompute per‑synapse steps based on current net params and algorithm depth
+        self.recompute_route_steps();
+    }
+
+    /// Quantise every morphology route delay for the current depth and dt.
+    ///
+    /// Axon conduction, dendritic conduction and (depth >= 1) bouton latency
+    /// are summed in milliseconds and rounded up once, so a delivery is never
+    /// earlier than the physical path allows. Previously each component was
+    /// rounded separately and the bouton latency was rounded to nearest,
+    /// which erased the 0.3-0.45 ms latency of every non-human profile at
+    /// dt = 1 ms. Also called when the depth changes at run time.
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn recompute_route_steps(&mut self) {
         let dt_ms = self.lif.dt.max(0.0001) as f32;
         let depth = self.net.aarnn_layer_depth;
         let ax_v = if depth > 0 && self.net.axon_velocity > 0.0 {
@@ -17898,29 +18919,32 @@ impl Runner {
         } else {
             self.net.aarnn_velocity.max(0.0001)
         };
+        let latency_ms = if depth >= 1 {
+            self.net.bouton_latency_ms.max(0.0)
+        } else {
+            0.0
+        };
         self.syn_ax_steps.resize(self.morph.synapses.len(), 0);
         self.syn_den_steps.resize(self.morph.synapses.len(), 0);
+        let mut route_max = 0usize;
         for si in 0..self.morph.synapses.len() {
-            let ax_len = self.syn_ax_len[si];
-            let den_len = self.syn_den_len[si];
-            // Conservative quantisation is part of the route contract: a
-            // scheduled delivery may be late by one simulation quantum, but
-            // it must never arrive before the stored physical path permits.
-            let ax_steps = (ax_len / (ax_v * dt_ms)).ceil() as usize;
-            let den_steps = (den_len / (den_v * dt_ms)).ceil() as usize;
-            self.syn_ax_steps[si] = ax_steps;
-            self.syn_den_steps[si] = den_steps;
+            let ax_ms = self.syn_ax_len.get(si).copied().unwrap_or(0.0) / ax_v;
+            let den_ms = self.syn_den_len.get(si).copied().unwrap_or(0.0) / den_v;
+            let total = (ax_ms + den_ms + latency_ms) / dt_ms;
+            let steps = (total - 1.0e-6).ceil().max(0.0) as usize;
+            self.syn_ax_steps[si] = steps;
+            self.syn_den_steps[si] = 0;
+            route_max = route_max.max(steps);
         }
-        self.bouton_latency_steps = if depth >= 1 {
-            (self.net.bouton_latency_ms.max(0.0) / dt_ms).round() as usize
-        } else {
-            0
-        };
+        self.bouton_latency_steps = 0;
         self.bouton_jitter_steps = if depth >= 2 {
-            (self.net.bouton_jitter_ms.max(0.0) / dt_ms).round() as usize
+            (self.net.bouton_jitter_ms.max(0.0) / dt_ms).ceil() as usize
         } else {
             0
         };
+        self.route_delay_steps_max = route_max;
+        self.route_steps_depth = Some(depth);
+        self.recalc_hist_len_and_resize();
     }
 
     #[cfg(all(feature = "morpho", feature = "growth3d"))]
@@ -18543,8 +19567,16 @@ impl Runner {
         }
         let dist_scale = self.syn_path_len_scale.max(1.0e-3) as f64;
 
+        let mask = self.net.aarnn_plastic_cells.clone();
         for si in 0..self.morph.synapses.len() {
             let syn = self.morph.synapses[si];
+            let learns = match syn.kind {
+                crate::morphology::SynKind::Out => mask.output_learns(syn.post_id),
+                _ => syn.post_layer >= 0 && mask.hidden_learns(syn.post_layer as usize, syn.post_id),
+            };
+            if !learns {
+                continue;
+            }
             let (dend_type, trunk_len) = self.syn_post_dendrite_profile(&syn);
             let (_, bap_gain, hebb_mix) = self.dendrite_compartment_params(dend_type);
             let nonhebb_mix = 1.0 - hebb_mix;
@@ -18576,7 +19608,7 @@ impl Runner {
                         * bap_mod
                         * ((hebb_mix * hebb_gain * hebb_term)
                             + (nonhebb_mix * nonhebb_gain * nonhebb_term));
-                    *w = (*w + delta).clamp(w_min, w_max);
+                    *w = apply_weight_delta(*w, delta, w_min, w_max);
                 };
 
             match syn.kind {
@@ -18776,6 +19808,100 @@ impl Runner {
             dq[idx].get(j).copied().unwrap_or(0)
         } else {
             0
+        }
+    }
+
+    /// STP release fraction of the sensory spike `steps` frames old.
+    ///
+    /// Uses the same index clamp as [`Self::hist_s_at`]. A frame without a
+    /// recorded release (reset, resize, growth) falls back to the
+    /// presynaptic channel's current `u * x`, never to zero transmission.
+    #[inline]
+    fn stp_release_s_at(&self, steps: usize, i: usize) -> f64 {
+        let idx = steps.min(self.spk_hist_s.len().saturating_sub(1));
+        self.stp_rel_hist_s
+            .get(idx)
+            .and_then(|frame| frame.get(i))
+            .copied()
+            .unwrap_or_else(|| {
+                let u = self.stp_u_s.get(i).copied().unwrap_or(0.0);
+                let x = self.stp_x_s.get(i).copied().unwrap_or(0.0);
+                (u * x).clamp(0.0, 1.0) / self.stp_baseline_s(i)
+            })
+    }
+
+    /// STP release fraction of hidden neuron `j` in `layer` for the spike
+    /// `steps` frames old (aligned with [`Self::hist_h_at`]).
+    #[inline]
+    fn stp_release_h_at(&self, layer: usize, steps: usize, j: usize) -> f64 {
+        let len = self.spk_hist_h.get(layer).map(|dq| dq.len()).unwrap_or(0);
+        let idx = steps.min(len.saturating_sub(1));
+        self.stp_rel_hist_h
+            .get(layer)
+            .and_then(|dq| dq.get(idx))
+            .and_then(|frame| frame.get(j))
+            .copied()
+            .unwrap_or_else(|| self.stp_provisional(layer, j))
+    }
+
+    #[inline]
+    fn stp_provisional_raw(u: &[Array1<f64>], x: &[Array1<f64>], layer: usize, j: usize) -> f64 {
+        let u = u.get(layer).and_then(|v| v.get(j)).copied().unwrap_or(0.0);
+        let x = x.get(layer).and_then(|v| v.get(j)).copied().unwrap_or(0.0);
+        (u * x).clamp(0.0, 1.0)
+    }
+
+    /// Normalised provisional release (see `stp_baseline_h`).
+    #[inline]
+    fn stp_provisional(&self, layer: usize, j: usize) -> f64 {
+        Self::stp_provisional_raw(&self.stp_u_h, &self.stp_x_h, layer, j)
+            / self.stp_baseline_h(layer, j)
+    }
+
+    /// Resting STP utilisation `U` of a sensory channel (normalisation base).
+    #[inline]
+    fn stp_baseline_s(&self, i: usize) -> f64 {
+        #[cfg(feature = "growth3d")]
+        let u = self
+            .bio_s
+            .get(i)
+            .map(|b| b.stp_u)
+            .unwrap_or(self.net.aarnn_bio.stp_u);
+        #[cfg(not(feature = "growth3d"))]
+        let u = {
+            let _ = i;
+            self.net.aarnn_bio.stp_u
+        };
+        u.clamp(1.0e-3, 1.0)
+    }
+
+    /// Resting STP utilisation `U` of a hidden neuron (normalisation base).
+    #[inline]
+    fn stp_baseline_h(&self, layer: usize, j: usize) -> f64 {
+        self.hidden_bio_params(layer, j).stp_u.clamp(1.0e-3, 1.0)
+    }
+
+    /// Record a newly committed hidden spike frame in the release history.
+    /// Its exact release is computed by the next step's STP phase (which
+    /// overwrites index 0); until then it carries the current `u * x`.
+    fn push_stp_release_frame_h(&mut self, layer: usize, spikes: &Array1<i8>) {
+        if self.stp_rel_hist_h.len() <= layer {
+            self.stp_rel_hist_h.resize_with(layer + 1, VecDeque::new);
+        }
+        let frame: Vec<f64> = (0..spikes.len())
+            .map(|j| {
+                if spikes[j] != 0 {
+                    self.stp_provisional(layer, j)
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let limit = self.hist_len.max(1);
+        let dq = &mut self.stp_rel_hist_h[layer];
+        dq.push_front(frame);
+        while dq.len() > limit {
+            dq.pop_back();
         }
     }
 
@@ -19610,6 +20736,10 @@ impl Runner {
 
     /// Synchronize the dimensions of presence tracking counters with current weight matrices.
     fn sync_presence_sizes(&mut self) {
+        // Partition-stored shards keep no presence counters.
+        if self.shard_rows.is_some() {
+            return;
+        }
         // Sensory -> H0
         let target_in = self.w_in.dim();
         if self.conn_presence_in.dim() != target_in {
@@ -19704,6 +20834,10 @@ impl Runner {
 
     /// Ensure weight matrices match current layer sizes to avoid out-of-bounds indexing.
     fn ensure_weight_dimensions(&mut self, in_l: usize, out_l: usize) -> bool {
+        // A partition-stored shard holds only its own rows by design.
+        if self.shard_rows.is_some() {
+            return false;
+        }
         let mut changed = false;
         let num_layers = self.net.num_hidden_layers;
         let num_sensory = self.net.num_sensory_neurons;
@@ -22959,6 +24093,633 @@ impl Runner {
     }
 }
 
+/// Backward-Euler electrical-synapse currents, `(v_c - v) / dt` with
+/// `(I + dt L) v_c = v` solved by conjugate gradients. `routes[j]` lists the
+/// `(i, g_ji)` partners of cell `j` (symmetric, non-negative conductances).
+pub(crate) fn implicit_gap_currents(routes: &[Vec<(usize, f64)>], v: &[f64], dt: f64) -> Vec<f64> {
+    let n = v.len().min(routes.len());
+    if routes.iter().take(n).all(|r| r.is_empty()) {
+        return vec![0.0; n];
+    }
+    let apply = |x: &[f64], out: &mut [f64]| {
+        for j in 0..n {
+            let mut lap = 0.0;
+            for &(i, g) in &routes[j] {
+                lap += g * (x[j] - x[i]);
+            }
+            out[j] = x[j] + dt * lap;
+        }
+    };
+    let mut x: Vec<f64> = v[..n].to_vec();
+    let mut ax = vec![0.0; n];
+    apply(&x, &mut ax);
+    let mut r: Vec<f64> = (0..n).map(|j| v[j] - ax[j]).collect();
+    let mut p = r.clone();
+    let mut rr: f64 = r.iter().map(|a| a * a).sum();
+    let scale = v[..n].iter().fold(1.0f64, |m, a| m.max(a.abs()));
+    let tol = (1.0e-12 * scale).powi(2) * n as f64;
+    let mut ap = vec![0.0; n];
+    for _ in 0..(4 * n).max(50) {
+        if rr <= tol {
+            break;
+        }
+        apply(&p, &mut ap);
+        let pap: f64 = p.iter().zip(&ap).map(|(a, b)| a * b).sum();
+        if pap <= 0.0 || !pap.is_finite() {
+            break;
+        }
+        let alpha = rr / pap;
+        for j in 0..n {
+            x[j] += alpha * p[j];
+            r[j] -= alpha * ap[j];
+        }
+        let rr_new: f64 = r.iter().map(|a| a * a).sum();
+        let beta = rr_new / rr;
+        rr = rr_new;
+        for j in 0..n {
+            p[j] = r[j] + beta * p[j];
+        }
+    }
+    (0..n).map(|j| (x[j] - v[j]) / dt).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Layer-shard boundary exchange
+//
+// A distributed worker owns the contiguous hidden-layer range `layer_range`
+// (and the output stage when `is_output_stage_assigned`). Within one step the
+// kernel evaluates hidden layers in ascending order, so layer `l` reads the
+// *current-step* spikes and membrane voltage of `l - 1` and the
+// *previous-step* state of `l + 1`. A layer owned by another shard is
+// therefore admitted where the single-node kernel would have computed it: a
+// downstream layer (index >= range.end) and a remote output stage before the
+// step, an upstream layer (index < range.start) at its position in the layer
+// sequence. Admission replays the owner's spike commit
+// (`record_hidden_spike_phase`: spike vector, delay history, STP release
+// frame, plasticity traces) and, when supplied, the owner's membrane
+// voltages, from which graded (non-spiking) release is computed. Layers are
+// never split, so gap junctions (`w_gap`, intra-layer) and recurrent drive
+// stay shard-local. `crate::layer_shard::LayerShardGroup` is the lock-step
+// reference that reproduces single-node execution from these admissions.
+// ---------------------------------------------------------------------------
+
+/// Boundary state of one population owned by another layer shard.
+#[derive(Debug, Clone, Default)]
+struct RemoteLayerSlot {
+    pending: bool,
+    spikes: Vec<i8>,
+    membrane_v: Vec<f64>,
+    has_membrane_v: bool,
+}
+
+impl RemoteLayerSlot {
+    fn stage(&mut self, spikes: &[i8], membrane_v: Option<&[f64]>) {
+        self.spikes.clear();
+        self.spikes.extend_from_slice(spikes);
+        self.membrane_v.clear();
+        self.has_membrane_v = membrane_v.is_some();
+        if let Some(v) = membrane_v {
+            self.membrane_v.extend_from_slice(v);
+        }
+        self.pending = true;
+    }
+}
+
+impl Runner {
+    /// Stage the post-step state of hidden `layer`, owned by another layer
+    /// shard, for admission by the next step: its spike vector and, for a
+    /// layer containing graded cells, its membrane voltages (see
+    /// [`Runner::layer_boundary_carries_membrane`]). Ignored for layers this
+    /// runner owns or does not have. Staging again before the step replaces
+    /// the frame; a remote layer without a staged frame keeps its last state.
+    pub fn stage_remote_layer(&mut self, layer: usize, spikes: &[i8], membrane_v: Option<&[f64]>) {
+        if self.layer_range.is_none()
+            || layer >= self.net.num_hidden_layers
+            || self.is_layer_assigned(layer)
+        {
+            return;
+        }
+        if self.remote_hidden.len() < self.net.num_hidden_layers {
+            self.remote_hidden
+                .resize_with(self.net.num_hidden_layers, RemoteLayerSlot::default);
+        }
+        self.remote_hidden[layer].stage(spikes, membrane_v);
+    }
+
+    /// Stage the previous-step output spikes of the shard that owns the
+    /// output stage; ignored by that owner. Keeps brain-wide signals derived
+    /// from output activity (neuromodulation) identical on every shard.
+    pub fn stage_remote_output(&mut self, spikes: &[i8]) {
+        if self.layer_range.is_none() || self.owns_output_stage() {
+            return;
+        }
+        self.remote_output.stage(spikes, None);
+    }
+
+    /// Whether this runner computes the output stage (always without a
+    /// layer range).
+    pub fn owns_output_stage(&self) -> bool {
+        let (_, out_l) = self.get_io_layers();
+        self.is_output_stage_assigned(out_l)
+    }
+
+    /// Whether a shard boundary must carry this hidden layer's membrane
+    /// voltages: true when it contains graded cells, whose release is a
+    /// continuous function of voltage rather than a spike.
+    pub fn layer_boundary_carries_membrane(&self, layer: usize) -> bool {
+        self.graded_configured()
+            && (0..self.v_h.get(layer).map_or(0, |v| v.len()))
+                .any(|j| self.graded_params_h(layer, j).is_some())
+    }
+
+    /// Admit staged downstream layers and a remote output stage (previous
+    /// step of their owners) before this step's first phase.
+    fn admit_staged_downstream_state(&mut self) {
+        let Some(range) = self.layer_range.clone() else {
+            return;
+        };
+        for layer in range.end..self.remote_hidden.len().min(self.net.num_hidden_layers) {
+            self.admit_staged_remote_layer(layer);
+        }
+        if self.remote_output.pending {
+            self.remote_output.pending = false;
+            if self.remote_output.spikes.len() == self.last_spk_o.len() {
+                let spikes = Array1::from_vec(self.remote_output.spikes.clone());
+                let bio = self.net.aarnn_bio.clone();
+                self.record_output_spike_phase(&spikes, false, 0.0, 0.0, &bio);
+            }
+        }
+    }
+
+    /// Replay the owner's commit of a staged remote hidden layer. A frame of
+    /// the wrong width (topology change in flight) is dropped.
+    fn admit_staged_remote_layer(&mut self, layer: usize) {
+        let Some(slot) = self.remote_hidden.get_mut(layer) else {
+            return;
+        };
+        if !slot.pending {
+            return;
+        }
+        slot.pending = false;
+        let width = self.last_spk_h.get(layer).map_or(0, |s| s.len());
+        if slot.spikes.len() != width {
+            return;
+        }
+        if slot.has_membrane_v && slot.membrane_v.len() == width {
+            if let (Some(dst), Some(v)) = (
+                self.v_h.get_mut(layer).and_then(|v| v.as_slice_mut()),
+                self.remote_hidden.get(layer),
+            ) {
+                dst.copy_from_slice(&v.membrane_v);
+            }
+        }
+        let spikes = Array1::from_vec(self.remote_hidden[layer].spikes.clone());
+        let bio = self.net.aarnn_bio.clone();
+        // Homeostasis of a remote layer belongs to its owner.
+        self.record_hidden_spike_phase(layer, &spikes, false, 0.0, 0.0, &bio);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Neuron-range sharding
+//
+// Every shard holds the same network state; shard `index` of `count` computes
+// the synaptic input and transition of a contiguous range of the cells of
+// each hidden layer and of the output population (`shard_cell_range`). Just
+// before a population's spike commit the shards exchange their cells'
+// spikes and membrane voltages (and output currents), so the commit and all
+// later phases see the whole population exactly as single-node execution.
+// Because state is replicated, presynaptic STP/traces/delay history, gap
+// junctions (a global implicit solve over the layer's voltages), graded
+// release, neuromodulation and plasticity are reproduced locally. Non-owned
+// cells' private state (recovery, thresholds, synaptic filters) is not
+// maintained and is overwritten at each exchange.
+// ---------------------------------------------------------------------------
+
+/// Population merged by a neuron-shard exchange.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShardPopulation {
+    Hidden(usize),
+    Output,
+}
+
+/// Step inputs the coordinating shard forwards to the other shards.
+#[derive(Debug, Clone, Copy)]
+pub struct ShardStepHeader<'a> {
+    pub t: usize,
+    pub dt: f64,
+    pub reward: f32,
+    pub sensory: Option<&'a [i8]>,
+    /// Output spikes at step start (front ends may overwrite them between
+    /// steps, e.g. with the frame-merged output).
+    pub last_spk_o: &'a [i8],
+}
+
+/// Transport of a neuron-shard group (see `crate::neuron_shard`).
+pub trait NeuronShardExchange: Send + Sync {
+    /// Called at the start of every step, before any phase.
+    fn begin_step(&mut self, header: &ShardStepHeader<'_>);
+    /// Merge one population: `spikes` and each `fields` array are full
+    /// width; entries in `owned` are this shard's result. On return every
+    /// entry holds its owner's value.
+    fn exchange(
+        &mut self,
+        population: ShardPopulation,
+        owned: std::ops::Range<usize>,
+        spikes: &mut [i8],
+        fields: &mut [&mut [f64]],
+    );
+    /// Called after the step's last phase.
+    fn end_step(&mut self, t: usize);
+    /// First transport failure, after which results are not authoritative.
+    fn error(&self) -> Option<String>;
+    /// Copy every shard's own membrane voltages into `v_h` (one slice per
+    /// hidden layer) and `v_o`; between steps, for verification.
+    fn gather_state(&mut self, _v_h: &mut [&mut [f64]], _v_o: &mut [f64]) {}
+    /// Transport volume so far.
+    fn traffic(&self) -> ShardTraffic {
+        ShardTraffic::default()
+    }
+}
+
+/// Transport volume of a shard group member.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShardTraffic {
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub steps: u64,
+}
+
+/// Incoming-weight rows held by a partition-stored shard: per hidden layer
+/// the cells whose input rows it stores (`w_in` rows belong to the sensory
+/// target layer, `w_hh_fwd[l - 1]`/`w_hh_bwd[l]`/`w_hh_rec[l]` to layer
+/// `l`), and the output cells whose `w_out` rows it stores.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShardRowLayout {
+    pub hidden: Vec<std::ops::Range<usize>>,
+    pub output: std::ops::Range<usize>,
+}
+
+/// Membership of a runner in a neuron-shard group.
+pub struct NeuronShard {
+    pub index: usize,
+    pub count: usize,
+    pub exchange: Box<dyn NeuronShardExchange>,
+}
+
+/// Contiguous cell range of shard `index` of `count` in a population of `n`
+/// (earlier shards take the remainder).
+pub fn shard_cell_range(index: usize, count: usize, n: usize) -> std::ops::Range<usize> {
+    let count = count.max(1);
+    let index = index.min(count - 1);
+    let base = n / count;
+    let extra = n % count;
+    let start = index * base + index.min(extra);
+    start..start + base + usize::from(index < extra)
+}
+
+impl Runner {
+    /// Cells of a hidden population this runner computes.
+    #[inline]
+    fn neuron_shard_rows(&self, n: usize) -> std::ops::Range<usize> {
+        match &self.neuron_shard {
+            Some(shard) => shard_cell_range(shard.index, shard.count, n),
+            None => 0..n,
+        }
+    }
+
+    /// Output cells this runner computes. The output gain floor rescales by
+    /// the peak over all outputs, so with it every shard computes them all.
+    #[inline]
+    fn neuron_shard_output_rows(&self, n: usize) -> std::ops::Range<usize> {
+        if self.net.aarnn_output_gain_floor_enabled
+            && matches!(self.neuron_model, NeuronModel::Aarnn)
+        {
+            return 0..n;
+        }
+        self.neuron_shard_rows(n)
+    }
+
+    /// Transport error of the neuron-shard group, if any.
+    pub fn neuron_shard_error(&self) -> Option<String> {
+        self.neuron_shard.as_ref().and_then(|s| s.exchange.error())
+    }
+
+    fn begin_neuron_shard_step(&mut self, sensory: Option<&[i8]>) {
+        let header = ShardStepHeader {
+            t: self.t,
+            dt: self.lif.dt,
+            reward: self.external_reward,
+            sensory,
+            last_spk_o: self.last_spk_o.as_slice().unwrap_or(&[]),
+        };
+        if let Some(shard) = self.neuron_shard.as_mut() {
+            shard.exchange.begin_step(&header);
+        }
+    }
+
+    fn merge_neuron_shard_hidden(&mut self, layer: usize, mut spikes: Array1<i8>) -> Array1<i8> {
+        let Some(mut shard) = self.neuron_shard.take() else {
+            return spikes;
+        };
+        let owned = shard_cell_range(shard.index, shard.count, spikes.len());
+        if let (Some(s), Some(v)) = (
+            spikes.as_slice_mut(),
+            self.v_h.get_mut(layer).and_then(|v| v.as_slice_mut()),
+        ) && s.len() == v.len()
+        {
+            shard
+                .exchange
+                .exchange(ShardPopulation::Hidden(layer), owned, s, &mut [v]);
+        }
+        self.neuron_shard = Some(shard);
+        spikes
+    }
+
+    fn merge_neuron_shard_output(&mut self, mut spikes: Array1<i8>) -> Array1<i8> {
+        let Some(mut shard) = self.neuron_shard.take() else {
+            return spikes;
+        };
+        let n = spikes.len();
+        let owned = self.neuron_shard_output_rows_for(&shard, n);
+        let mut no_current = Vec::new();
+        #[cfg(any(feature = "ui", feature = "growth3d"))]
+        let current = self
+            .last_i_o
+            .as_mut()
+            .and_then(|i| i.as_slice_mut())
+            .filter(|i| i.len() == n);
+        #[cfg(not(any(feature = "ui", feature = "growth3d")))]
+        let current: Option<&mut [f64]> = None;
+        let current = current.unwrap_or_else(|| {
+            no_current.resize(n, 0.0);
+            no_current.as_mut_slice()
+        });
+        if let (Some(s), Some(v)) = (spikes.as_slice_mut(), self.v_o.as_slice_mut())
+            && s.len() == v.len()
+        {
+            shard
+                .exchange
+                .exchange(ShardPopulation::Output, owned, s, &mut [v, current]);
+        }
+        self.neuron_shard = Some(shard);
+        spikes
+    }
+
+    /// Collect every shard's own membrane voltages into this runner's
+    /// `v_h`/`v_o` (diagnostics and verification, between steps).
+    pub fn gather_neuron_shard_state(&mut self) {
+        let Some(mut shard) = self.neuron_shard.take() else {
+            return;
+        };
+        let mut layers: Vec<&mut [f64]> = self
+            .v_h
+            .iter_mut()
+            .filter_map(|v| v.as_slice_mut())
+            .collect();
+        if let Some(v_o) = self.v_o.as_slice_mut() {
+            shard.exchange.gather_state(&mut layers, v_o);
+        }
+        self.neuron_shard = Some(shard);
+    }
+
+    /// Bytes sent and received by this shard's transport and steps taken.
+    pub fn neuron_shard_traffic(&self) -> Option<ShardTraffic> {
+        self.neuron_shard.as_ref().map(|s| s.exchange.traffic())
+    }
+
+    // ------------------------------------------------- partitioned storage
+
+    #[inline]
+    fn shard_row_offset(&self, layer: usize) -> usize {
+        self.shard_rows
+            .as_ref()
+            .and_then(|r| r.hidden.get(layer))
+            .map_or(0, |r| r.start)
+    }
+
+    #[inline]
+    fn shard_rows_stored_from(&self, layer: usize) -> Option<usize> {
+        self.shard_rows
+            .as_ref()
+            .map(|r| r.hidden.get(layer).map_or(0, |r| r.start))
+    }
+
+    #[inline]
+    fn shard_output_row_offset(&self) -> usize {
+        self.shard_rows.as_ref().map_or(0, |r| r.output.start)
+    }
+
+    #[inline]
+    fn shard_output_rows_stored_from(&self) -> Option<usize> {
+        self.shard_rows.as_ref().map(|r| r.output.start)
+    }
+
+    /// Why this shard must keep every weight row (`None`: it may store only
+    /// its own). Partitioned storage covers frozen CPU networks: growth,
+    /// morphology routes, plasticity and device kernels index the full
+    /// matrices.
+    pub fn partition_storage_blocker(&self) -> Option<&'static str> {
+        if self.neuron_shard.is_none() {
+            return Some("not a neuron shard");
+        }
+        if self.net.growth_enabled || self.net.morpho_growth_enabled {
+            return Some("structural growth is enabled");
+        }
+        if self.net.use_morphology {
+            // Periodic morphology phases still address weights by global
+            // row (bbc5 diverges after ~85 steps when partition-stored).
+            return Some("morphology phases index weights by global row");
+        }
+        if self.net.aarnn_plasticity_enabled && self.stdp.eta != 0.0 {
+            return Some("plasticity is enabled");
+        }
+        #[cfg(feature = "opencl")]
+        if self.cl.is_some() {
+            return Some("an OpenCL device holds the full matrices");
+        }
+        None
+    }
+
+    /// Row layout this shard stores under partitioned storage.
+    pub fn shard_row_layout(&self) -> Option<ShardRowLayout> {
+        let shard = self.neuron_shard.as_ref()?;
+        let hidden = (0..self.net.num_hidden_layers)
+            .map(|l| shard_cell_range(shard.index, shard.count, self.layer_size(l)))
+            .collect();
+        // Rows computed: every output under the global output gain floor.
+        let output = self.neuron_shard_output_rows(self.net.num_output_neurons);
+        Some(ShardRowLayout { hidden, output })
+    }
+
+    /// Keep only this shard's incoming weight rows (and no presence
+    /// counters or dense electrical matrix; the sparse gap graph stays).
+    pub fn compact_to_shard_rows(&mut self) -> Result<ShardRowLayout, String> {
+        if let Some(blocker) = self.partition_storage_blocker() {
+            return Err(blocker.to_owned());
+        }
+        if self.shard_rows.is_some() {
+            return Err("already partition-stored".to_owned());
+        }
+        let layout = self.shard_row_layout().ok_or("not a neuron shard")?;
+        let take = |m: &Array2<f64>, r: &std::ops::Range<usize>| -> Result<Array2<f64>, String> {
+            if r.end > m.nrows() {
+                return Err(format!("row range {r:?} exceeds a {}-row matrix", m.nrows()));
+            }
+            Ok(m.slice(ndarray::s![r.clone(), ..]).to_owned())
+        };
+        let (in_l, _) = self.get_io_layers();
+        let layers = self.net.num_hidden_layers;
+        let w_in = match layout.hidden.get(in_l) {
+            Some(r) => take(&self.w_in, r)?,
+            None => self.w_in.clone(),
+        };
+        let mut w_rec = Vec::with_capacity(layers);
+        let mut w_fwd = Vec::with_capacity(layers.saturating_sub(1));
+        let mut w_bwd = Vec::with_capacity(layers.saturating_sub(1));
+        for l in 0..layers {
+            let r = &layout.hidden[l];
+            if let Some(m) = self.w_hh_rec.get(l) {
+                w_rec.push(take(m, r)?);
+            }
+            if l >= 1
+                && let Some(m) = self.w_hh_fwd.get(l - 1)
+            {
+                w_fwd.push(take(m, r)?);
+            }
+            if l + 1 < layers
+                && let Some(m) = self.w_hh_bwd.get(l)
+            {
+                w_bwd.push(take(m, r)?);
+            }
+        }
+        let w_out = take(&self.w_out, &layout.output)?;
+        self.install_shard_rows(layout.clone(), w_in, w_rec, w_fwd, w_bwd, w_out)?;
+        Ok(layout)
+    }
+
+    /// Install this shard's incoming weight rows (from `INIT`); full-size
+    /// matrices (shape-only after a skeleton import) are released.
+    pub fn install_shard_rows(
+        &mut self,
+        layout: ShardRowLayout,
+        w_in: Array2<f64>,
+        w_rec: Vec<Array2<f64>>,
+        w_fwd: Vec<Array2<f64>>,
+        w_bwd: Vec<Array2<f64>>,
+        w_out: Array2<f64>,
+    ) -> Result<(), String> {
+        if let Some(blocker) = self.partition_storage_blocker() {
+            return Err(blocker.to_owned());
+        }
+        let layers = self.net.num_hidden_layers;
+        if layout.hidden.len() != layers
+            || w_rec.len() != self.w_hh_rec.len()
+            || w_fwd.len() != self.w_hh_fwd.len()
+            || w_bwd.len() != self.w_hh_bwd.len()
+            || w_out.nrows() != layout.output.len()
+        {
+            return Err("shard weight rows do not match the network".to_owned());
+        }
+        for (l, m) in w_rec.iter().enumerate() {
+            if m.nrows() != layout.hidden[l].len() || m.ncols() != self.layer_size(l) {
+                return Err(format!("recurrent rows of layer {l} have the wrong shape"));
+            }
+        }
+        self.w_in = w_in;
+        self.w_hh_rec = w_rec;
+        self.w_hh_fwd = w_fwd;
+        self.w_hh_bwd = w_bwd;
+        self.w_out = w_out;
+        // The implicit electrical solve uses the sparse routes of the whole
+        // layer; the dense conductance matrix is not needed after import.
+        self.w_gap = Vec::new();
+        self.conn_presence_in = Array2::zeros((0, 0));
+        self.conn_presence_out = Array2::zeros((0, 0));
+        self.conn_presence_fwd = Vec::new();
+        self.conn_presence_bwd = Vec::new();
+        self.conn_presence_rec = Vec::new();
+        self.shard_rows = Some(layout);
+        Ok(())
+    }
+
+    /// Cells of hidden `layer` with an electrical synapse.
+    pub fn gap_coupled_cells(&self, layer: usize) -> Vec<bool> {
+        let n = self.layer_size(layer);
+        match self.gap_routes.get(layer) {
+            Some(routes) if routes.len() == n => routes.iter().map(|r| !r.is_empty()).collect(),
+            _ => vec![false; n],
+        }
+    }
+
+    /// Bytes held by weights, presence counters and electrical routes.
+    pub fn resident_weight_bytes(&self) -> usize {
+        let f = |m: &Array2<f64>| m.len() * 8;
+        let u = |m: &Array2<u32>| m.len() * 4;
+        f(&self.w_in)
+            + f(&self.w_out)
+            + self.w_hh_rec.iter().map(f).sum::<usize>()
+            + self.w_hh_fwd.iter().map(f).sum::<usize>()
+            + self.w_hh_bwd.iter().map(f).sum::<usize>()
+            + self.w_gap.iter().map(f).sum::<usize>()
+            + u(&self.conn_presence_in)
+            + u(&self.conn_presence_out)
+            + self.conn_presence_rec.iter().map(u).sum::<usize>()
+            + self.conn_presence_fwd.iter().map(u).sum::<usize>()
+            + self.conn_presence_bwd.iter().map(u).sum::<usize>()
+            + self
+                .gap_routes
+                .iter()
+                .flat_map(|layer| layer.iter())
+                .map(|routes| routes.len() * 16)
+                .sum::<usize>()
+    }
+
+    /// Approximate bytes of per-cell dynamic state (membranes, synaptic
+    /// filters, STP, traces, thresholds, spike history).
+    pub fn resident_state_bytes(&self) -> usize {
+        let f = |v: &Vec<Array1<f64>>| v.iter().map(|a| a.len() * 8).sum::<usize>();
+        let hidden = f(&self.v_h)
+            + self.u_h.as_ref().map_or(0, f)
+            + f(&self.syn_ampa_h)
+            + f(&self.syn_nmda_h)
+            + f(&self.syn_gaba_h)
+            + f(&self.thr_offset_h)
+            + f(&self.rate_ema_h)
+            + f(&self.stp_u_h)
+            + f(&self.stp_x_h)
+            + f(&self.x_pre_h)
+            + f(&self.x_post_h)
+            + f(&self.dend_ca_h)
+            + f(&self.dend_plateau_h);
+        let history = self
+            .spk_hist_h
+            .iter()
+            .map(|h| h.iter().map(|a| a.len()).sum::<usize>())
+            .sum::<usize>()
+            + self
+                .stp_rel_hist_h
+                .iter()
+                .map(|h| h.iter().map(|a| a.len() * 8).sum::<usize>())
+                .sum::<usize>();
+        hidden + history + self.v_o.len() * 8 * 8
+    }
+
+    fn neuron_shard_output_rows_for(
+        &self,
+        shard: &NeuronShard,
+        n: usize,
+    ) -> std::ops::Range<usize> {
+        if self.net.aarnn_output_gain_floor_enabled
+            && matches!(self.neuron_model, NeuronModel::Aarnn)
+        {
+            // Every shard computed every output; shard 0 is authoritative.
+            return if shard.index == 0 { 0..n } else { 0..0 };
+        }
+        shard_cell_range(shard.index, shard.count, n)
+    }
+}
+
 #[cfg(all(test, feature = "growth3d"))]
 mod tests {
     use super::*;
@@ -25701,20 +27462,53 @@ mod tests {
 
         r.stdp.eta = 0.0; // freeze learning
         r.net.p_release_default = 1.0;
+        // Delivery timing test: isolate the sensory -> layer-1 route from
+        // stochastic inputs (thalamic drops, layer-0 noise kicks relayed
+        // through random forward weights) that otherwise set the first spike.
+        r.net.thalamic_gating_enabled = false;
+        r.net.aarnn_synaptic_energy_randomness = 0.0;
+        // Same (untyped, network-default) biology for the probed cell in both
+        // cases; the default topology assigns random cell types.
+        for layer in r.topo.layers.iter_mut() {
+            for node in layer.iter_mut() {
+                node.type_name = None;
+            }
+        }
+        r.sync_bio_from_topo();
+        for m in r
+            .w_hh_fwd
+            .iter_mut()
+            .chain(r.w_hh_rec.iter_mut())
+            .chain(r.w_hh_bwd.iter_mut())
+        {
+            m.fill(0.0);
+        }
         for j in 0..r.w_in.nrows() {
             for i in 0..r.w_in.ncols() {
                 r.w_in[(j, i)] = 0.0;
             }
         }
-        r.w_in[(0, 0)] = 2.0;
+        // Membranes now start at the Izhikevich resting point instead of 0 mV
+        // (which made every cell fire on the first step); the single probe
+        // spike must itself be suprathreshold for the delivery to show.
+        r.w_in[(0, 0)] = 8.0;
 
         // r.reset(); // DO NOT CALL RESET HERE
 
         r.net.use_morphology = false; // reset() might have flipped it back if enabled in config
         let mut fired_steps: Vec<usize> = Vec::new();
+        let mut slow_arrival: Option<usize> = None;
         for step in 0..15 {
             let s = if step == 0 { vec![1i8] } else { vec![0i8] };
             let out = r.step(Some(&s));
+            if slow_arrival.is_none()
+                && r.last_i_f
+                    .get(1)
+                    .and_then(|v| v.first())
+                    .is_some_and(|i| *i > 1.0e-9)
+            {
+                slow_arrival = Some(out.t);
+            }
             if out.spk_h[1][0] != 0 {
                 fired_steps.push(out.t);
             }
@@ -25775,24 +27569,62 @@ mod tests {
 
         r2.stdp.eta = 0.0;
         r2.net.p_release_default = 1.0;
+        r2.net.thalamic_gating_enabled = false;
+        r2.net.aarnn_synaptic_energy_randomness = 0.0;
+        for layer in r2.topo.layers.iter_mut() {
+            for node in layer.iter_mut() {
+                node.type_name = None;
+            }
+        }
+        r2.sync_bio_from_topo();
+        for m in r2
+            .w_hh_fwd
+            .iter_mut()
+            .chain(r2.w_hh_rec.iter_mut())
+            .chain(r2.w_hh_bwd.iter_mut())
+        {
+            m.fill(0.0);
+        }
         for j in 0..r2.w_in.nrows() {
             for i in 0..r2.w_in.ncols() {
                 r2.w_in[(j, i)] = 0.0;
             }
         }
-        r2.w_in[(0, 0)] = 2.0;
+        r2.w_in[(0, 0)] = 8.0;
         r2.reset();
         r2.net.use_morphology = false;
         let mut a_first: Option<usize> = None;
-        for step in 0..3 {
+        let mut fast_arrival: Option<usize> = None;
+        for step in 0..15 {
             let s = if step == 0 { vec![1i8] } else { vec![0i8] };
             let out = r2.step(Some(&s));
+            if fast_arrival.is_none()
+                && r2
+                    .last_i_f
+                    .get(1)
+                    .and_then(|v| v.first())
+                    .is_some_and(|i| *i > 1.0e-9)
+            {
+                fast_arrival = Some(out.t);
+            }
             if a_first.is_none() && out.spk_h[1][0] != 0 {
                 a_first = Some(out.t);
             }
         }
         let a_first = a_first.unwrap_or(usize::MAX);
-        assert_eq!(a_first, lif_first, "AARNN fast should match classic timing");
+        // An Izhikevich upstroke from rest takes a few steps, so its first
+        // spike cannot match the one-step LIF crossing (the old equality held
+        // only through the start-up spike from v = 0 mV). Delivery is checked
+        // on the arrival of the input current instead: without conduction
+        // delay it arrives on the first step, and never later than over the
+        // slow route; the input must still make the cell fire.
+        assert!(a_first != usize::MAX, "AARNN fast route delivered nothing");
+        let (fast, slow) = (fast_arrival.unwrap(), slow_arrival.unwrap());
+        assert_eq!(fast, 1, "zero-delay route must deliver on the first step");
+        assert!(
+            slow >= fast,
+            "slow route ({slow}) must not deliver before the fast route ({fast})"
+        );
     }
 
     // #[test]
@@ -27659,5 +29491,503 @@ mod tests {
 
         let nonzero = a.w_in.iter().filter(|v| v.abs() > f64::EPSILON).count();
         assert!(nonzero < 6, "pruning should reduce active edges");
+    }
+
+    /// Two-neuron chain snapshot: sensory 0 -> hidden 0 -> hidden 1 (routed
+    /// recurrent synapse), no growth, explicit depth.
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn chain_snapshot(depth: usize) -> String {
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_sensory_neurons = 1;
+        net.num_output_neurons = 1;
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 2;
+        net.growth_enabled = false;
+        net.morpho_growth_enabled = false;
+        net.use_morphology = true;
+        net.use_aarnn_delays = true;
+        net.aarnn_layer_depth = depth;
+        net.aarnn_import_topology_rewire_enabled = false;
+        net.aarnn_synaptic_scaling_strength = 0.0;
+        net.aarnn_dale_strictness = 0.0;
+        net.aarnn_plasticity_enabled = false;
+        net.aarnn_output_gain_floor_enabled = false;
+        net.aarnn_synaptic_energy_randomness = 0.0;
+        net.aarnn_resonance_gain = 0.0;
+        net.aarnn_ambient_energy_level = 0.0;
+        net.perceptual_loop_enabled = false;
+        net.theta_rhythm_enabled = false;
+        net.sleep_enabled = false;
+        net.thalamic_gating_enabled = false;
+        // Dendritic tree shapes come from the (parallel, thread-RNG)
+        // morphology builder; keep this test independent of them.
+        net.aarnn_bio.dendritic_active_enabled = false;
+        net.aarnn_gap_junction_strength = 0.0;
+        net.volume_transmission_enabled = false;
+        net.p_release_default = 1.0;
+        net.aarnn_release_prob_heterogeneity = 0.0;
+        // Each presynaptic spike is suprathreshold-capable at every depth.
+        net.aarnn_bio.synaptic_gain = 12.0;
+        net.aarnn_bio.izh_refractory_ms = 2.0;
+        // Fast-recovering synapses: the test is about delay alignment, not
+        // depression (an 800 ms recovery at 200 Hz drive leaves ~3 % release).
+        net.aarnn_bio.stp_tau_rec_ms = 50.0;
+        net.development_stage_mode = crate::config::DevelopmentStageMode::Manual;
+        serde_json::json!({
+            "net": net,
+            "topo": {
+                "layers": [[{"x": 0.0, "y": 0.0, "z": 0.0, "layer": 0}, {"x": 0.6, "y": 0.0, "z": 0.0, "layer": 0}]],
+                "sensory_nodes": [{"x": -0.6, "y": 0.0, "z": 0.0, "layer": 0}],
+                "output_nodes": [{"x": 1.2, "y": 0.0, "z": 0.0, "layer": 0}],
+            },
+            "w_in": {"rows": 2, "cols": 1, "data": [1.0, 0.0]},
+            "w_hh_fwd": [], "w_hh_bwd": [],
+            "w_hh_rec": [{"rows": 2, "cols": 2, "data": [0.0, 0.0, 1.0, 0.0]}],
+            "w_out": {"rows": 1, "cols": 2, "data": [0.0, 1.0]},
+            "layer_range": null,
+            "rng_seed": 7
+        })
+        .to_string()
+    }
+
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    fn chain_spikes(depth: usize, steps: usize) -> (usize, usize, usize, usize) {
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            NetworkConfig::default(),
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        r.import_network_json(&chain_snapshot(depth)).unwrap();
+        r.set_dt(1.0);
+        let (mut a, mut b, mut o) = (0, 0, 0);
+        for t in 0..steps {
+            // 200 Hz presynaptic drive.
+            r.step_sync(1.0, Some(&[i8::from(t % 5 == 0)]));
+            a += usize::from(r.last_spk_h[0][0] != 0);
+            b += usize::from(r.last_spk_h[0][1] != 0);
+            o += usize::from(r.last_spk_o[0] != 0);
+        }
+        let route_delay = r.recv_rec[0][1]
+            .first()
+            .map(|&(_, si)| r.syn_delay_and_atten(si).0)
+            .unwrap_or(0);
+        (a, b, o, route_delay)
+    }
+
+    /// STP release must travel with the delayed spike. Before alignment the
+    /// release of the current frame scaled spikes read `steps` frames back,
+    /// which is zero whenever the presynaptic cell did not also fire on the
+    /// current frame (always, with a 2 ms refractory period).
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    #[test]
+    fn delayed_recurrent_transmission_survives_stp_at_every_depth() {
+        for depth in 0..=5 {
+            let (a, b, o, delay) = chain_spikes(depth, 400);
+            eprintln!("depth {depth}: driven {a} partner {b} output {o} route delay {delay}");
+            assert!(a > 0, "depth {depth}: driven cell must fire ({a})");
+            assert!(
+                delay >= 1,
+                "depth {depth}: chain must be a delayed route ({delay})"
+            );
+            assert!(
+                b > 0,
+                "depth {depth}: delayed recurrent synapse transmitted nothing (a={a})"
+            );
+            assert!(o > 0, "depth {depth}: output silent");
+        }
+        // Depths 4 and 5 add nothing over 3: identical spike trains.
+        assert_eq!(chain_spikes(3, 300), chain_spikes(4, 300));
+        assert_eq!(chain_spikes(3, 300), chain_spikes(5, 300));
+    }
+
+    /// Without input a freshly built or imported AARNN network is quiet: the
+    /// membranes start at the Izhikevich resting point, not at 0 mV.
+    #[cfg(all(feature = "morpho", feature = "growth3d"))]
+    #[test]
+    fn imported_aarnn_network_starts_at_rest_without_synchronous_spike() {
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            NetworkConfig::default(),
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        r.import_network_json(&chain_snapshot(3)).unwrap();
+        for v in r.v_h[0].iter().chain(r.v_o.iter()) {
+            assert!((*v + 70.0).abs() < 1.0e-9, "resting potential {v}");
+        }
+        for _ in 0..50 {
+            r.step_sync(1.0, Some(&[0]));
+            assert!(r.last_spk_h[0].iter().all(|s| *s == 0));
+            assert!(r.last_spk_o.iter().all(|s| *s == 0));
+        }
+    }
+
+    /// Depth 0 delivers the same synaptic charge per event as the filtered
+    /// AMPA/NMDA/GABA path (summed over the kernel), only without its shape.
+    #[test]
+    fn depth0_charge_matches_filtered_kernel_integral() {
+        let bio = AarnnBioParams::default();
+        let d = Runner::get_decays_static(1.0, &bio);
+        let raw = Array1::from_vec(vec![0.7, -0.4]);
+        let v = Array1::from_vec(vec![-65.0, -65.0]);
+        let sens = 0.02;
+        let instant =
+            Runner::apply_depth0_synaptic_charge(1.0, &bio, &raw, Some(&v), sens, None, &d);
+        let mut ampa = Array1::zeros(2);
+        let mut nmda = Array1::zeros(2);
+        let mut gaba = Array1::zeros(2);
+        let mut total = Array1::<f64>::zeros(2);
+        let mut input = raw.clone();
+        for _ in 0..20_000 {
+            let out = Runner::apply_synaptic_filter(
+                1.0,
+                &bio,
+                &input,
+                &mut ampa,
+                &mut nmda,
+                &mut gaba,
+                Some(&v),
+                sens,
+                None,
+                &d,
+            );
+            total += &out;
+            input.fill(0.0);
+        }
+        // Neuromodulation is a depth >= 1 feature; remove its static gain.
+        let neuromod = if bio.neuromodulation_enabled {
+            bio.acetylcholine_gain
+        } else {
+            1.0
+        };
+        for i in 0..2 {
+            assert!(
+                (instant[i] - total[i] / neuromod).abs() < 1.0e-6 * total[i].abs().max(1.0),
+                "{} vs {}",
+                instant[i],
+                total[i]
+            );
+        }
+    }
+
+    fn graded_test_runner() -> Runner {
+        let mut net = NetworkConfig::default();
+        net.clumping_design = crate::config::ClumpingDesign::None;
+        net.brain_regions = Vec::new();
+        net.num_sensory_neurons = 2;
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 3;
+        net.num_output_neurons = 2;
+        net.growth_enabled = false;
+        net.thalamic_gating_enabled = false;
+        net.aarnn_synaptic_energy_randomness = 0.0;
+        // No spontaneous drives (as in connectome imports).
+        net.perceptual_loop_enabled = false;
+        net.aarnn_resonance_gain = 0.0;
+        net.aarnn_ambient_energy_level = 0.0;
+        net.theta_rhythm_enabled = false;
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        r.set_dt(1.0);
+        r.stdp.eta = 0.0;
+        r.net.aarnn_plasticity_enabled = false;
+        for layer in r.topo.layers.iter_mut() {
+            for node in layer.iter_mut() {
+                node.type_name = None;
+            }
+        }
+        for node in r.topo.output_nodes.iter_mut() {
+            node.type_name = None;
+        }
+        r.net.aarnn_bio.graded_enabled = true;
+        r.net.aarnn_bio.graded_release_max_hz = 50.0;
+        r.sync_bio_from_topo();
+        r.settle_izh_resting_state();
+        r
+    }
+
+    /// A graded presynaptic cell at release `r` delivers raw drive
+    /// `w * r * max_rate * dt`: the mean raw drive of a spiking cell firing at
+    /// `r * max_rate` (one `w` per spike). Resting and spiking cells add none.
+    #[test]
+    fn graded_cells_deliver_spike_equivalent_drive() {
+        let mut r = graded_test_runner();
+        let n = r.v_h[0].len();
+        let o = r.v_o.len();
+        assert!(n >= 3 && o >= 2, "{n} {o}");
+        assert_eq!(r.output_code(), Some("pulse_density"));
+        assert!(
+            r.v_h[0]
+                .iter()
+                .all(|v| *v == r.net.aarnn_bio.graded_v_rest_mv)
+        );
+        assert!(r.graded_drive_hidden(0).is_none(), "silent at rest");
+        let p = GradedParams::from_bio(&r.net.aarnn_bio).unwrap();
+        r.w_hh_rec[0].fill(0.0);
+        r.w_hh_rec[0][(1, 0)] = 0.6;
+        r.w_hh_rec[0][(2, 0)] = -0.3;
+        r.w_out.fill(0.0);
+        r.w_out[(0, 0)] = 0.5;
+        r.v_h[0][0] = p.release_v_half;
+        let release = graded_release(p.release_v_half, p);
+        let events = release * 50.0 * 1.0e-3;
+        let h = r.graded_drive_hidden(0).unwrap();
+        assert!(
+            h[0] == 0.0
+                && (h[1] - 0.6 * events).abs() < 1e-15
+                && (h[2] + 0.3 * events).abs() < 1e-15
+        );
+        let out = r.graded_drive_output(0).unwrap();
+        assert!((out[0] - 0.5 * events).abs() < 1e-15 && out[1] == 0.0);
+        // The presynaptic cell switched to spiking contributes only spikes.
+        r.bio_h[0][0].graded_enabled = false;
+        assert!(r.graded_drive_hidden(0).is_none());
+        assert_eq!(r.graded_release_h(0)[0], None);
+        r.bio_o[1].graded_enabled = false;
+        assert_eq!(
+            r.output_code(),
+            None,
+            "mixed outputs are not a pulse-density code"
+        );
+    }
+
+    /// Graded plasticity (opt-in): a driven graded cell never spikes, so the
+    /// spike-based rules leave its input weights alone; with
+    /// `aarnn_graded_plasticity_enabled` its expected spikes per step stand in
+    /// and Hebbian learning potentiates the active inputs.
+    #[test]
+    fn graded_plasticity_lets_graded_cells_learn() {
+        let run = |graded_plasticity: bool| {
+            let mut r = graded_test_runner();
+            r.net.aarnn_bio.graded_release_max_hz = 500.0;
+            r.net.aarnn_bio.stp_enabled = false;
+            r.sync_bio_from_topo();
+            r.net.aarnn_plasticity_enabled = true;
+            r.net.aarnn_graded_plasticity_enabled = graded_plasticity;
+            r.learning = Learning::Hebb;
+            r.stdp.eta = 0.01;
+            r.w_in.fill(0.3);
+            let before = r.w_in.clone();
+            let input = vec![1i8; r.net.num_sensory_neurons];
+            for _ in 0..200 {
+                r.step(Some(&input));
+            }
+            for row in &r.last_spk_h {
+                assert!(row.iter().all(|s| *s == 0), "graded cells must not spike");
+            }
+            let _ = before;
+            r.w_in.sum()
+        };
+        // Synaptic scaling and Dale enforcement also act on w_in whenever
+        // plasticity is on; graded Hebbian potentiation comes on top.
+        let (off, on) = (run(false), run(true));
+        assert!(on > off + 1e-3, "graded cells learn with graded plasticity ({on} vs {off})");
+    }
+
+    /// Driven graded cells depolarise without ever spiking; graded outputs
+    /// emit a pulse-density code whose event count tracks the integrated
+    /// activation (within one event) with at most one event per 2 ms frame.
+    #[test]
+    fn graded_network_steps_without_spikes_and_codes_output_activation() {
+        for depth in [0usize, 1, 3] {
+            let mut r = graded_test_runner();
+            r.net.aarnn_layer_depth = depth;
+            r.net.aarnn_bio.graded_release_max_hz = 500.0;
+            // Constant 1 kHz test input would be depressed away by STP at
+            // depth >= 1; graded transmission itself has no STP.
+            r.net.aarnn_bio.stp_enabled = false;
+            r.sync_bio_from_topo();
+            r.w_in.fill(0.8);
+            r.w_out.fill(0.8);
+            let input = vec![1i8; r.net.num_sensory_neurons];
+            let o = r.v_o.len();
+            let mut events = vec![0usize; o];
+            let mut expected = vec![0.0f64; o];
+            let mut last = vec![None::<usize>; o];
+            let mut peak_release: f64 = 0.0;
+            for step in 0..600 {
+                let out = r.step(Some(&input));
+                for row in &r.last_spk_h {
+                    assert!(
+                        row.iter().all(|s| *s == 0),
+                        "graded hidden cell spiked (depth {depth})"
+                    );
+                }
+                for v in r.v_h.iter().flat_map(|l| l.iter()).chain(r.v_o.iter()) {
+                    assert!(v.is_finite());
+                }
+                peak_release = r
+                    .graded_release_h(0)
+                    .into_iter()
+                    .flatten()
+                    .fold(peak_release, f64::max);
+                for (k, a) in r.graded_activation_o().into_iter().enumerate() {
+                    let a = a.unwrap();
+                    assert!((0.0..=1.0).contains(&a));
+                    expected[k] += a * 500.0 * 1.0e-3;
+                    if out.spk_o[k] != 0 {
+                        events[k] += 1;
+                        if let Some(prev) = last[k] {
+                            assert!(step - prev >= 2, "two events within one 2 ms frame");
+                        }
+                        last[k] = Some(step);
+                    }
+                }
+            }
+            assert!(
+                peak_release > 0.05,
+                "driven graded cells release (depth {depth}): {peak_release}"
+            );
+            for k in 0..o {
+                assert!(
+                    (events[k] as f64 - expected[k]).abs() <= 1.0,
+                    "depth {depth} output {k}: {} events vs {}",
+                    events[k],
+                    expected[k]
+                );
+            }
+            assert!(
+                events.iter().sum::<usize>() > 0,
+                "depth {depth}: outputs silent"
+            );
+        }
+    }
+
+    /// A tonic current holds a graded cell at the analytic steady state of
+    /// that current and drives a spiking cell to fire; 0 changes nothing.
+    #[test]
+    fn tonic_current_drives_graded_and_spiking_cells() {
+        let mut r = graded_test_runner();
+        r.w_in.fill(0.0);
+        r.w_hh_rec[0].fill(0.0);
+        r.w_out.fill(0.0);
+        let quiet = vec![0i8; r.net.num_sensory_neurons];
+        for _ in 0..50 {
+            r.step(Some(&quiet));
+        }
+        let rest_dev = r.v_h[0]
+            .iter()
+            .map(|v| (v - r.net.aarnn_bio.graded_v_rest_mv).abs())
+            .fold(0.0, f64::max);
+        assert!(rest_dev < 0.1, "rest deviation {rest_dev} mV");
+        r.net.aarnn_bio.tonic_current = 2.0;
+        r.sync_bio_from_topo();
+        for _ in 0..2000 {
+            r.step(Some(&quiet));
+        }
+        let p = GradedParams::from_bio(&r.net.aarnn_bio).unwrap();
+        let g = p.input_resistance * 2.0 / (p.e_exc - p.v_rest);
+        let v_inf = (p.v_rest + g * p.e_exc) / (1.0 + g);
+        // The tonic current moves the cells 8.75 mV; a missing or doubled
+        // bias would be several mV off. The default test network adds a
+        // small stochastic term (observed <= 0.05 mV, source not identified).
+        for v in r.v_h[0].iter().chain(r.v_o.iter()) {
+            assert!((v - v_inf).abs() < 0.1, "{v} vs {v_inf}");
+        }
+        // A spiking cell under the same bias plus 8 mV/ms fires tonically.
+        let mut s = graded_test_runner();
+        s.net.aarnn_bio.graded_enabled = false;
+        s.net.aarnn_bio.tonic_current = 10.0;
+        s.w_in.fill(0.0);
+        s.w_hh_rec[0].fill(0.0);
+        s.sync_bio_from_topo();
+        s.settle_izh_resting_state();
+        let mut spikes = 0;
+        for _ in 0..1000 {
+            s.step(Some(&quiet));
+            spikes += s.last_spk_h[0].iter().filter(|x| **x != 0).count();
+        }
+        assert!(spikes > 0, "tonic 10 mV/ms drives a regular-spiking cell");
+    }
+
+    #[test]
+    fn transmitter_qualified_types_override_interneuron_heuristic() {
+        #[cfg(feature = "growth3d")]
+        {
+            assert!(!Runner::is_inhibitory_type_name(
+                "Interneuron:acetylcholine"
+            ));
+            assert!(!Runner::is_inhibitory_type_name("Interneuron:glutamate"));
+            assert!(Runner::is_inhibitory_type_name("Motor:GABA"));
+            assert!(Runner::is_inhibitory_type_name("Interneuron:GABA"));
+            assert!(!Runner::is_inhibitory_type_name("Sensory:transducer"));
+            // Unqualified cortical names keep the legacy heuristic.
+            assert!(Runner::is_inhibitory_type_name("PV_Interneuron"));
+        }
+    }
+
+    #[test]
+    fn connectome_electrical_synapses_are_implicit_conservative_and_validated() {
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            NetworkConfig::default(),
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        r.set_dt(1.0);
+        let n = r.v_h[0].len().max(3);
+        r.v_h[0] = Array1::from_elem(n, -70.0);
+        r.v_h[0][0] = -50.0;
+        let mut g = Array2::<f64>::zeros((n, n));
+        g[(0, 1)] = 0.3;
+        g[(1, 0)] = 0.3;
+        r.w_gap = vec![g.clone()];
+        r.rebuild_gap_routes().unwrap();
+        let mut i = Array1::<f64>::zeros(n);
+        r.apply_connectome_gap_currents(0, &mut i);
+        // Two-cell backward Euler: I_1 = g (v0 - v1) / (1 + 2 g dt).
+        let exact = 0.3 * 20.0 / (1.0 + 2.0 * 0.3);
+        assert!((i[1] - exact).abs() < 1e-9, "{} vs {exact}", i[1]);
+        assert!((i[0] + exact).abs() < 1e-9, "{}", i[0]);
+        assert!(i.iter().skip(2).all(|x| *x == 0.0));
+        assert!(
+            i.sum().abs() < 1e-9,
+            "electrical coupling conserves current"
+        );
+        // Weak coupling reduces to the ohmic current (within 0.1 %).
+        let weak = implicit_gap_currents(&[vec![(1, 1e-4)], vec![(0, 1e-4)]], &[-50.0, -70.0], 1.0);
+        assert!((weak[1] - 1e-4 * 20.0 / (1.0 + 2e-4)).abs() < 1e-12);
+        assert!((weak[1] / (1e-4 * 20.0) - 1.0).abs() < 1e-3);
+        // A strongly coupled hub never overshoots the coupled mean (explicit
+        // Euler diverges once g dt exceeds 1 for this star).
+        let routes: Vec<Vec<(usize, f64)>> = (0..6)
+            .map(|j| {
+                if j == 0 {
+                    (1..6).map(|k| (k, 50.0)).collect()
+                } else {
+                    vec![(0, 50.0)]
+                }
+            })
+            .collect();
+        let v = [-20.0, -70.0, -70.0, -70.0, -70.0, -70.0];
+        let cur = implicit_gap_currents(&routes, &v, 1.0);
+        let vc: Vec<f64> = v.iter().zip(&cur).map(|(a, b)| a + b).collect();
+        let mean = v.iter().sum::<f64>() / 6.0;
+        assert!(
+            vc.iter().all(|x| *x <= -20.0 + 1e-9 && *x >= -70.0 - 1e-9),
+            "{vc:?}"
+        );
+        assert!((vc.iter().sum::<f64>() / 6.0 - mean).abs() < 1e-8);
+        assert!(
+            (vc[0] - mean).abs() < 2.0,
+            "strong coupling equalises towards the mean: {vc:?}"
+        );
+        g[(1, 0)] = 0.2;
+        r.w_gap = vec![g];
+        assert!(
+            r.rebuild_gap_routes().is_err(),
+            "asymmetric conductance rejected"
+        );
     }
 }

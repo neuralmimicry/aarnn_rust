@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Integration coverage for the bounded automatic placement coordinator.
 //!
 //! These tests use the same immutable stable-runtime/checkpoint shape as the

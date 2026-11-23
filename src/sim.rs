@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Batch (matrix-based) spiking simulation used by the CLI path.
 //!
 //! This module provides a compact simulator that operates on fixed‑shape

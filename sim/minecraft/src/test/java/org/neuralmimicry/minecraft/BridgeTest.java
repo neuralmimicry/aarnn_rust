@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 AARNN contributors
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See sim/minecraft/LICENSE in the project root.
 package org.neuralmimicry.minecraft;
 
 import com.google.gson.JsonParser;
@@ -44,6 +48,40 @@ final class BridgeTest {
                     try {
                         session.submit(new double[p.sensory()],77);session.completion().toCompletableFuture().get(4,TimeUnit.SECONDS);
                         var reply=session.poll();assertNotNull(reply,p.id());assertEquals(1,reply.step());assertArrayEquals(new int[]{0},reply.spikes());
+                        assertEquals(OutputDecoder.Code.SPIKES,reply.code(),"absent handshake output_code means spikes");
+                        wire.get(4,TimeUnit.SECONDS);
+                    } finally {session.stop("test cleanup");}
+                }
+            }
+        }
+    }
+    /** The brain's handshake output_code reaches the game; an unknown code is refused at startup. */
+    @Test void handshakeOutputCodeIsForwardedOrRefused() throws Exception {
+        var p=Content.profile("hexapod");
+        for(String code:new String[]{"pulse_density","analog"}) {
+            try(var tcp=new ServerSocket(0,1,InetAddress.getByName("127.0.0.1"))) {
+                tcp.setSoTimeout(5000);
+                var wire=CompletableFuture.runAsync(()-> {
+                    try(var peer=tcp.accept()) {
+                        peer.setSoTimeout(3000);var in=new DataInputStream(peer.getInputStream());var out=peer.getOutputStream();
+                        read(in);
+                        write(out,("{\"expected_s\":"+p.sensory()+",\"expected_o\":"+p.output()+",\"output_code\":\""+code+"\"}").getBytes(StandardCharsets.UTF_8));
+                        if(code.equals("analog")) return;
+                        read(in);write(out,new byte[]{65,69,82,49,(byte)232,3,0,0,0,0,0,0,0,(byte)128,(byte)128,1,1});
+                    } catch(Exception e) {throw new RuntimeException(e);}
+                });
+                var backend=new BridgeMain.Backend(p,tcp.getLocalPort());
+                if(code.equals("analog")) {
+                    assertThrows(IllegalArgumentException.class,backend::prepare);backend.close();wire.get(4,TimeUnit.SECONDS);continue;
+                }
+                backend.prepare();assertEquals(OutputDecoder.Code.PULSE_DENSITY,backend.outputCode);
+                try(var server=BridgeMain.start(0,"test-token",Map.of(p.id(),backend))) {
+                    var session=new Gateway.Session(p,new Gateway.Binding(p.id(),null,p.sensory(),p.output(),0),
+                        URI.create("http://127.0.0.1:"+server.server.getAddress().getPort()+"/api/aer/infer"),"test-token");
+                    try {
+                        session.submit(new double[p.sensory()],77);session.completion().toCompletableFuture().get(4,TimeUnit.SECONDS);
+                        var reply=session.poll();assertNotNull(reply);assertEquals(OutputDecoder.Code.PULSE_DENSITY,reply.code());
+                        assertEquals(OutputDecoder.Code.PULSE_DENSITY,session.outputCode());
                         wire.get(4,TimeUnit.SECONDS);
                     } finally {session.stop("test cleanup");}
                 }

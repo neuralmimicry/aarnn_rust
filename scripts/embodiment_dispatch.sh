@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 # Early routing only. Canonical argument validation, security gates and lifecycle
 # remain in scripts/run_sim.sh. Source before any legacy build/hardware setup.
 aarnn_dispatch_embodiment() {

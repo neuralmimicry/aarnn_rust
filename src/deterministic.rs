@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Deterministic identity, logical-time and numerical primitives.
 //!
 //! These types are deliberately independent of transport, persistence, UI and

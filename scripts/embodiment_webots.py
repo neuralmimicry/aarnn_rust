@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Export canonical mechanics into native Webots worlds (not task acceptance).
 
 Webots/ODE compliance, contact and joint integration need separate calibration.
@@ -105,6 +109,12 @@ def emit(profile,instance=None,offset=(0,0,0),controller='aarnn_webots',args=())
             if not js:content.append(body(child));continue
             j=js[0];child_position,child_orientation=relative(child,bid);r=matrix(child_orientation);axis=r@j['axis'];anchor=child_position+r@j['position'];t=target_by_joint[j['name']]
             limit=f'minStop {j["range"][0]:.17g} maxStop {j["range"][1]:.17g}' if j['limited'] else ''
+            # MJCF bodies are declared at qpos0 (the joint `ref`); Webots
+            # endPoint poses correspond to `position`. Without it every
+            # Webots joint coordinate (sensor, stops, servo target) is offset
+            # by -ref from MuJoCo's (hexapod femur -0.8, tibia -1.2 rad).
+            ref=float(model.qpos0[model.jnt_qposadr[mujoco.mj_name2id(model,mujoco.mjtObj.mjOBJ_JOINT,j['name'])]])
+            if ref:limit=f'position {ref:.17g} '+limit
             device=f'PositionSensor {{ name {quote(t["sensor"])} }}'
             if t['driven']:
                 device+=f' {"LinearMotor" if j["type"]==2 else "RotationalMotor"} {{ name {quote(t["device"])} {"maxForce" if j["type"]==2 else "maxTorque"} 1000000 maxVelocity 1000 sound "" }}'

@@ -1486,7 +1486,7 @@
       "encoding": "antagonist-rate-v1"
     }
   ],
-  "native_mjcf_sha256": "ff2819a9c8bd45b7d1b2fbe74da617b739e6c1df71575a5ad86e21e7df11a51b",
+  "native_mjcf_sha256": "2b87d278218f2ff71ad1b465f2db22fa36151e57dffe28ab557ba42b33f098e7",
   "source_licence": "Apache-2.0",
   "assumptions": "sim/content/embodiments/policy.json",
   "total_mass_kg": 95.41189818549127,
@@ -1513,7 +1513,7 @@
         "id": "rim_0",
         "shape": "box",
         "position": [
-          0.75,
+          0.0,
           3.0,
           1.2000000000000002
         ],
@@ -1540,14 +1540,14 @@
         "id": "rim_1",
         "shape": "box",
         "position": [
-          0.75,
+          0.0,
           -3.0,
-          0.10500000000000001
+          1.2000000000000002
         ],
         "size": [
           6.0,
           0.07500000000000001,
-          0.21000000000000002
+          2.4000000000000004
         ],
         "colour": [
           0.42,
@@ -1556,7 +1556,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -1567,7 +1567,7 @@
         "id": "rim_2",
         "shape": "box",
         "position": [
-          3.75,
+          3.0,
           0.0,
           1.2000000000000002
         ],
@@ -1594,7 +1594,7 @@
         "id": "rim_3",
         "shape": "box",
         "position": [
-          -3.75,
+          -3.0,
           0.0,
           1.2000000000000002
         ],
@@ -3996,9 +3996,9 @@
     ],
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
-  "scene_sources_sha256": "069c61ec98a416e5f5e95f67d33376ebbee22acab25e807a3a437a7c7f6da924",
-  "anatomy_sources_sha256": "99d64c74a569f856bab8839e8df2ae3c45eb1bf18bbc79e677fcf0301356111d",
-  "neural_sources_sha256": "ef1ae7875a7b4426ed37b8b815868929cb105df00974f3c82319f42f3813bd75",
+  "scene_sources_sha256": "a715a28f67ac75c9624deb144618f412dae8688b833c24e07b4ae9e8838d2884",
+  "anatomy_sources_sha256": "76e90c0ee8947775dbfb7ae187162c7c383557a5343383f64af84d2e625f2bd1",
+  "neural_sources_sha256": "491b1c8df3570eda7bb994493ecd7617ca21066362363aaaec542de36deab729",
   "bodies": [
     {
       "name": "base_link",
@@ -10070,7 +10070,7 @@
       "body": 0,
       "type": 6,
       "position": [
-        0.75,
+        0.0,
         3.0,
         1.2000000000000002
       ],
@@ -10099,9 +10099,9 @@
       "body": 0,
       "type": 6,
       "position": [
-        0.75,
+        0.0,
         -3.0,
-        0.10500000000000001
+        1.2000000000000002
       ],
       "quaternion_wxyz": [
         1.0,
@@ -10112,13 +10112,13 @@
       "half_size_m": [
         3.0,
         0.037500000000000006,
-        0.10500000000000001
+        1.2000000000000002
       ],
       "rgba": [
         0.41999998688697815,
         0.5,
         0.4699999988079071,
-        1.0
+        0.20000000298023224
       ],
       "collision": true,
       "mesh_id": -1
@@ -10128,7 +10128,7 @@
       "body": 0,
       "type": 6,
       "position": [
-        3.75,
+        3.0,
         0.0,
         1.2000000000000002
       ],
@@ -10157,7 +10157,7 @@
       "body": 0,
       "type": 6,
       "position": [
-        -3.75,
+        -3.0,
         0.0,
         1.2000000000000002
       ],
@@ -20559,5 +20559,5 @@
       "solref": "0.005 1"
     }
   ],
-  "digest": "365f3db34bfaf7bf8e3436bee070a937e697155e6f11c957ce9a56fc81457a33"
+  "digest": "7b9c075cbb4b91cb5912364fb6531f85291c34f4e323ab2447be51c5691204d3"
 }

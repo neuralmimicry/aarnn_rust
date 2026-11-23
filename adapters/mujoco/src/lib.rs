@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! MuJoCo platform adapter. No neural kernel, UI or production authorisation.
 //! Native FFI stays in one audited ownership boundary; portable contracts can
 //! be tested without an installed physics SDK.

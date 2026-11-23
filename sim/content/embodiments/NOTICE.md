@@ -7,7 +7,7 @@ are derived artefacts, not independent OEM designs or evidence of task success.
 | --- | --- | --- |
 | Galaxy General Robotics `galbot_one_golf_description` | `2d496b053f0d4e9e2688f59fac66022f447226be` | Apache-2.0; official Golf meshes, MJCF and USD. See [licence](licenses/Galbot-Apache-2.0.txt) and original `.agent/robot-expansion/assets/galbot-g1-golf/LICENSE`. Generated files preserve names but include adapter/world changes. Exact LEC variant/calibration remains pending. |
 | dnorton94 `ugot-robot-robomasters` | `ef935a3f22a179ae815e1d0c5108a082de1d0432` | MIT; community estimated mecanum mechanics. See [original notice and licence](licenses/UGOT-MIT.txt). This is not OEM measured CAD. |
-| Original reduced commercial/crow/legacy mechanics | Source/compiler hashes in generated records | Authored in this repository. No root repository LICENSE was found; no new distribution licence is invented here. Scientific facts and the disclosed assumptions are separate from third-party geometry. |
+| Original reduced commercial/crow/legacy mechanics | Source/compiler hashes in generated records | Authored in this repository. Original source owned by the project owners is MIT-licensed under the root LICENSE; third-party geometry retains its existing terms. Scientific facts and the disclosed assumptions are separate from third-party geometry. |
 | Species facts and published commercial envelopes | Pinned task source catalogue and manifests | References, not a grant for copying arbitrary vendor CAD or brochure artwork. No such artwork is copied into these generated models. |
 
 No optional BlendSwap crow mesh, BIRD_SIM source, unlicensed NAO mesh or gated
@@ -30,8 +30,8 @@ The proposed BANC/FAFB motor readouts are separately versioned engineering
 assumptions; imported neuronal IDs are not inferred anatomical innervation.
 Shared Rust optical cells, passive water forces and servo limits add no new
 third-party runtime dependency. See `legacy-native-v1.json` for provenance and
-calibration limits; the unresolved root repository distribution licence remains
-unchanged.
+calibration limits; original repository source is MIT-licensed under the root LICENSE; existing
+asset and dependency terms remain unchanged.
 
 Native engine/dependency boundaries:
 

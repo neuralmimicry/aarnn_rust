@@ -1,10 +1,17 @@
+// SPDX-FileCopyrightText: 2026 AARNN contributors
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See sim/minecraft/LICENSE in the project root.
 /* Bounded legacy sandbox state. Rust remains the only neural executor. */
+import { reference } from './reference.generated.js';
 export class Session {
   constructor(profile, digest, request, firstStep = 0) {
     if (!Number.isSafeInteger(firstStep) || firstStep < 0 || firstStep > 16000000) throw Error('Invalid initial sequence');
     this.profile = profile; this.digest = digest; this.request = request;
     this.step = firstStep; this.lastOutput = -1; this.sequence = 0; this.pending = false; this.active = true;
     this.generation = 0; this.reply = null; this.status = 'armed';
+    /** @type {string|null} Negotiated once; fixed by the first reply. */
+    this.outputCode = null;
   }
   stop(reason = 'disarmed') {
     this.active = false; this.generation++; this.reply = null; this.status = reason;
@@ -27,6 +34,10 @@ export class Session {
           !Number.isSafeInteger(reply.output_step_index) || reply.output_step_index <= this.lastOutput || reply.output_step_index > 16000000 ||
           !Array.isArray(spikes) || spikes.length > this.profile.output || new Set(spikes).size !== spikes.length ||
           spikes.some(v => !Number.isInteger(v) || v < 0 || v >= this.profile.output)) throw Error('Stale or malformed output');
+      // The companion forwards the brain's handshake output code (absent: spikes).
+      const code = reference.outputCode(reply.output_code);
+      if (this.outputCode !== null && code !== this.outputCode) throw Error('Brain output_code changed within a session');
+      this.outputCode = code; reply.output_code = code;
       // Legacy AER1 returns the Rust executor's step, independently of the
       // submitted request sequence. Require monotonic output, as the Java
       // adapter does; do not invent a biological time relation between them.

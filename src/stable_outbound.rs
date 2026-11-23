@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Crash safe outbound handoff for physically distributed stable shards.
 //!
 //! A partial worker may finish a deterministic transition before the

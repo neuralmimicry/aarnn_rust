@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 #[cfg(feature = "growth3d")]
 use aarnn_rust::config::{LIFParams, NetworkConfig, STDPParams};
 #[cfg(feature = "growth3d")]

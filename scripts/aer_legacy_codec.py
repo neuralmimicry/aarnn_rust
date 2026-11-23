@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Small legacy AER1/TCP codec retained by the NAO reference proxy.
 
 The simulator TCP-to-IPC bridge is implemented by the Rust binary. These

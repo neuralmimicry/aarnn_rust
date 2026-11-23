@@ -441,3 +441,14 @@ Useful env overrides:
 ## Notes
 
 The operator and experiment code is intentionally lightweight and dependency-minimal so it is runnable as example code. Production deployments would normally wrap the controllers in a controller-runtime framework or a long-running service inside the cluster.
+
+
+## License
+
+All original NeuralMimicry and masterkiga source code that the project owners
+have authority to release is licensed under the MIT License. See LICENSE.
+Copyright notices identify the actual rights holders. Third-party components
+retain their required notices and licence terms. Separately licensed
+non-code assets are identified in their locations.
+
+See LICENSING-EXCEPTIONS.md for the vendor, assessment, asset and generated-source boundaries.

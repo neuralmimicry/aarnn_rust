@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Governed, bounded AARNN-AER/1 application protocol.
 //!
 //! This layer is transport-neutral: QUIC, WSS, WebRTC data channels and

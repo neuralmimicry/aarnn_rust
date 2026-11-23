@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Communication-aware hierarchical sharding.
 //!
 //! This is the active deterministic placement planner used by the distributed

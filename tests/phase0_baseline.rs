@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use aarnn_rust::config::{LIFParams, NetworkConfig, STDPParams};
 use aarnn_rust::network::build_network;
 use aarnn_rust::sim::{Learning, NeuronModel, run_snn};

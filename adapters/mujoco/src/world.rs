@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Native physics scheduling and source-clock transduction. Reference mode has
 //! no production lease/commit claim; stale packets expire visibly and disarm.
 use crate::{
@@ -11,6 +15,13 @@ use std::{collections::HashMap, path::Path};
 
 /// Local embodiment checkpoint, deliberately excluding the remote brain and
 /// in-flight transport. Restoring always disconnects and inhibits actuation.
+/// Sensor mount: body id, world position and body rotation matrix.
+type SensorMount = (usize, [f64; 3], [[f64; 3]; 3]);
+/// Declared panel: body, point, panel frame in the body, area, polar.
+type AeroPanel = (usize, [f64; 3], [[f64; 3]; 3], f64, [f64; 5]);
+/// Flight motor joints: (qpos, dof) of the [stroke, pitch] joints per wing.
+type FlightJoints = [[(usize, usize); 2]; 2];
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Checkpoint {
     pub schema_version: u32,
@@ -58,7 +69,27 @@ pub struct World {
     pub actuation: Actuation,
     retina: Vec<f64>,
     panels: Vec<(usize, [f64; 3], f64)>,
+    /// Declared `quasi-steady-panel-v2` panels (body, point, panel frame in
+    /// the body, area, polar) and air density (scene `aerodynamics`).
+    aero: Vec<AeroPanel>,
+    air_density: f64,
+    /// Hydrodynamic ellipsoids (body, semi-axes, centre offset) and water.
+    hydro: Vec<(usize, [f64; 3], [f64; 3])>,
+    water: Option<aarnn_embodiment::force::Water>,
+    buoyancy_offset: [f64; 3],
+    flight: Option<(aarnn_embodiment::flight::Flight, FlightJoints)>,
     legacy: crate::legacy::Senses,
+    /// Sensory vector most recently submitted to the bound brain, or a
+    /// passive-control observation from [`World::observe_unbound`].
+    pub last_sensors: Vec<f64>,
+    /// Cumulative output spikes per named channel, counted only for replies the
+    /// motor state machine applied; expired or inhibited replies are excluded.
+    pub applied_spikes: Vec<u64>,
+    /// Captures admitted by the reference client, including the initial one.
+    pub submitted: u64,
+    /// C. elegans v2 vibration high-pass state (Webots axes) and its step.
+    vibration_lp: [f64; 3],
+    vibration_step: Option<u64>,
 }
 impl std::ops::Deref for World {
     type Target = Actuation;
@@ -77,7 +108,44 @@ impl World {
             joint_indices.push(physics.joint(&a.joint)?);
         }
         let mut panels = Vec::new();
-        if record.profile_id == "crow_corvus_corone" {
+        let mut aero = Vec::new();
+        let mut air_density = 1.225;
+        if let Some(a) = record.scene.as_ref().and_then(|s| s.aerodynamics.as_ref()) {
+            // quasi-steady-panel-v2: every engine applies the same declared
+            // panels (crow: three per wing, tail, tail-base keel, body drag).
+            if a.model != "quasi-steady-panel-v2" {
+                return Err(format!("unsupported aerodynamics model {}", a.model));
+            }
+            air_density = a.density_kg_m3;
+            for p in &a.panels {
+                let polar = a.polars.get(&p.polar).ok_or("undeclared panel polar")?;
+                let [w, x, y, z] = p.quaternion_wxyz;
+                let frame = [
+                    [
+                        1. - 2. * (y * y + z * z),
+                        2. * (x * y - w * z),
+                        2. * (x * z + w * y),
+                    ],
+                    [
+                        2. * (x * y + w * z),
+                        1. - 2. * (x * x + z * z),
+                        2. * (y * z - w * x),
+                    ],
+                    [
+                        2. * (x * z - w * y),
+                        2. * (y * z + w * x),
+                        1. - 2. * (x * x + y * y),
+                    ],
+                ];
+                aero.push((
+                    physics.body(&p.body)?,
+                    p.point_m,
+                    frame,
+                    p.area_m2,
+                    polar.coefficients(),
+                ));
+            }
+        } else if record.profile_id == "crow_corvus_corone" {
             for (name, point, area) in [
                 ("left_wing_wrist_twist_link", [0., 0.06, 0.], 0.045),
                 ("right_wing_wrist_twist_link", [0., -0.06, 0.], 0.045),
@@ -86,13 +154,39 @@ impl World {
                 panels.push((physics.body(name)?, point, area));
             }
         }
-        if record.profile_id.starts_with("drosophila_") {
-            for side in ["left", "right"] {
-                panels.push((physics.body(&format!("{side}_wing"))?, [0., 0., 0.], 0.0025));
+        // resonant-flight-v1 (record `flight`): stroke and pitch joints
+        // (qpos, dof) per wing; the blades' panels are scene `aerodynamics`.
+        let flight = match &record.flight {
+            Some(f) => {
+                f.validate()?;
+                let joints = |w: &aarnn_embodiment::flight::FlightWing| -> Result<[(usize, usize); 2], String> {
+                    Ok([physics.joint(&w.stroke_joint)?, physics.joint(&w.pitch_joint)?])
+                };
+                Some((f.clone(), [joints(&f.wings[0])?, joints(&f.wings[1])?]))
             }
-        }
+            None => None,
+        };
+        let mut hydro = Vec::new();
+        let buoyancy_offset = record
+            .scene
+            .as_ref()
+            .and_then(|s| s.hydrodynamics.as_ref())
+            .map_or([0.; 3], |h| h.buoyancy_offset_m);
+        let water = match record.scene.as_ref().and_then(|s| s.hydrodynamics.as_ref()) {
+            Some(h) => {
+                if h.model != "resistive-ellipsoid-v1" {
+                    return Err(format!("unsupported hydrodynamics model {}", h.model));
+                }
+                for b in &h.bodies {
+                    hydro.push((physics.body(&b.body)?, b.half_size_m, b.offset_m));
+                }
+                Some(h.water())
+            }
+            None => None,
+        };
         let actuation = Actuation::new(&record);
-        Ok(Self {
+        let outputs = record.io.output_names.len();
+        let mut world = Self {
             physics,
             instance_id: format!("{}_0", record.profile_id),
             brain_id: None,
@@ -108,7 +202,109 @@ impl World {
             actuation,
             retina: vec![0.; 192],
             panels,
+            aero,
+            air_density,
+            hydro,
+            water,
+            buoyancy_offset,
+            flight,
             legacy: crate::legacy::Senses::default(),
+            last_sensors: Vec::new(),
+            applied_spikes: vec![0; outputs],
+            submitted: 0,
+            vibration_lp: [0.; 3],
+            vibration_step: None,
+        };
+        world.launch()?;
+        Ok(world)
+    }
+    /// Scene `launch`: give the free root its declared initial velocity (a
+    /// bird released in flight). Applied at load and after every reset.
+    fn launch(&mut self) -> Result<(), String> {
+        let Some(velocity) = self
+            .model
+            .scene
+            .as_ref()
+            .and_then(|s| s.launch.as_ref())
+            .map(|l| l.root_linear_velocity_mps)
+        else {
+            return Ok(());
+        };
+        // Integration state = [time, qpos (nq), qvel (nv), ...]; the free
+        // root's first three velocities are its world linear velocity.
+        let (nq, nv, _) = self.physics.dimensions();
+        let mut state = self.physics.snapshot();
+        if nv < 6 || state.len() < 1 + nq + 3 {
+            return Err("launch requires a free root".into());
+        }
+        state[1 + nq..1 + nq + 3].copy_from_slice(&velocity);
+        self.physics.restore(&state)
+    }
+    /// Passive-control observation for the stateless C. elegans projection
+    /// only; the values are never submitted. Other projections carry temporal
+    /// state (retina/camera cells) and are left unsampled rather than perturbed.
+    pub fn observe_unbound(&mut self) -> Result<(), String> {
+        if self.client.is_none() && !self.npc_enabled && self.model.profile_id == "celegans" {
+            self.last_sensors = self.celegans_sensors()?;
+        }
+        Ok(())
+    }
+    /// Read-only evidence sample: never steps physics or alters controls.
+    /// Sensors are the last submitted or passive-control values, not a new reading.
+    pub fn trace_record(&self) -> Result<serde_json::Value, String> {
+        let bodies = (1..self.physics.body_count())
+            .map(|b| self.physics.body_state(b).map(|(p, _, _)| p))
+            .collect::<Result<Vec<_>, _>>()?;
+        let joints: Vec<f64> = self
+            .joint_indices
+            .iter()
+            .map(|(q, _)| self.physics.qpos()[*q])
+            .collect();
+        Ok(serde_json::json!({
+            "step": self.step,
+            "reset_epoch": self.reset_epoch,
+            "time_s": self.physics.time(),
+            "body_xyz": bodies,
+            "joint_q": joints,
+            "motor_rates": self.actuation.rates(),
+            "disarmed": self.disarmed,
+            "npc_control": self.actuation.npc_control,
+            "sensors": self.last_sensors,
+            "sensor_source": if self.client.is_some() { "submitted" } else if self.last_sensors.is_empty() { "unsampled" } else { "passive-observation" },
+            "applied_spikes": self.applied_spikes,
+            "applied": self.applied,
+            "expired": self.expired,
+            "exchanges": self.client.as_ref().map(|c| c.status().exchanges),
+            // Brain output encoding negotiated in the handshake (selects the
+            // C. elegans muscle decoder: twitch for spikes, linear for pulse density).
+            "output_code": self.client.as_ref().map(|c| c.status().output_code),
+            // Full generalised position for exact frame-by-frame replay.
+            "qpos": self.physics.qpos(),
+            "muscle_activation": self.actuation.muscle_activations().map(|rows| rows.iter().flatten().copied().collect::<Vec<_>>()),
+        }))
+    }
+    /// Static trace header naming every recorded vector element.
+    pub fn trace_header(&self) -> serde_json::Value {
+        let segments: Vec<(String, usize)> = (0..self.physics.body_count())
+            .map_while(|i| {
+                let name = format!("segment_{i:02}");
+                self.physics.body(&name).ok().map(|id| (name, id))
+            })
+            .collect();
+        serde_json::json!({
+            "schema": "aarnn-mujoco-trace-v2",
+            "muscle_activation_layout": "row 01 (head) .. 24 (tail) x [MDL, MDR, MVL, MVR]",
+            "instance_id": self.instance_id,
+            "profile": self.model.profile_id,
+            "brain_id": self.brain_id,
+            "model_digest": self.model.digest,
+            "io_digest": self.model.io.digest,
+            "body_count": self.physics.body_count(),
+            "segment_body_ids": segments,
+            "actuated_joints": self.model.actuators.iter().map(|a| &a.joint).collect::<Vec<_>>(),
+            "sensor_names": self.model.io.sensors.iter().map(|s| &s.name).collect::<Vec<_>>(),
+            "output_names": self.model.io.output_names,
+            "scope": "read-only physics/IO observation; no production commit or effect authority",
         })
     }
     pub fn measured_energy(&self) -> Option<f64> {
@@ -127,8 +323,12 @@ impl World {
         self.actuation.reset();
         self.retina.fill(0.);
         self.legacy = crate::legacy::Senses::default();
+        self.last_sensors.clear();
+        self.vibration_step = None;
         self.energy_j = 20000.;
         self.actuation.stop();
+        // A declared launch velocity always fits its own validated model.
+        let _ = self.launch();
     }
     pub fn stop(&mut self) {
         self.actuation.stop();
@@ -201,6 +401,8 @@ impl World {
         self.energy_j = saved.energy_j;
         self.retina.clone_from(&saved.retina);
         self.legacy = crate::legacy::Senses::default();
+        self.last_sensors.clear();
+        self.vibration_step = None;
         self.actuation.reset();
         // Saved output filters are evidence only. A new binding must supply new
         // output; neither a motor command nor a process effect is replayed.
@@ -253,12 +455,19 @@ impl World {
                         "body_gyro" => {
                             local_omega[*sensor.axis.as_ref().ok_or("missing gyro axis")?]
                         }
+                        "body_gravity" => {
+                            inverse(r, [0., 0., -1.])[*sensor.axis.as_ref().ok_or("missing gravity axis")?]
+                        }
                         "range_ray" => {
                             let angle = sensor.angle_rad.ok_or("missing ray direction")?;
                             let delta = rotation(r, [0., 0., 0.1]);
                             let point = std::array::from_fn(|i| position[i] + delta[i]);
                             self.physics
-                                .ray(point, rotation(r, [angle.cos(), angle.sin(), 0.]), 1)?
+                                .ray_beyond_self(
+                                    point,
+                                    rotation(r, [angle.cos(), angle.sin(), 0.]),
+                                    1,
+                                )?
                                 .unwrap_or(3.)
                                 .min(3.)
                         }
@@ -338,6 +547,46 @@ impl World {
         }
         Ok(out)
     }
+    /// Normalised body-bend sample `k` (1 = head .. 12 = tail) in radians.
+    ///
+    /// Hinge `celegans_spine_NN` sits at the centre of segment `NN - 1`
+    /// (tail = 0, head = 23), i.e. at body fraction `(23.5 - s) / 24` from
+    /// the nose. The sample interpolates linearly between the two nearest
+    /// hinges. Positive angles are ventral (see the v3 muscle transducer).
+    fn celegans_bend(&self, k: usize) -> Result<f64, String> {
+        let ap = 0.06 + 0.88 * (k.saturating_sub(1)) as f64 / 11.0;
+        let mut hinges: Vec<(f64, f64)> = self
+            .model
+            .actuators
+            .iter()
+            .zip(&self.joint_indices)
+            .filter_map(|(a, (q, _))| {
+                let n: f64 = a.joint.strip_prefix("celegans_spine_")?.parse().ok()?;
+                Some(((23.5 - (n - 1.)) / 24., self.physics.qpos()[*q]))
+            })
+            .collect();
+        if hinges.is_empty() {
+            return Err("C. elegans bend requires named spine hinges".into());
+        }
+        hinges.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if ap <= hinges[0].0 {
+            return Ok(hinges[0].1);
+        }
+        for w in hinges.windows(2) {
+            if ap <= w[1].0 {
+                let t = (ap - w[0].0) / (w[1].0 - w[0].0);
+                return Ok(w[0].1 + t * (w[1].1 - w[0].1));
+            }
+        }
+        Ok(hinges[hinges.len() - 1].1)
+    }
+    /// Sensor mount point of a body-attached C. elegans channel.
+    fn celegans_mount(&self, s: &aarnn_embodiment::aer::Sensor) -> Result<SensorMount, String> {
+        let body = self.physics.body(s.body.as_deref().ok_or("sensor body")?)?;
+        let (p, r, _) = self.physics.body_state(body)?;
+        let offset = rotation(r, s.position_m.ok_or("sensor mount")?);
+        Ok((body, std::array::from_fn(|i| p[i] + offset[i]), r))
+    }
     fn celegans_sensors(&mut self) -> Result<Vec<f64>, String> {
         let root = self.physics.body("segment_00")?;
         let acceleration = self.physics.body_acceleration(root)?;
@@ -348,9 +597,28 @@ impl World {
         // proper-acceleration gravity reference (zero during free fall).
         let accel = [acceleration[3], acceleration[5], -acceleration[4]];
         let gyro = [omega[0], omega[2], -omega[1]];
-        self.model
-            .io
-            .sensors
+        // v2 vibration: rectified high-pass of proper acceleration (tau 0.2 s),
+        // so the static gravity reference no longer drives the touch cells.
+        // The filter advances once per physics step even if sampled twice.
+        if self.vibration_step != Some(self.step) {
+            let alpha = 1. - (-0.002_f64 / 0.2).exp();
+            if self.vibration_step.is_none() {
+                self.vibration_lp = accel;
+            }
+            for (lp, a) in self.vibration_lp.iter_mut().zip(accel) {
+                *lp += alpha * (a - *lp);
+            }
+            self.vibration_step = Some(self.step);
+        }
+        let empty = Vec::new();
+        let stimuli = self
+            .model
+            .scene
+            .as_ref()
+            .map(|s| &s.stimuli)
+            .unwrap_or(&empty);
+        let sensors = self.model.io.sensors.clone();
+        sensors
             .iter()
             .map(|s| {
                 let value = match s.kind.as_str() {
@@ -362,14 +630,48 @@ impl World {
                             normal(gyro[axis], [-10., 10.])
                         }
                     }
+                    "celegans-vibration-v2" => {
+                        let axis = s.axis.ok_or("sensor axis")?;
+                        // Full scale 20 m/s^2: a plate tap (~30 m/s^2 above 1 g) saturates,
+                        // the worm's own wriggling (~1 m/s^2) only ~0.05.
+                        ((accel[axis] - self.vibration_lp[axis]).abs() / 20.).clamp(0., 1.)
+                    }
+                    "celegans-rotation-v2" => {
+                        let axis = s.axis.ok_or("sensor axis")?;
+                        // Full scale 10 rad/s (undulation turns at ~1-2 rad/s).
+                        (gyro[axis].abs() / 10.).clamp(0., 1.)
+                    }
                     "celegans-contact-v1" => self.physics.object_contact(
                         self.physics.body(s.body.as_deref().ok_or("sensor body")?)?,
                     ),
+                    "celegans-field-v2" => {
+                        let (_, point, _) = self.celegans_mount(s)?;
+                        let field = s.mode.as_deref().ok_or("field sensor mode")?;
+                        aarnn_embodiment::aer::field_value(stimuli, field, point[0], point[1])
+                    }
+                    "celegans-range-v2" => {
+                        let (body, point, r) = self.celegans_mount(s)?;
+                        let angle = s.angle_rad.ok_or("range direction")?;
+                        let direction = rotation(r, [angle.cos(), angle.sin(), 0.]);
+                        // Group 1 is the worm's own cuticle: never self-occlude.
+                        let distance = self
+                            .physics
+                            .ray_groups(point, direction, body, [1, 0, 0, 1, 1, 1])?
+                            .unwrap_or(s.range[1]);
+                        1. - normal(distance, s.range)
+                    }
+                    "celegans-bend-v1" => {
+                        let k = s.axis.ok_or("bend sample")?;
+                        let theta = self.celegans_bend(k)?;
+                        let reach = s.range[1].max(1.0e-6);
+                        match s.mode.as_deref() {
+                            Some("dorsal") => (-theta / reach).clamp(0., 1.),
+                            Some("ventral") => (theta / reach).clamp(0., 1.),
+                            _ => return Err("bend side".into()),
+                        }
+                    }
                     "celegans-range-v1" | "celegans-irradiance-v1" => {
-                        let body = self.physics.body(s.body.as_deref().ok_or("sensor body")?)?;
-                        let (p, r, _) = self.physics.body_state(body)?;
-                        let offset = rotation(r, s.position_m.ok_or("sensor mount")?);
-                        let point = std::array::from_fn(|i| p[i] + offset[i]);
+                        let (body, point, r) = self.celegans_mount(s)?;
                         if s.kind == "celegans-range-v1" {
                             let angle = s.angle_rad.ok_or("range direction")?;
                             let direction = rotation(r, [angle.cos(), angle.sin(), 0.]);
@@ -391,6 +693,49 @@ impl World {
             })
             .collect()
     }
+    /// Passive substrate and plate stimuli for the worm: resistive-force
+    /// (agar groove) drag on every segment and the periodic plate tap.
+    /// Applied identically with or without a brain, so the passive control
+    /// shares the mechanics exactly.
+    pub fn celegans_substrate_forces(&mut self) -> Result<(), String> {
+        let Some(scene) = self.model.scene.clone() else {
+            return Ok(());
+        };
+        let tap = scene
+            .taps
+            .as_ref()
+            .is_some_and(|t| t.active(self.physics.time()));
+        let tap_accel = scene
+            .taps
+            .as_ref()
+            .map(|t| t.acceleration_mps2)
+            .unwrap_or(0.);
+        for b in 1..self.physics.body_count() {
+            let (_, r, v) = self.physics.body_state(b)?;
+            let com = self.physics.center_of_mass(b)?;
+            let mut force = [0.; 3];
+            if let Some(rft) = &scene.resistive_force {
+                // Body x-axis in world coordinates, projected to the plane.
+                let t = [r[0][0], r[1][0], 0.];
+                let n = (t[0] * t[0] + t[1] * t[1]).sqrt();
+                if n > 1.0e-9 {
+                    let t = [t[0] / n, t[1] / n];
+                    let vel = [v[3], v[4]];
+                    let vt = vel[0] * t[0] + vel[1] * t[1];
+                    let vn = [vel[0] - vt * t[0], vel[1] - vt * t[1]];
+                    force[0] = -rft.tangential * vt * t[0] - rft.normal * vn[0];
+                    force[1] = -rft.tangential * vt * t[1] - rft.normal * vn[1];
+                }
+            }
+            if tap {
+                force[2] += self.physics.body_mass(b)? * tap_accel;
+            }
+            if force.iter().any(|f| *f != 0.) {
+                self.physics.force_at(b, force, com)?;
+            }
+        }
+        Ok(())
+    }
     pub fn advance(&mut self) -> Result<(), String> {
         let reply = self.client.as_ref().and_then(Client::receive);
         let neural_ready = self.client.as_ref().is_some_and(|c| {
@@ -409,6 +754,7 @@ impl World {
         } else {
             None
         };
+        let applied = self.actuation.applied;
         self.actuation.select(
             &self.model,
             self.step,
@@ -417,6 +763,13 @@ impl World {
             reply.as_ref(),
             observations.as_deref(),
         )?;
+        if self.actuation.applied > applied
+            && let Some(reply) = &reply
+        {
+            for (total, spikes) in self.applied_spikes.iter_mut().zip(&reply.spikes) {
+                *total += u64::from(*spikes);
+            }
+        }
         if self.disarmed {
             self.physics.disarm();
         } else {
@@ -446,7 +799,43 @@ impl World {
             }
         }
         self.physics.clear_forces();
-        if self.model.profile_id == "zebrafish" {
+        if self.model.profile_id == "celegans" {
+            self.celegans_substrate_forces()?;
+        }
+        if let Some(water) = self.water {
+            // resistive-ellipsoid-v1 (scene hydrodynamics): neutral buoyancy at
+            // each body's COM plus anisotropic quadratic drag on each declared
+            // ellipsoid, identical with or without a brain.
+            for body in 1..self.physics.body_count() {
+                let (_, r, _) = self.physics.body_state(body)?;
+                let com = self.physics.center_of_mass(body)?;
+                let shift = rotation(r, self.buoyancy_offset);
+                let centre: [f64; 3] = std::array::from_fn(|i| com[i] + shift[i]);
+                let mass = self.physics.body_mass(body)?;
+                self.physics
+                    .force_at(body, water.buoyancy(mass, centre[2]), centre)?;
+            }
+            for &(body, half, offset) in &self.hydro {
+                let (position, r, velocity) = self.physics.body_state(body)?;
+                let com = self.physics.center_of_mass(body)?;
+                let shift = rotation(r, offset);
+                let centre: [f64; 3] = std::array::from_fn(|i| position[i] + shift[i]);
+                let angular = [velocity[0], velocity[1], velocity[2]];
+                let arm: [f64; 3] = std::array::from_fn(|i| centre[i] - com[i]);
+                let spin = cross(angular, arm);
+                let linear: [f64; 3] = std::array::from_fn(|i| velocity[i + 3] + spin[i]);
+                let (force, torque) = aarnn_embodiment::force::ellipsoid_drag(
+                    &water,
+                    half,
+                    r,
+                    linear,
+                    angular,
+                    water.submersion(centre[2]),
+                )
+                .map_err(str::to_string)?;
+                self.physics.wrench_at(body, force, torque, centre)?;
+            }
+        } else if self.model.profile_id == "zebrafish" {
             // Versioned neutral-density water: actual displacement buoyancy and
             // dissipative drag, independent of spikes and active control.
             for body in 1..self.physics.body_count() {
@@ -472,6 +861,40 @@ impl World {
             let relative = std::array::from_fn(|i| velocity[i + 3] + rotational[i]);
             let force = panel_force(relative, r, area).map_err(str::to_string)?;
             self.physics.force_at(body, force, point)?;
+        }
+        for &(body, local, frame, area, polar) in &self.aero {
+            let (position, r, velocity) = self.physics.body_state(body)?;
+            let offset = rotation(r, local);
+            let point = std::array::from_fn(|i| position[i] + offset[i]);
+            let com = self.physics.center_of_mass(body)?;
+            let arm = std::array::from_fn(|i| point[i] - com[i]);
+            let rotational = cross([velocity[0], velocity[1], velocity[2]], arm);
+            let relative = std::array::from_fn(|i| velocity[i + 3] + rotational[i]);
+            // Panel axes in world coordinates: body rotation times panel frame.
+            let axes: [[f64; 3]; 3] = std::array::from_fn(|i| {
+                std::array::from_fn(|j| (0..3).map(|k| r[i][k] * frame[k][j]).sum())
+            });
+            let force = aarnn_embodiment::force::polar_panel_force(
+                relative,
+                axes,
+                area,
+                self.air_density,
+                &polar,
+            )
+            .map_err(str::to_string)?;
+            self.physics.force_at(body, force, point)?;
+        }
+        if let Some((flight, joints)) = &self.flight {
+            // Flight motor torques from the decoded commands (zero, i.e.
+            // folded wings, whenever actuation is disarmed).
+            let (q, v) = (self.physics.qpos(), self.physics.qvel());
+            let state = joints.map(|w| w.map(|(qi, di)| [q[qi], v[di]]));
+            let torques = flight.torques(self.physics.time(), self.actuation.commands(), state)?;
+            for (wing, tau) in joints.iter().zip(torques) {
+                for ((_, dof), t) in wing.iter().zip(tau) {
+                    self.physics.add_joint_force(*dof, t)?;
+                }
+            }
         }
         if self.model.profile_id == "crow_corvus_corone" && !self.disarmed {
             let predicted = self.physics.predicted_power();
@@ -499,12 +922,16 @@ impl World {
             }
         }
         if self.client.as_ref().is_some_and(|c| c.status().ready) {
+            let values = self.sensors()?;
+            self.last_sensors.clone_from(&values);
             let capture = Capture {
                 step: self.step,
                 timestamp_us: self.step.checked_mul(2000).ok_or("source clock overflow")?,
-                values: self.sensors()?,
+                values,
             };
-            self.client.as_ref().unwrap().submit(capture);
+            if self.client.as_ref().unwrap().submit(capture) {
+                self.submitted += 1;
+            }
         }
         Ok(())
     }

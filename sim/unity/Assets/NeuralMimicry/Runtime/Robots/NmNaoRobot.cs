@@ -1,50 +1,48 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // NmNaoRobot.cs — Unity C# MonoBehaviour for the NAO V6 humanoid robot.
 // Compatible with Unity 2022.3 LTS+.
 //
-// Sensor channels (~250 total at default retina 8×6):
+// Body and drives are the OEM NAO of the MuJoCo reference, frozen from the
+// generated record into NmNaoOem.generated.cs (scripts/generate_nao_engine_tables.py):
+// 41 ArticulationBody links (torso + 40 hinges incl. 8 phalanges per hand) in
+// the OEM zero pose, H25 link offsets, per-link masses and inertia, OEM joint
+// ranges, position-servo gains kp = torque / 0.1 rad, back-EMF damping, torque
+// and speed limits. Self-collision is off, as in the reference.
+//
+// Sensor channels (250 at the default 8×6 retina; this body's legacy layout):
 //   [00-01]   2 sonar (L, R): SphereCast from chest, max 2.55 m
 //   [02-04]   3 accelerometer XYZ
 //   [05-06]   2 gyro XY
 //   [07-09]   3 GPS XYZ (world position, metre-scale, normalised per axis)
 //   [10-12]   3 inertial (roll, pitch, yaw) normalised to [0,1]
-//   [13-20]   8 foot pressure (L4 + R4 contact points at toe/heel corners)
+//   [13-20]   8 foot pressure (L4 + R4 sole corners: toe L/R, heel L/R)
 //   [21-22]   2 bumpers (chest L, chest R)
-//   [23-48]   26 joint position channels (one per motor joint)
-//   [49-57]    9 joint-velocity channels
-//   [58 .. 58 + 4*W*H - 1]  head camera event channels (on/off × L/R, 8×6 default = 192)
-//     [58 .. 58+W*H-1]         left ON
-//     [58+W*H .. 58+2*W*H-1]   left OFF
-//     [58+2*W*H .. 58+3*W*H-1] right ON
-//     [58+3*W*H .. 58+4*W*H-1] right OFF
+//   [23-48]   26 joint positions, (q - lo)/(hi - lo), legacy joint order
+//             (see LegacySensorJoints; Hand = Phalanx1)
+//   [49-57]    9 joint-velocity channels (first nine of the above)
+//   [58 .. 58 + 4*W*H - 1]  head camera event channels (on/off × L/R)
 //
-// Actuator channels (40 total):
-//   [00-01]   shoulder pitch L, R
-//   [02-03]   shoulder roll  L, R
-//   [04-05]   elbow yaw      L, R
-//   [06-07]   elbow roll     L, R
-//   [08-09]   wrist yaw      L, R
-//   [10-11]   hand           L, R
-//   [12-13]   hip yaw-pitch  L, R
-//   [14-15]   hip roll       L, R
-//   [16-17]   hip pitch      L, R
-//   [18-19]   knee pitch     L, R
-//   [20-21]   ankle pitch    L, R
-//   [22-23]   ankle roll     L, R
-//   [24-31]   head pitch, head yaw, chest RGB LED (3), foot L LED, foot R LED, head LED = 8
-//   [32-39]   reserved
+// Actuator channels (40): the reference NAO output contract
+// (io.output_names of generated/nao.json, NmNaoOem.OutputNames). Each joint
+// reads its record readout channel. A graded (pulse-density) brain is decoded
+// as Actuation does (actuation.rs): target = lo + density (hi - lo), with the
+// record's decode_tau_s (0.2 s) and servo wake-up (from the zero pose over
+// 1 s), so a brain that stands the MuJoCo NAO drives the same joints here.
 
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace NeuralMimicry
 {
     /// <summary>
-    /// NeuralMimicry-controlled simulation of the NAO V6 humanoid robot.
-    /// A full ArticulationBody hierarchy replicates the NAO's 25 DOF (arms, legs,
-    /// head).  Sensor modalities mirror the Webots NAO NN controller: sonar, IMU,
-    /// GPS, foot pressure, bumpers, and a downsampled head-camera event stream.
-    /// Actuators cover 26 joint drives plus 8 LED channels (mapped from the 40
-    /// neural output channels).
+    /// NeuralMimicry-controlled simulation of the NAO V6 humanoid robot, built
+    /// from the OEM link tree of the MuJoCo reference (NmNaoOem). Sensor
+    /// modalities mirror the Webots NAO NN controller: sonar, IMU, GPS, foot
+    /// pressure, bumpers, and a downsampled head-camera event stream.
     /// </summary>
     [RequireComponent(typeof(ArticulationBody))]
     public sealed class NmNaoRobot : NmRobotBase
@@ -58,50 +56,38 @@ namespace NeuralMimicry
         // Constants
         // ------------------------------------------------------------------ //
 
-        private const int BaseSensors    = 58;
-        private const int TotalActuators = 40;
+        private const int BaseSensors = 58;
+        private const int NumJointPositionSensors = 26;
         private const int NumJointVelocitySensors = 9;
 
-        // Joint indices into _joints[] array (matches ActuatorNames order).
-        private enum JointId
+        /// <summary>Joints behind the legacy joint-position channels [23..48].</summary>
+        private static readonly string[] LegacySensorJoints =
         {
-            ShoulderPitchL, ShoulderPitchR,
-            ShoulderRollL,  ShoulderRollR,
-            ElbowYawL,      ElbowYawR,
-            ElbowRollL,     ElbowRollR,
-            WristYawL,      WristYawR,
-            HandL,          HandR,
-            HipYawPitchL,   HipYawPitchR,
-            HipRollL,       HipRollR,
-            HipPitchL,      HipPitchR,
-            KneePitchL,     KneePitchR,
-            AnklePitchL,    AnklePitchR,
-            AnkleRollL,     AnkleRollR,
-            HeadPitch,      HeadYaw,
-            Count // 26 motor joints
-        }
-        private const int NumMotorJoints = (int)JointId.Count; // 26
+            "LShoulderPitch", "RShoulderPitch", "LShoulderRoll", "RShoulderRoll",
+            "LElbowYaw", "RElbowYaw", "LElbowRoll", "RElbowRoll",
+            "LWristYaw", "RWristYaw", "LPhalanx1", "RPhalanx1",
+            "LHipYawPitch", "RHipYawPitch", "LHipRoll", "RHipRoll",
+            "LHipPitch", "RHipPitch", "LKneePitch", "RKneePitch",
+            "LAnklePitch", "RAnklePitch", "LAnkleRoll", "RAnkleRoll",
+            "HeadPitch", "HeadYaw",
+        };
+        private static readonly string[] LegacySensorLabels =
+        {
+            "ShoulderPitchL", "ShoulderPitchR", "ShoulderRollL", "ShoulderRollR",
+            "ElbowYawL", "ElbowYawR", "ElbowRollL", "ElbowRollR",
+            "WristYawL", "WristYawR", "HandL", "HandR",
+            "HipYawPitchL", "HipYawPitchR", "HipRollL", "HipRollR",
+            "HipPitchL", "HipPitchR", "KneePitchL", "KneePitchR",
+            "AnklePitchL", "AnklePitchR", "AnkleRollL", "AnkleRollR",
+            "HeadPitch", "HeadYaw",
+        };
+
+        /// <summary>CameraTop of the reference, relative to the HeadPitch link (MuJoCo frame, m).</summary>
+        private static readonly double[] HeadCameraM = { 0.0539, 0.0, 0.0679 };
 
         // ------------------------------------------------------------------ //
         // Inspector
         // ------------------------------------------------------------------ //
-
-        [Header("Body Dimensions (NAO V6 approximate)")]
-        [SerializeField] private float _torsoHeight    = 0.2f;
-        [SerializeField] private float _torsoWidth     = 0.11f;
-        [SerializeField] private float _torsoDepth     = 0.08f;
-        [SerializeField] private float _upperArmLen    = 0.09f;
-        [SerializeField] private float _lowerArmLen    = 0.075f;
-        [SerializeField] private float _thighLen       = 0.1f;
-        [SerializeField] private float _shinLen        = 0.1025f;
-        [SerializeField] private float _footLen        = 0.16f;
-        [SerializeField] private float _footWidth      = 0.08f;
-        [SerializeField] private float _headRadius     = 0.05f;
-        [SerializeField] private float _limbRadius     = 0.018f;
-
-        [Header("Drive Parameters")]
-        [SerializeField] private float _driveStiffness = 800f;
-        [SerializeField] private float _driveDamping   = 60f;
 
         [Header("Sonar")]
         [SerializeField, Tooltip("Max sonar range in metres.")]
@@ -117,8 +103,8 @@ namespace NeuralMimicry
         [SerializeField] private float _gyroMax  = 10f;
 
         [Header("Foot Contacts")]
-        [SerializeField, Tooltip("Sphere radius for foot contact CheckSphere.")]
-        private float _footContactRadius = 0.015f;
+        [SerializeField, Tooltip("Sphere radius for foot contact probes below each sole corner.")]
+        private float _footContactRadius = 0.004f;
         [SerializeField] private LayerMask _footLayerMask = Physics.DefaultRaycastLayers;
 
         [Header("Camera")]
@@ -130,11 +116,17 @@ namespace NeuralMimicry
         // Runtime state
         // ------------------------------------------------------------------ //
 
-        // Main joint array indexed by JointId.
-        private ArticulationBody[] _joints;
+        // One ArticulationBody per OEM hinge, NmNaoOem.Links order.
+        private ArticulationBody[] _links;
+        private int[] _sensorLinks;
+        // Graded (pulse-density) brain: the record's readout channels,
+        // decode_tau_s and wake (the reference Actuation decode).
+        private readonly NmGradedJoints _graded = BuildDecoder();
 
-        // Foot contact check transforms: [foot: 0=L,1=R][corner: 0..3].
+        // Foot contact probes: [foot: 0=L,1=R][corner: 0..3].
         private Transform[,] _footCorners;
+        private readonly HashSet<Collider> _ownColliders = new HashSet<Collider>();
+        private readonly Collider[] _overlap = new Collider[16];
 
         // Camera.
         private Camera        _headCam;
@@ -152,7 +144,6 @@ namespace NeuralMimicry
         private bool _bodyBuilt;
 
         private string[] _sensorNamesCache;
-        private string[] _actuatorNamesCache;
 
         // ------------------------------------------------------------------ //
         // Abstract property implementations
@@ -185,7 +176,7 @@ namespace NeuralMimicry
                     n[i++] = $"nao_s_{i:D2}_foot_pressure_{(fp < 4 ? 'L' : 'R')}{fp % 4}";
                 n[i++] = "nao_s_21_bumper_L";
                 n[i++] = "nao_s_22_bumper_R";
-                for (int j = 0; j < NumMotorJoints; j++)
+                for (int j = 0; j < NumJointPositionSensors; j++)
                     n[i++] = $"nao_s_{i:D3}_joint_pos_{j:D2}";
                 for (int j = 0; j < NumJointVelocitySensors; j++)
                     n[i++] = $"nao_s_{i:D3}_joint_vel_{j:D2}";
@@ -199,38 +190,11 @@ namespace NeuralMimicry
         }
 
         /// <inheritdoc/>
-        public override string[] ActuatorNames
-        {
-            get
-            {
-                if (_actuatorNamesCache != null) return _actuatorNamesCache;
-                var n = new string[TotalActuators]
-                {
-                    "nao_o_00_ShoulderPitchL", "nao_o_01_ShoulderPitchR",
-                    "nao_o_02_ShoulderRollL",  "nao_o_03_ShoulderRollR",
-                    "nao_o_04_ElbowYawL",      "nao_o_05_ElbowYawR",
-                    "nao_o_06_ElbowRollL",     "nao_o_07_ElbowRollR",
-                    "nao_o_08_WristYawL",      "nao_o_09_WristYawR",
-                    "nao_o_10_HandL",          "nao_o_11_HandR",
-                    "nao_o_12_HipYawPitchL",   "nao_o_13_HipYawPitchR",
-                    "nao_o_14_HipRollL",       "nao_o_15_HipRollR",
-                    "nao_o_16_HipPitchL",      "nao_o_17_HipPitchR",
-                    "nao_o_18_KneePitchL",     "nao_o_19_KneePitchR",
-                    "nao_o_20_AnklePitchL",    "nao_o_21_AnklePitchR",
-                    "nao_o_22_AnkleRollL",     "nao_o_23_AnkleRollR",
-                    "nao_o_24_HeadPitch",      "nao_o_25_HeadYaw",
-                    "nao_o_26_LED_chest_R",    "nao_o_27_LED_chest_G",
-                    "nao_o_28_LED_chest_B",    "nao_o_29_LED_foot_L",
-                    "nao_o_30_LED_foot_R",     "nao_o_31_LED_head",
-                    "nao_o_32_reserved",       "nao_o_33_reserved",
-                    "nao_o_34_reserved",       "nao_o_35_reserved",
-                    "nao_o_36_reserved",       "nao_o_37_reserved",
-                    "nao_o_38_reserved",       "nao_o_39_reserved",
-                };
-                _actuatorNamesCache = n;
-                return n;
-            }
-        }
+        public override string[] ActuatorNames => _actuatorNames;
+        private readonly string[] _actuatorNames = (string[])NmNaoOem.OutputNames.Clone();
+
+        /// <summary>Legacy label of joint-position channel <paramref name="index"/> (0..25).</summary>
+        public static string JointPositionLabel(int index) => LegacySensorLabels[index];
 
         // ------------------------------------------------------------------ //
         // MonoBehaviour lifecycle
@@ -254,11 +218,12 @@ namespace NeuralMimicry
 
         private void HandleBumper(Collision col)
         {
-            // Simple chest-level bumper: check if contact point is near chest front.
+            // Chest-level bumper: a contact on the front of the torso box.
+            float halfHeight = (float)NmNaoOem.TorsoBoxHalfM[2];
             foreach (ContactPoint cp in col.contacts)
             {
                 Vector3 local = transform.InverseTransformPoint(cp.point);
-                if (local.z > 0f && Mathf.Abs(local.y) < _torsoHeight * 0.3f)
+                if (local.z > 0f && Mathf.Abs(local.y - (float)NmNaoOem.TorsoBoxPositionM[2]) < halfHeight * 0.6f)
                 {
                     _bumperL = local.x < 0f ? 1f : _bumperL;
                     _bumperR = local.x >= 0f ? 1f : _bumperR;
@@ -267,183 +232,199 @@ namespace NeuralMimicry
         }
 
         // ------------------------------------------------------------------ //
-        // Body construction
+        // Body construction (OEM link tree, MuJoCo frame -> Unity)
         // ------------------------------------------------------------------ //
+
+        /// <summary>MuJoCo (x fwd, y left, z up) to Unity (x right, y up, z fwd): EmbodimentBasis.Polar.</summary>
+        private static Vector3 U(double[] a) => new Vector3((float)-a[1], (float)a[2], (float)a[0]);
+
+        /// <summary>MuJoCo wxyz quaternion to Unity: EmbodimentBasis.Rotation.</summary>
+        private static Quaternion Q(double[] q) =>
+            new Quaternion((float)q[2], (float)-q[3], (float)-q[1], (float)q[0]);
+
+        /// <summary>MuJoCo half extents (x, y, z) to a Unity box size.</summary>
+        private static Vector3 Size(double[] h) =>
+            new Vector3((float)(2 * h[1]), (float)(2 * h[2]), (float)(2 * h[0]));
+
+        private static NmGradedJoints BuildDecoder()
+        {
+            var links = NmNaoOem.Links;
+            var readouts = new NmReadout[links.Length][];
+            for (int j = 0; j < links.Length; j++)
+                readouts[j] = new[] { new NmReadout(links[j].Channel, 1.0) };
+            var decoder = new NmGradedJoints(readouts);
+            for (int j = 0; j < links.Length; j++)
+            {
+                var k = links[j];
+                if (k.DecodeTauS > 0.0) decoder.SetDecodeTau(j, k.DecodeTauS);
+                if (k.Wake) decoder.SetWake(j, k.WakeFrom, k.WakeSeconds, k.Lo, k.Hi);
+            }
+            return decoder;
+        }
 
         private void BuildBody()
         {
-            _joints      = new ArticulationBody[(int)JointId.Count];
+            var links = NmNaoOem.Links;
+            _links = new ArticulationBody[links.Length];
             _footCorners = new Transform[2, 4];
+            var own = new List<Collider>();
 
-            // Root torso.
+            // Root torso (free articulation root).
             _torso = GetComponent<ArticulationBody>();
-            _torso.mass = 5.5f; // NAO V6 ~5.5 kg
-            if (GetComponent<BoxCollider>() == null)
+            var torsoBox = GetComponent<BoxCollider>();
+            if (torsoBox == null) torsoBox = gameObject.AddComponent<BoxCollider>();
+            torsoBox.center = U(NmNaoOem.TorsoBoxPositionM);
+            torsoBox.size = Size(NmNaoOem.TorsoBoxHalfM);
+            own.AddRange(GetComponents<Collider>());
+            SetMass(_torso, NmNaoOem.TorsoMassKg, NmNaoOem.TorsoComM, NmNaoOem.TorsoInertiaKgM2,
+                    NmNaoOem.TorsoInertiaFrameWxyz);
+
+            var soleGrip = new PhysicMaterial("NAO sole")
             {
-                var bc = gameObject.AddComponent<BoxCollider>();
-                bc.size   = new Vector3(_torsoWidth, _torsoHeight, _torsoDepth);
-                bc.center = Vector3.zero;
+                dynamicFriction = 1f, staticFriction = 1f, bounciness = 0f,
+                frictionCombine = PhysicMaterialCombine.Maximum,
+            };
+            for (int i = 0; i < links.Length; i++)
+            {
+                var k = links[i];
+                var parent = k.Parent < 0 ? transform : _links[k.Parent].transform;
+                var go = new GameObject(k.Name);
+                go.transform.SetParent(parent, false);
+                go.transform.localPosition = U(k.PositionM);
+                go.transform.localRotation = Quaternion.identity;
+                var collider = AddCollider(go, k);
+                own.Add(collider);
+                var ab = go.AddComponent<ArticulationBody>();
+                ab.jointType = ArticulationJointType.RevoluteJoint;
+                ab.anchorPosition = Vector3.zero;
+                // A MuJoCo hinge's +angle about axis a is a Unity rotation about
+                // -Polar(a) (the basis change is a reflection), so the joint
+                // reads and drives the reference angle directly.
+                ab.anchorRotation = Quaternion.FromToRotation(Vector3.right, -U(k.Axis));
+                ab.twistLock = ArticulationDofLock.LimitedMotion;
+                ab.linearDamping = 0f;
+                ab.angularDamping = 0f;
+                ab.jointFriction = 0f;
+                ab.maxJointVelocity = (float)k.VelocityRadS;
+                // ArticulationDrive: target/limits in degrees, stiffness N m/rad,
+                // damping N m s/rad, force limit N m (PhysX reduced coordinates).
+                ab.xDrive = new ArticulationDrive
+                {
+                    stiffness  = (float)k.Kp,
+                    damping    = (float)k.Kd,
+                    forceLimit = (float)k.EffortNm,
+                    lowerLimit = (float)(k.Lo * Mathf.Rad2Deg),
+                    upperLimit = (float)(k.Hi * Mathf.Rad2Deg),
+                    target     = RestDegrees(k),
+                };
+                SetMass(ab, k.MassKg, k.ComM, k.InertiaKgM2, k.InertiaFrameWxyz);
+                _links[i] = ab;
+                if (k.Name == "LAnkleRoll" || k.Name == "RAnkleRoll")
+                {
+                    collider.sharedMaterial = soleGrip;
+                    AddFootCorners(go.transform, k, k.Name[0] == 'L' ? 0 : 1);
+                }
+                if (k.Name == "HeadPitch")
+                    SetupHeadCamera(go.transform);
             }
+            // The reference excludes every self-contact pair (graph exclusions).
+            foreach (var c in own) _ownColliders.Add(c);
+            for (int a = 0; a < own.Count; a++)
+                for (int b = a + 1; b < own.Count; b++)
+                    Physics.IgnoreCollision(own[a], own[b]);
 
-            // -- Head --
-            var headGo = new GameObject("Head");
-            headGo.transform.SetParent(transform);
-            headGo.transform.localPosition = new Vector3(0f, _torsoHeight * 0.5f + _headRadius, 0f);
-            headGo.transform.localRotation = Quaternion.identity;
-            var headCol = headGo.AddComponent<SphereCollider>();
-            headCol.radius = _headRadius;
-            _joints[(int)JointId.HeadPitch] = AttachRevoluteJoint(headGo, -40f, 30f, 0.6f);
-            // HeadYaw is a child of HeadPitch.
-            var headYawGo = new GameObject("HeadYaw");
-            headYawGo.transform.SetParent(headGo.transform);
-            headYawGo.transform.localPosition = Vector3.zero;
-            headYawGo.transform.localRotation = Quaternion.identity;
-            _joints[(int)JointId.HeadYaw] = AttachRevoluteJoint(headYawGo, -119f, 119f, 0.1f);
-
-            // Head camera.
-            SetupHeadCamera(headGo.transform);
-
-            // -- Left Arm --
-            BuildArm(isLeft: true);
-
-            // -- Right Arm --
-            BuildArm(isLeft: false);
-
-            // -- Left Leg --
-            BuildLeg(isLeft: true);
-
-            // -- Right Leg --
-            BuildLeg(isLeft: false);
-
+            _sensorLinks = new int[NumJointPositionSensors];
+            for (int s = 0; s < NumJointPositionSensors; s++)
+                _sensorLinks[s] = Array.FindIndex(links, k => k.Name == LegacySensorJoints[s]);
             _prevVelocity = Vector3.zero;
             _bodyBuilt    = true;
         }
 
-        private void BuildArm(bool isLeft)
+        private static Collider AddCollider(GameObject link, NmNaoOem.Link k)
         {
-            float side = isLeft ? -1f : 1f;
-            var shoulderGo = new GameObject($"Shoulder{(isLeft ? "L" : "R")}");
-            shoulderGo.transform.SetParent(transform);
-            shoulderGo.transform.localPosition = new Vector3(side * _torsoWidth * 0.5f,
-                                                              _torsoHeight * 0.35f, 0f);
-
-            int pIdx = isLeft ? (int)JointId.ShoulderPitchL : (int)JointId.ShoulderPitchR;
-            int rIdx = isLeft ? (int)JointId.ShoulderRollL  : (int)JointId.ShoulderRollR;
-            int eyIdx = isLeft ? (int)JointId.ElbowYawL     : (int)JointId.ElbowYawR;
-            int erIdx = isLeft ? (int)JointId.ElbowRollL    : (int)JointId.ElbowRollR;
-            int wyIdx = isLeft ? (int)JointId.WristYawL     : (int)JointId.WristYawR;
-            int hIdx  = isLeft ? (int)JointId.HandL         : (int)JointId.HandR;
-
-            _joints[pIdx] = AttachRevoluteJoint(shoulderGo, -119f, 119f, 0.07f);
-            var upperArm  = CreateLimb($"UpperArm{(isLeft ? "L" : "R")}", shoulderGo.transform,
-                                       new Vector3(0f, -_upperArmLen * 0.5f, 0f), _upperArmLen);
-            _joints[rIdx] = AttachRevoluteJoint(upperArm, isLeft ? -76f : -18f,
-                                                           isLeft ? 18f  : 76f, 0.015f);
-            var lowerArm  = CreateLimb($"LowerArm{(isLeft ? "L" : "R")}", upperArm.transform,
-                                       new Vector3(0f, -_lowerArmLen * 0.5f, 0f), _lowerArmLen);
-            _joints[eyIdx] = AttachRevoluteJoint(lowerArm, -119f, 119f, 0.015f);
-            _joints[erIdx] = AttachRevoluteJoint(lowerArm, isLeft ? -88.5f : -2f,
-                                                            isLeft ? -2f : 88.5f, 0.01f);
-            _joints[wyIdx] = AttachRevoluteJoint(lowerArm, -105f, 105f, 0.008f);
-            _joints[hIdx]  = AttachRevoluteJoint(lowerArm, 0f, 57.2f, 0.005f);
-        }
-
-        private void BuildLeg(bool isLeft)
-        {
-            float side = isLeft ? -1f : 1f;
-            var hipGo  = new GameObject($"Hip{(isLeft ? "L" : "R")}");
-            hipGo.transform.SetParent(transform);
-            hipGo.transform.localPosition = new Vector3(side * _torsoWidth * 0.3f,
-                                                        -_torsoHeight * 0.5f, 0f);
-
-            int ypIdx = isLeft ? (int)JointId.HipYawPitchL : (int)JointId.HipYawPitchR;
-            int hrIdx = isLeft ? (int)JointId.HipRollL     : (int)JointId.HipRollR;
-            int hpIdx = isLeft ? (int)JointId.HipPitchL    : (int)JointId.HipPitchR;
-            int kIdx  = isLeft ? (int)JointId.KneePitchL   : (int)JointId.KneePitchR;
-            int apIdx = isLeft ? (int)JointId.AnklePitchL  : (int)JointId.AnklePitchR;
-            int arIdx = isLeft ? (int)JointId.AnkleRollL   : (int)JointId.AnkleRollR;
-
-            _joints[ypIdx] = AttachRevoluteJoint(hipGo, -65.7f, 42.4f, 0.06f);
-            _joints[hrIdx] = AttachRevoluteJoint(hipGo, isLeft ? -21.7f : -45.3f,
-                                                         isLeft ? 45.3f :  21.7f, 0.05f);
-            _joints[hpIdx] = AttachRevoluteJoint(hipGo, -88f, 27.7f, 0.08f);
-
-            var thigh = CreateLimb($"Thigh{(isLeft ? "L" : "R")}", hipGo.transform,
-                                   new Vector3(0f, -_thighLen * 0.5f, 0f), _thighLen);
-            _joints[kIdx]  = AttachRevoluteJoint(thigh, -5.7f, 121.1f, 0.06f);
-
-            var shin = CreateLimb($"Shin{(isLeft ? "L" : "R")}", thigh.transform,
-                                  new Vector3(0f, -_shinLen * 0.5f, 0f), _shinLen);
-            _joints[apIdx] = AttachRevoluteJoint(shin, -68.1f, 53.4f, 0.04f);
-            _joints[arIdx] = AttachRevoluteJoint(shin, isLeft ? -22.8f : -44.1f,
-                                                        isLeft ? 44.1f :  22.8f, 0.03f);
-
-            // Foot.
-            var footGo = new GameObject($"Foot{(isLeft ? "L" : "R")}");
-            footGo.transform.SetParent(shin.transform);
-            footGo.transform.localPosition = new Vector3(0f, -_shinLen, 0f);
-            footGo.transform.localRotation = Quaternion.identity;
-            var footCol = footGo.AddComponent<BoxCollider>();
-            footCol.size   = new Vector3(_footWidth, 0.012f, _footLen);
-            footCol.center = new Vector3(0f, -0.006f, _footLen * 0.1f);
-            var footAb = footGo.AddComponent<ArticulationBody>();
-            footAb.mass    = 0.25f;
-            footAb.jointType = ArticulationJointType.FixedJoint;
-
-            // Create foot corner contact probes.
-            int fi = isLeft ? 0 : 1;
-            float[] cx = { -_footWidth * 0.4f, _footWidth * 0.4f,
-                           -_footWidth * 0.4f, _footWidth * 0.4f };
-            float[] cz = { _footLen * 0.45f, _footLen * 0.45f,
-                          -_footLen * 0.35f, -_footLen * 0.35f };
-            for (int c = 0; c < 4; c++)
+            var go = new GameObject(k.Name + "_collision");
+            go.transform.SetParent(link.transform, false);
+            go.transform.localPosition = U(k.ColliderPositionM);
+            go.transform.localRotation = Q(k.ColliderFrameWxyz);
+            var h = k.ColliderHalfM;
+            switch (k.Collider)
             {
-                var corner = new GameObject($"FootCorner{c}");
-                corner.transform.SetParent(footGo.transform);
-                corner.transform.localPosition = new Vector3(cx[c], -0.01f, cz[c]);
-                _footCorners[fi, c] = corner.transform;
+                case NmNaoOem.Shape.Sphere:
+                {
+                    var s = go.AddComponent<SphereCollider>();
+                    s.radius = (float)h[0];
+                    return s;
+                }
+                case NmNaoOem.Shape.Ellipsoid:
+                {
+                    // Engineering approximation: the head ellipsoid as a sphere.
+                    var s = go.AddComponent<SphereCollider>();
+                    s.radius = (float)((h[0] + h[1] + h[2]) / 3.0);
+                    return s;
+                }
+                case NmNaoOem.Shape.Capsule:
+                case NmNaoOem.Shape.Cylinder:
+                {
+                    // MuJoCo capsule/cylinder axis is local z = Unity local y.
+                    var c = go.AddComponent<CapsuleCollider>();
+                    c.direction = 1;
+                    c.radius = (float)h[0];
+                    double length = k.Collider == NmNaoOem.Shape.Capsule ? 2 * (h[1] + h[0]) : 2 * h[1];
+                    c.height = Mathf.Max((float)length, 2f * (float)h[0]);
+                    return c;
+                }
+                default:
+                {
+                    var b = go.AddComponent<BoxCollider>();
+                    b.size = Size(h);
+                    return b;
+                }
             }
         }
 
-        private ArticulationBody AttachRevoluteJoint(GameObject go,
-                                                      float lower, float upper, float mass)
+        private static void SetMass(ArticulationBody body, double mass, double[] com, double[] inertia, double[] frame)
         {
-            var ab = go.GetComponent<ArticulationBody>() ?? go.AddComponent<ArticulationBody>();
-            ab.mass      = mass;
-            ab.jointType = ArticulationJointType.RevoluteJoint;
-            ab.xDrive    = new ArticulationDrive
-            {
-                stiffness  = _driveStiffness,
-                damping    = _driveDamping,
-                forceLimit = float.MaxValue,
-                lowerLimit = lower,
-                upperLimit = upper,
-                target     = 0f
-            };
-            ab.linearLockX = ArticulationDofLock.LockedMotion;
-            ab.linearLockY = ArticulationDofLock.LockedMotion;
-            ab.linearLockZ = ArticulationDofLock.LockedMotion;
-            return ab;
+            body.mass = (float)mass;
+            body.centerOfMass = U(com);
+            body.inertiaTensor = new Vector3((float)inertia[1], (float)inertia[2], (float)inertia[0]);
+            body.inertiaTensorRotation = Q(frame);
         }
 
-        private GameObject CreateLimb(string name, Transform parent, Vector3 localPos, float len)
+        /// <summary>Rest pose of a joint (its wake pose, else the zero pose) in degrees.</summary>
+        private static float RestDegrees(NmNaoOem.Link k)
         {
-            var go = new GameObject(name);
-            go.transform.SetParent(parent);
-            go.transform.localPosition = localPos;
-            go.transform.localRotation = Quaternion.identity;
-            var col = go.AddComponent<CapsuleCollider>();
-            col.radius    = _limbRadius;
-            col.height    = len;
-            col.direction = 1;
-            return go;
+            double rest = Math.Max(k.Lo, Math.Min(k.Hi, k.Wake ? k.WakeFrom : 0.0));
+            return (float)(rest * Mathf.Rad2Deg);
+        }
+
+        private void AddFootCorners(Transform ankle, NmNaoOem.Link k, int foot)
+        {
+            // Sole box corners (toe left, toe right, heel left, heel right),
+            // probes just below the sole.
+            var c = k.ColliderPositionM;
+            var h = k.ColliderHalfM;
+            double bottom = c[2] - h[2] - _footContactRadius - 0.001;
+            double[][] corners =
+            {
+                new[] { c[0] + 0.9 * h[0], c[1] + 0.9 * h[1], bottom },
+                new[] { c[0] + 0.9 * h[0], c[1] - 0.9 * h[1], bottom },
+                new[] { c[0] - 0.9 * h[0], c[1] + 0.9 * h[1], bottom },
+                new[] { c[0] - 0.9 * h[0], c[1] - 0.9 * h[1], bottom },
+            };
+            for (int i = 0; i < 4; i++)
+            {
+                var corner = new GameObject($"FootCorner{i}");
+                corner.transform.SetParent(ankle, false);
+                corner.transform.localPosition = U(corners[i]);
+                _footCorners[foot, i] = corner.transform;
+            }
         }
 
         private void SetupHeadCamera(Transform headTransform)
         {
             var go = new GameObject("HeadCamera");
-            go.transform.SetParent(headTransform);
-            go.transform.localPosition = new Vector3(0f, 0f, _headRadius);
+            go.transform.SetParent(headTransform, false);
+            go.transform.localPosition = U(HeadCameraM);
             go.transform.localRotation = Quaternion.identity;
 
             _camRT = new RenderTexture(_retinaWidth, _retinaHeight, 16,
@@ -453,7 +434,7 @@ namespace NeuralMimicry
 
             _headCam                  = go.AddComponent<Camera>();
             _headCam.targetTexture    = _camRT;
-            _headCam.fieldOfView      = 60f;
+            _headCam.fieldOfView      = 60.7f; // reference CameraTop fovy
             _headCam.nearClipPlane    = 0.03f;
             _headCam.farClipPlane     = 5f;
 
@@ -468,16 +449,16 @@ namespace NeuralMimicry
         /// <inheritdoc/>
         protected override float[] CollectSensors()
         {
-            if (_joints == null) return Array.Empty<float>();
+            if (_links == null) return Array.Empty<float>();
 
             int pixCount = _retinaWidth * _retinaHeight;
             var sensors  = new float[BaseSensors + 4 * pixCount];
 
             // --- Sonar [00-01].
             Vector3 chestPos = transform.position;
-            sensors[0] = SonarReading(chestPos + transform.TransformDirection(-0.03f, 0f, 0.04f),
+            sensors[0] = SonarReading(chestPos + transform.TransformDirection(-0.03f, 0.04f, 0.05f),
                                        transform.forward);
-            sensors[1] = SonarReading(chestPos + transform.TransformDirection( 0.03f, 0f, 0.04f),
+            sensors[1] = SonarReading(chestPos + transform.TransformDirection( 0.03f, 0.04f, 0.05f),
                                        transform.forward);
 
             // --- Accelerometer [02-04].
@@ -506,16 +487,12 @@ namespace NeuralMimicry
             sensors[11] = euler.x / 360f; // pitch
             sensors[12] = euler.y / 360f; // yaw
 
-            // --- Foot pressure [13-20]: 4 points per foot.
+            // --- Foot pressure [13-20]: 4 sole corners per foot, own body excluded.
             for (int foot = 0; foot < 2; foot++)
                 for (int c = 0; c < 4; c++)
                 {
                     Transform corner = _footCorners[foot, c];
-                    bool contact = corner != null &&
-                                   Physics.CheckSphere(corner.position, _footContactRadius,
-                                                       _footLayerMask,
-                                                       QueryTriggerInteraction.Ignore);
-                    sensors[13 + foot * 4 + c] = contact ? 1f : 0f;
+                    sensors[13 + foot * 4 + c] = corner != null && Touching(corner.position) ? 1f : 0f;
                 }
 
             // --- Bumpers [21-22].
@@ -524,25 +501,27 @@ namespace NeuralMimicry
             _bumperL    = Mathf.Max(0f, _bumperL - Time.fixedDeltaTime * 5f);
             _bumperR    = Mathf.Max(0f, _bumperR - Time.fixedDeltaTime * 5f);
 
-            // --- Joint positions [23..48].
-            if (_prevJointNorm == null || _prevJointNorm.Length != NumMotorJoints)
-                _prevJointNorm = new float[NumMotorJoints];
-            int jointBase = 23;
-            for (int j = 0; j < NumMotorJoints; j++)
+            // --- Joint positions [23..48]: (q - lo)/(hi - lo), q in radians.
+            if (_prevJointNorm == null || _prevJointNorm.Length != NumJointPositionSensors)
+                _prevJointNorm = new float[NumJointPositionSensors];
+            const int jointBase = 23;
+            for (int s = 0; s < NumJointPositionSensors; s++)
             {
-                float norm = ReadArticulationNorm(_joints[j], 0);
-                sensors[jointBase + j] = norm;
+                int j = _sensorLinks[s];
+                var k = NmNaoOem.Links[j];
+                double q = _links[j].jointPosition.dofCount > 0 ? _links[j].jointPosition[0] : 0.0;
+                sensors[jointBase + s] = Mathf.Clamp01((float)((q - k.Lo) / (k.Hi - k.Lo)));
             }
 
             // --- Joint velocities [49..57].
-            int velBase = jointBase + NumMotorJoints;
+            int velBase = jointBase + NumJointPositionSensors;
             for (int j = 0; j < NumJointVelocitySensors; j++)
             {
                 float curr = sensors[jointBase + j];
                 float velNorm = Mathf.Abs(curr - _prevJointNorm[j]) / dt;
                 sensors[velBase + j] = Mathf.Clamp01(velNorm / 2f);
             }
-            for (int j = 0; j < NumMotorJoints; j++)
+            for (int j = 0; j < NumJointPositionSensors; j++)
                 _prevJointNorm[j] = sensors[jointBase + j];
 
             // --- Camera event channels [58 .. 58 + 4*pixCount - 1].
@@ -551,13 +530,23 @@ namespace NeuralMimicry
             return sensors;
         }
 
+        private bool Touching(Vector3 point)
+        {
+            int n = Physics.OverlapSphereNonAlloc(point, _footContactRadius, _overlap, _footLayerMask,
+                                                  QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < n; i++)
+                if (!_ownColliders.Contains(_overlap[i]))
+                    return true;
+            return false;
+        }
+
         private float SonarReading(Vector3 origin, Vector3 dir)
         {
             float d = _sonarMaxDist;
-            if (Physics.SphereCast(origin, 0.05f, dir.normalized, out RaycastHit hit,
-                                   _sonarMaxDist, _sonarLayerMask,
-                                   QueryTriggerInteraction.Ignore))
-                d = hit.distance;
+            foreach (var hit in Physics.SphereCastAll(origin, 0.05f, dir.normalized, _sonarMaxDist,
+                                                     _sonarLayerMask, QueryTriggerInteraction.Ignore))
+                if (!_ownColliders.Contains(hit.collider) && hit.distance < d)
+                    d = hit.distance;
             return 1f - Mathf.Clamp01(d / _sonarMaxDist);
         }
 
@@ -602,20 +591,48 @@ namespace NeuralMimicry
         // Actuator application
         // ------------------------------------------------------------------ //
 
+        private static void SetTargetDegrees(ArticulationBody body, float degrees)
+        {
+            var drive = body.xDrive;
+            drive.target = degrees;
+            body.xDrive = drive;
+        }
+
         /// <inheritdoc/>
         protected override void ApplyActuators(float[] outputs)
         {
-            if (_joints == null || outputs == null) return;
+            if (_links == null || outputs == null) return;
+            var links = NmNaoOem.Links;
 
-            // Channels 0..25: drive motor joints.
-            for (int j = 0; j < NumMotorJoints && j < outputs.Length; j++)
+            if (IsGraded)
             {
-                if (_joints[j] == null) continue;
-                DriveArticulationActivation(_joints[j], outputs[j], 0);
+                // Reference decode (actuation.rs): record readout channel,
+                // decode_tau_s and wake; target in [lo, hi] rad.
+                if (FreshFrame)
+                {
+                    _graded.Accept(outputs);
+                    _graded.Advance();
+                }
+                for (int j = 0; j < links.Length; j++)
+                    SetTargetDegrees(_links[j], (float)(_graded.Target(j, links[j].Lo, links[j].Hi) * Mathf.Rad2Deg));
+                return;
             }
 
-            // Channels 26..31: LED channels — no physics, values logged only.
-            // Channels 32..39: reserved.
+            for (int j = 0; j < links.Length; j++)
+            {
+                var k = links[j];
+                // A spike frame maps activation 0..1 onto the upper half of the
+                // range (silence must not command the lower limit); a tick
+                // without a reply holds the rest pose.
+                float degrees = FreshFrame && k.Channel < outputs.Length
+                    ? Mathf.Lerp((float)(k.Lo * Mathf.Rad2Deg), (float)(k.Hi * Mathf.Rad2Deg),
+                                 0.5f + 0.5f * Mathf.Clamp01(outputs[k.Channel]))
+                    : RestDegrees(k);
+                SetTargetDegrees(_links[j], degrees);
+            }
         }
+
+        /// <inheritdoc/>
+        protected override void ResetGradedDecode() => _graded.Reset();
     }
 }

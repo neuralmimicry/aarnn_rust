@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Generate native Bedrock packs from the shared catalogue; no game binaries or neural code."""
 import argparse
 import hashlib

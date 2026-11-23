@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 /* Shared habitat renderer and bounded reference sensor adapter.
  * Coordinates: X forward, Y left, Z up. This is a kinematic sandbox, not CFD. */
 (function (root) {
@@ -113,6 +117,32 @@
       actuators.forEach(function(v){left+=v*.5;right+=v*.5;count++;});
     }
     return {drive:(left+right)/Math.max(1,count),turn:(right-left)/Math.max(1,count)};
+  }
+  // Brain-output decode, ported from crates/aarnn-embodiment (aer.rs
+  // OutputCode, actuation.rs graded readout, celegans.rs muscles). The brain
+  // advertises `output_code` once: absent/null or "spikes" keeps this
+  // preview's spike display (x0.82 per exchanged frame, 1 on an event);
+  // "pulse_density" carries a graded activation as the fraction of frames with
+  // an event and is decoded linearly by the reference first-order filter
+  // (20 ms readout, 55 ms C. elegans muscle), so a steady activation a settles
+  // at a. Any other code is refused. Activations in [0,1] drive this kinematic
+  // preview only; they imply no joint dynamics, contacts or muscle mechanics.
+  function outputCode(value) {
+    if(value===undefined||value===null||value==='spikes')return 'spikes';
+    if(value==='pulse_density')return 'pulse_density';
+    throw Error('unsupported brain output_code '+JSON.stringify(value));
+  }
+  // Advance `actuators` in place by one exchanged frame of distinct event
+  // channels `indices`; `frameMs` is that frame's negotiated brain step.
+  function decodeOutputs(profile, actuators, indices, code, frameMs) {
+    var events=new Array(actuators.length).fill(0),i;
+    (indices||[]).forEach(function(index){var c=Number(index);if(Number.isInteger(c)&&c>=0&&c<events.length)events[c]=1;});
+    if(outputCode(code)==='pulse_density'){
+      if(!(frameMs>0)||!isFinite(frameMs))throw Error('pulse-density decode needs the frame period');
+      var keep=Math.exp(-frameMs/(profile.kind==='worm'?55:20));
+      for(i=0;i<actuators.length;i++)actuators[i]=actuators[i]*keep+(1-keep)*events[i];
+    }else for(i=0;i<actuators.length;i++)actuators[i]=events[i]?1:actuators[i]*.82;
+    return actuators;
   }
   function ray(habitat, origin, direction, range) {
     var best=range,colour=habitat.substrate;
@@ -246,5 +276,5 @@
     this.sceneCount=0;this.waterCount=waterVertices.length/6;this.gl.bindBuffer(this.gl.ARRAY_BUFFER,this.water);this.gl.bufferData(this.gl.ARRAY_BUFFER,new Float32Array(waterVertices),this.gl.DYNAMIC_DRAW);this.bodyCount=vertices.length/6;this.bodyDirty=false;
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER,this.body);this.gl.bufferData(this.gl.ARRAY_BUFFER,new Float32Array(vertices),this.gl.DYNAMIC_DRAW);
   };
-  root.NmWorld={Renderer:World,sense:sense,field:field,ray:ray,geometry:geometry,motion:motion,withParticipants:withParticipants};
+  root.NmWorld={Renderer:World,sense:sense,field:field,ray:ray,geometry:geometry,motion:motion,withParticipants:withParticipants,outputCode:outputCode,decodeOutputs:decodeOutputs};
 })(typeof window!=='undefined'?window:globalThis);

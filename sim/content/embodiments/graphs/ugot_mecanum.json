@@ -3,7 +3,7 @@
   "compiler": "embodiment-rigid-graph-v2",
   "digest_encoding": "embodiment-binary-v1",
   "profile_id": "ugot_mecanum",
-  "model_digest": "10f2cf2da01a42db2081c25dce40802819a0a66daf33f9f81540d22901356094",
+  "model_digest": "c62f0638e3292a20851281ce40f03530b0fc8c62e845f0c71f9a57775c285490",
   "io_digest": "ce881cb857c332e8022959cf0401c51d36643bf7271a86279fc655d048a479de",
   "fidelity": "functional-surrogate",
   "variant_id": "community-estimate",
@@ -5378,7 +5378,8 @@
         1000000.0
       ],
       "damping": 0.002,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_00_joint",
@@ -5399,7 +5400,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_01_joint",
@@ -5420,7 +5422,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_02_joint",
@@ -5441,7 +5444,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_03_joint",
@@ -5462,7 +5466,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_04_joint",
@@ -5483,7 +5488,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_05_joint",
@@ -5504,7 +5510,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_06_joint",
@@ -5525,7 +5532,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_07_joint",
@@ -5546,7 +5554,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_08_joint",
@@ -5567,7 +5576,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_joint",
@@ -5588,7 +5598,8 @@
         1000000.0
       ],
       "damping": 0.002,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_00_joint",
@@ -5609,7 +5620,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_01_joint",
@@ -5630,7 +5642,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_02_joint",
@@ -5651,7 +5664,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_03_joint",
@@ -5672,7 +5686,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_04_joint",
@@ -5693,7 +5708,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_05_joint",
@@ -5714,7 +5730,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_06_joint",
@@ -5735,7 +5752,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_07_joint",
@@ -5756,7 +5774,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_08_joint",
@@ -5777,7 +5796,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_joint",
@@ -5798,7 +5818,8 @@
         1000000.0
       ],
       "damping": 0.002,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_00_joint",
@@ -5819,7 +5840,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_01_joint",
@@ -5840,7 +5862,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_02_joint",
@@ -5861,7 +5884,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_03_joint",
@@ -5882,7 +5906,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_04_joint",
@@ -5903,7 +5928,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_05_joint",
@@ -5924,7 +5950,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_06_joint",
@@ -5945,7 +5972,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_07_joint",
@@ -5966,7 +5994,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_08_joint",
@@ -5987,7 +6016,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_joint",
@@ -6008,7 +6038,8 @@
         1000000.0
       ],
       "damping": 0.002,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_00_joint",
@@ -6029,7 +6060,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_01_joint",
@@ -6050,7 +6082,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_02_joint",
@@ -6071,7 +6104,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_03_joint",
@@ -6092,7 +6126,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_04_joint",
@@ -6113,7 +6148,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_05_joint",
@@ -6134,7 +6170,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_06_joint",
@@ -6155,7 +6192,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_07_joint",
@@ -6176,7 +6214,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_08_joint",
@@ -6197,7 +6236,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     }
   ],
   "constraints": [],
@@ -13101,28 +13141,28 @@
       "vertices_xyz": [
         -1.3,
         -0.01625,
-        -0.11699999999999999,
+        -0.21,
         1.3,
         -0.01625,
-        -0.11699999999999999,
+        -0.21,
         1.3,
         0.01625,
-        -0.11699999999999999,
+        -0.21,
         -1.3,
         0.01625,
-        -0.11699999999999999,
+        -0.21,
         -1.3,
         -0.01625,
-        0.11699999999999999,
+        0.21,
         1.3,
         -0.01625,
-        0.11699999999999999,
+        0.21,
         1.3,
         0.01625,
-        0.11699999999999999,
+        0.21,
         -1.3,
         0.01625,
-        0.11699999999999999
+        0.21
       ],
       "triangles_ijk": [
         0,
@@ -13166,30 +13206,30 @@
     {
       "id": -13,
       "vertices_xyz": [
-        -1.3,
         -0.01625,
-        -0.045500000000000006,
-        1.3,
-        -0.01625,
-        -0.045500000000000006,
-        1.3,
-        0.01625,
-        -0.045500000000000006,
         -1.3,
+        -0.21,
         0.01625,
-        -0.045500000000000006,
         -1.3,
-        -0.01625,
-        0.045500000000000006,
-        1.3,
-        -0.01625,
-        0.045500000000000006,
-        1.3,
+        -0.21,
         0.01625,
-        0.045500000000000006,
+        1.3,
+        -0.21,
+        -0.01625,
+        1.3,
+        -0.21,
+        -0.01625,
         -1.3,
+        0.21,
         0.01625,
-        0.045500000000000006
+        -1.3,
+        0.21,
+        0.01625,
+        1.3,
+        0.21,
+        -0.01625,
+        1.3,
+        0.21
       ],
       "triangles_ijk": [
         0,
@@ -13232,73 +13272,6 @@
     },
     {
       "id": -14,
-      "vertices_xyz": [
-        -0.01625,
-        -1.3,
-        -0.11699999999999999,
-        0.01625,
-        -1.3,
-        -0.11699999999999999,
-        0.01625,
-        1.3,
-        -0.11699999999999999,
-        -0.01625,
-        1.3,
-        -0.11699999999999999,
-        -0.01625,
-        -1.3,
-        0.11699999999999999,
-        0.01625,
-        -1.3,
-        0.11699999999999999,
-        0.01625,
-        1.3,
-        0.11699999999999999,
-        -0.01625,
-        1.3,
-        0.11699999999999999
-      ],
-      "triangles_ijk": [
-        0,
-        2,
-        1,
-        0,
-        3,
-        2,
-        4,
-        5,
-        6,
-        4,
-        6,
-        7,
-        0,
-        1,
-        5,
-        0,
-        5,
-        4,
-        1,
-        2,
-        6,
-        1,
-        6,
-        5,
-        2,
-        3,
-        7,
-        2,
-        7,
-        6,
-        3,
-        0,
-        4,
-        3,
-        4,
-        7
-      ]
-    },
-    {
-      "id": -15,
       "vertices_xyz": [
         0.0,
         0.0,
@@ -14409,7 +14382,7 @@
       ]
     },
     {
-      "id": -16,
+      "id": -15,
       "vertices_xyz": [
         -0.065,
         -0.28600000000000003,
@@ -14476,7 +14449,7 @@
       ]
     },
     {
-      "id": -17,
+      "id": -16,
       "vertices_xyz": [
         -0.065,
         -0.28600000000000003,
@@ -14543,7 +14516,7 @@
       ]
     },
     {
-      "id": -18,
+      "id": -17,
       "vertices_xyz": [
         -0.065,
         -0.28600000000000003,
@@ -14610,7 +14583,7 @@
       ]
     },
     {
-      "id": -19,
+      "id": -18,
       "vertices_xyz": [
         -0.065,
         -0.28600000000000003,
@@ -14677,7 +14650,7 @@
       ]
     },
     {
-      "id": -20,
+      "id": -19,
       "vertices_xyz": [
         -0.065,
         -0.28600000000000003,
@@ -14744,7 +14717,7 @@
       ]
     },
     {
-      "id": -21,
+      "id": -20,
       "vertices_xyz": [
         0.0,
         0.0,
@@ -15855,7 +15828,7 @@
       ]
     },
     {
-      "id": -22,
+      "id": -21,
       "vertices_xyz": [
         0.058499999999999996,
         0.0,
@@ -16138,7 +16111,7 @@
       ]
     },
     {
-      "id": -23,
+      "id": -22,
       "vertices_xyz": [
         -0.312,
         -0.26,
@@ -16205,7 +16178,7 @@
       ]
     },
     {
-      "id": -24,
+      "id": -23,
       "vertices_xyz": [
         -0.0078000000000000005,
         -0.26,
@@ -16272,7 +16245,7 @@
       ]
     },
     {
-      "id": -25,
+      "id": -24,
       "vertices_xyz": [
         -0.039,
         -0.0078000000000000005,
@@ -16339,7 +16312,7 @@
       ]
     },
     {
-      "id": -26,
+      "id": -25,
       "vertices_xyz": [
         0.0,
         0.0,
@@ -18047,7 +18020,7 @@
       "position": [
         0.0,
         1.3,
-        0.11699999999999999
+        0.21
       ],
       "quaternion_wxyz": [
         1.0,
@@ -18058,7 +18031,7 @@
       "half_size_m": [
         1.3,
         0.01625,
-        0.11699999999999999
+        0.21
       ],
       "rgba": [
         0.41999998688697815,
@@ -18079,7 +18052,7 @@
       "position": [
         0.0,
         -1.3,
-        0.045500000000000006
+        0.21
       ],
       "quaternion_wxyz": [
         1.0,
@@ -18090,19 +18063,19 @@
       "half_size_m": [
         1.3,
         0.01625,
-        0.045500000000000006
+        0.21
       ],
       "rgba": [
         0.41999998688697815,
         0.5,
         0.4699999988079071,
-        1.0
+        0.20000000298023224
       ],
       "collision": true,
       "mesh_id": -1,
       "id": 2,
       "owner": 0,
-      "render_mesh": -13
+      "render_mesh": -12
     },
     {
       "name": "habitat_rim_2",
@@ -18111,7 +18084,7 @@
       "position": [
         1.3,
         0.0,
-        0.11699999999999999
+        0.21
       ],
       "quaternion_wxyz": [
         1.0,
@@ -18122,7 +18095,7 @@
       "half_size_m": [
         0.01625,
         1.3,
-        0.11699999999999999
+        0.21
       ],
       "rgba": [
         0.41999998688697815,
@@ -18134,7 +18107,7 @@
       "mesh_id": -1,
       "id": 3,
       "owner": 0,
-      "render_mesh": -14
+      "render_mesh": -13
     },
     {
       "name": "habitat_rim_3",
@@ -18143,7 +18116,7 @@
       "position": [
         -1.3,
         0.0,
-        0.11699999999999999
+        0.21
       ],
       "quaternion_wxyz": [
         1.0,
@@ -18154,7 +18127,7 @@
       "half_size_m": [
         0.01625,
         1.3,
-        0.11699999999999999
+        0.21
       ],
       "rgba": [
         0.41999998688697815,
@@ -18166,7 +18139,7 @@
       "mesh_id": -1,
       "id": 4,
       "owner": 0,
-      "render_mesh": -14
+      "render_mesh": -13
     },
     {
       "name": "habitat_grain_00",
@@ -18198,7 +18171,7 @@
       "mesh_id": -1,
       "id": 5,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_01",
@@ -18230,7 +18203,7 @@
       "mesh_id": -1,
       "id": 6,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_02",
@@ -18262,7 +18235,7 @@
       "mesh_id": -1,
       "id": 7,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_03",
@@ -18294,7 +18267,7 @@
       "mesh_id": -1,
       "id": 8,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_04",
@@ -18326,7 +18299,7 @@
       "mesh_id": -1,
       "id": 9,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_05",
@@ -18358,7 +18331,7 @@
       "mesh_id": -1,
       "id": 10,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_06",
@@ -18390,7 +18363,7 @@
       "mesh_id": -1,
       "id": 11,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_07",
@@ -18422,7 +18395,7 @@
       "mesh_id": -1,
       "id": 12,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_08",
@@ -18454,7 +18427,7 @@
       "mesh_id": -1,
       "id": 13,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_09",
@@ -18486,7 +18459,7 @@
       "mesh_id": -1,
       "id": 14,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_10",
@@ -18518,7 +18491,7 @@
       "mesh_id": -1,
       "id": 15,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_11",
@@ -18550,7 +18523,7 @@
       "mesh_id": -1,
       "id": 16,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_12",
@@ -18582,7 +18555,7 @@
       "mesh_id": -1,
       "id": 17,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_13",
@@ -18614,7 +18587,7 @@
       "mesh_id": -1,
       "id": 18,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_14",
@@ -18646,7 +18619,7 @@
       "mesh_id": -1,
       "id": 19,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_15",
@@ -18678,7 +18651,7 @@
       "mesh_id": -1,
       "id": 20,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_16",
@@ -18710,7 +18683,7 @@
       "mesh_id": -1,
       "id": 21,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_17",
@@ -18742,7 +18715,7 @@
       "mesh_id": -1,
       "id": 22,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_18",
@@ -18774,7 +18747,7 @@
       "mesh_id": -1,
       "id": 23,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_19",
@@ -18806,7 +18779,7 @@
       "mesh_id": -1,
       "id": 24,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_20",
@@ -18838,7 +18811,7 @@
       "mesh_id": -1,
       "id": 25,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_21",
@@ -18870,7 +18843,7 @@
       "mesh_id": -1,
       "id": 26,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_22",
@@ -18902,7 +18875,7 @@
       "mesh_id": -1,
       "id": 27,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_23",
@@ -18934,7 +18907,7 @@
       "mesh_id": -1,
       "id": 28,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_24",
@@ -18966,7 +18939,7 @@
       "mesh_id": -1,
       "id": 29,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_25",
@@ -18998,7 +18971,7 @@
       "mesh_id": -1,
       "id": 30,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_26",
@@ -19030,7 +19003,7 @@
       "mesh_id": -1,
       "id": 31,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_27",
@@ -19062,7 +19035,7 @@
       "mesh_id": -1,
       "id": 32,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_28",
@@ -19094,7 +19067,7 @@
       "mesh_id": -1,
       "id": 33,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_29",
@@ -19126,7 +19099,7 @@
       "mesh_id": -1,
       "id": 34,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_30",
@@ -19158,7 +19131,7 @@
       "mesh_id": -1,
       "id": 35,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_31",
@@ -19190,7 +19163,7 @@
       "mesh_id": -1,
       "id": 36,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_32",
@@ -19222,7 +19195,7 @@
       "mesh_id": -1,
       "id": 37,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_33",
@@ -19254,7 +19227,7 @@
       "mesh_id": -1,
       "id": 38,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_34",
@@ -19286,7 +19259,7 @@
       "mesh_id": -1,
       "id": 39,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_35",
@@ -19318,7 +19291,7 @@
       "mesh_id": -1,
       "id": 40,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_36",
@@ -19350,7 +19323,7 @@
       "mesh_id": -1,
       "id": 41,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_37",
@@ -19382,7 +19355,7 @@
       "mesh_id": -1,
       "id": 42,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_38",
@@ -19414,7 +19387,7 @@
       "mesh_id": -1,
       "id": 43,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_39",
@@ -19446,7 +19419,7 @@
       "mesh_id": -1,
       "id": 44,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_40",
@@ -19478,7 +19451,7 @@
       "mesh_id": -1,
       "id": 45,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_41",
@@ -19510,7 +19483,7 @@
       "mesh_id": -1,
       "id": 46,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_42",
@@ -19542,7 +19515,7 @@
       "mesh_id": -1,
       "id": 47,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_43",
@@ -19574,7 +19547,7 @@
       "mesh_id": -1,
       "id": 48,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_44",
@@ -19606,7 +19579,7 @@
       "mesh_id": -1,
       "id": 49,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_45",
@@ -19638,7 +19611,7 @@
       "mesh_id": -1,
       "id": 50,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_46",
@@ -19670,7 +19643,7 @@
       "mesh_id": -1,
       "id": 51,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_47",
@@ -19702,7 +19675,7 @@
       "mesh_id": -1,
       "id": 52,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_48",
@@ -19734,7 +19707,7 @@
       "mesh_id": -1,
       "id": 53,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_49",
@@ -19766,7 +19739,7 @@
       "mesh_id": -1,
       "id": 54,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_50",
@@ -19798,7 +19771,7 @@
       "mesh_id": -1,
       "id": 55,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_51",
@@ -19830,7 +19803,7 @@
       "mesh_id": -1,
       "id": 56,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_52",
@@ -19862,7 +19835,7 @@
       "mesh_id": -1,
       "id": 57,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_53",
@@ -19894,7 +19867,7 @@
       "mesh_id": -1,
       "id": 58,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_54",
@@ -19926,7 +19899,7 @@
       "mesh_id": -1,
       "id": 59,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_grain_55",
@@ -19958,7 +19931,7 @@
       "mesh_id": -1,
       "id": 60,
       "owner": 0,
-      "render_mesh": -15
+      "render_mesh": -14
     },
     {
       "name": "habitat_graded_step_0",
@@ -19990,7 +19963,7 @@
       "mesh_id": -1,
       "id": 61,
       "owner": 0,
-      "render_mesh": -16
+      "render_mesh": -15
     },
     {
       "name": "habitat_graded_step_1",
@@ -20022,7 +19995,7 @@
       "mesh_id": -1,
       "id": 62,
       "owner": 0,
-      "render_mesh": -17
+      "render_mesh": -16
     },
     {
       "name": "habitat_graded_step_2",
@@ -20054,7 +20027,7 @@
       "mesh_id": -1,
       "id": 63,
       "owner": 0,
-      "render_mesh": -18
+      "render_mesh": -17
     },
     {
       "name": "habitat_graded_step_3",
@@ -20086,7 +20059,7 @@
       "mesh_id": -1,
       "id": 64,
       "owner": 0,
-      "render_mesh": -19
+      "render_mesh": -18
     },
     {
       "name": "habitat_graded_step_4",
@@ -20118,7 +20091,7 @@
       "mesh_id": -1,
       "id": 65,
       "owner": 0,
-      "render_mesh": -20
+      "render_mesh": -19
     },
     {
       "name": "habitat_gravel_0",
@@ -20150,7 +20123,7 @@
       "mesh_id": -1,
       "id": 66,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_gravel_1",
@@ -20182,7 +20155,7 @@
       "mesh_id": -1,
       "id": 67,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_gravel_2",
@@ -20214,7 +20187,7 @@
       "mesh_id": -1,
       "id": 68,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_gravel_3",
@@ -20246,7 +20219,7 @@
       "mesh_id": -1,
       "id": 69,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_gravel_4",
@@ -20278,7 +20251,7 @@
       "mesh_id": -1,
       "id": 70,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_gravel_5",
@@ -20310,7 +20283,7 @@
       "mesh_id": -1,
       "id": 71,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_gravel_6",
@@ -20342,7 +20315,7 @@
       "mesh_id": -1,
       "id": 72,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_gravel_7",
@@ -20374,7 +20347,7 @@
       "mesh_id": -1,
       "id": 73,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_gravel_8",
@@ -20406,7 +20379,7 @@
       "mesh_id": -1,
       "id": 74,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_gravel_9",
@@ -20438,7 +20411,7 @@
       "mesh_id": -1,
       "id": 75,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_gravel_10",
@@ -20470,7 +20443,7 @@
       "mesh_id": -1,
       "id": 76,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_gravel_11",
@@ -20502,7 +20475,7 @@
       "mesh_id": -1,
       "id": 77,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_gravel_12",
@@ -20534,7 +20507,7 @@
       "mesh_id": -1,
       "id": 78,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_gravel_13",
@@ -20566,7 +20539,7 @@
       "mesh_id": -1,
       "id": 79,
       "owner": 0,
-      "render_mesh": -21
+      "render_mesh": -20
     },
     {
       "name": "habitat_slalom_0",
@@ -20598,7 +20571,7 @@
       "mesh_id": -1,
       "id": 80,
       "owner": 0,
-      "render_mesh": -22
+      "render_mesh": -21
     },
     {
       "name": "habitat_slalom_1",
@@ -20630,7 +20603,7 @@
       "mesh_id": -1,
       "id": 81,
       "owner": 0,
-      "render_mesh": -22
+      "render_mesh": -21
     },
     {
       "name": "habitat_slalom_2",
@@ -20662,7 +20635,7 @@
       "mesh_id": -1,
       "id": 82,
       "owner": 0,
-      "render_mesh": -22
+      "render_mesh": -21
     },
     {
       "name": "habitat_slalom_3",
@@ -20694,7 +20667,7 @@
       "mesh_id": -1,
       "id": 83,
       "owner": 0,
-      "render_mesh": -22
+      "render_mesh": -21
     },
     {
       "name": "habitat_traction_mat",
@@ -20726,7 +20699,7 @@
       "mesh_id": -1,
       "id": 84,
       "owner": 0,
-      "render_mesh": -23
+      "render_mesh": -22
     },
     {
       "name": "habitat_mat_rib_0",
@@ -20758,7 +20731,7 @@
       "mesh_id": -1,
       "id": 85,
       "owner": 0,
-      "render_mesh": -24
+      "render_mesh": -23
     },
     {
       "name": "habitat_mat_rib_1",
@@ -20790,7 +20763,7 @@
       "mesh_id": -1,
       "id": 86,
       "owner": 0,
-      "render_mesh": -24
+      "render_mesh": -23
     },
     {
       "name": "habitat_mat_rib_2",
@@ -20822,7 +20795,7 @@
       "mesh_id": -1,
       "id": 87,
       "owner": 0,
-      "render_mesh": -24
+      "render_mesh": -23
     },
     {
       "name": "habitat_mat_rib_3",
@@ -20854,7 +20827,7 @@
       "mesh_id": -1,
       "id": 88,
       "owner": 0,
-      "render_mesh": -24
+      "render_mesh": -23
     },
     {
       "name": "habitat_mat_rib_4",
@@ -20886,7 +20859,7 @@
       "mesh_id": -1,
       "id": 89,
       "owner": 0,
-      "render_mesh": -24
+      "render_mesh": -23
     },
     {
       "name": "habitat_mat_rib_5",
@@ -20918,7 +20891,7 @@
       "mesh_id": -1,
       "id": 90,
       "owner": 0,
-      "render_mesh": -24
+      "render_mesh": -23
     },
     {
       "name": "habitat_mat_rib_6",
@@ -20950,7 +20923,7 @@
       "mesh_id": -1,
       "id": 91,
       "owner": 0,
-      "render_mesh": -24
+      "render_mesh": -23
     },
     {
       "name": "habitat_mat_rib_7",
@@ -20982,7 +20955,7 @@
       "mesh_id": -1,
       "id": 92,
       "owner": 0,
-      "render_mesh": -24
+      "render_mesh": -23
     },
     {
       "name": "habitat_optic_flow_panel_0",
@@ -21014,7 +20987,7 @@
       "mesh_id": -1,
       "id": 93,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_1",
@@ -21046,7 +21019,7 @@
       "mesh_id": -1,
       "id": 94,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_2",
@@ -21078,7 +21051,7 @@
       "mesh_id": -1,
       "id": 95,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_3",
@@ -21110,7 +21083,7 @@
       "mesh_id": -1,
       "id": 96,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_4",
@@ -21142,7 +21115,7 @@
       "mesh_id": -1,
       "id": 97,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_5",
@@ -21174,7 +21147,7 @@
       "mesh_id": -1,
       "id": 98,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_6",
@@ -21206,7 +21179,7 @@
       "mesh_id": -1,
       "id": 99,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_7",
@@ -21238,7 +21211,7 @@
       "mesh_id": -1,
       "id": 100,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_8",
@@ -21270,7 +21243,7 @@
       "mesh_id": -1,
       "id": 101,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_9",
@@ -21302,7 +21275,7 @@
       "mesh_id": -1,
       "id": 102,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_10",
@@ -21334,7 +21307,7 @@
       "mesh_id": -1,
       "id": 103,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_11",
@@ -21366,7 +21339,7 @@
       "mesh_id": -1,
       "id": 104,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_12",
@@ -21398,7 +21371,7 @@
       "mesh_id": -1,
       "id": 105,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_13",
@@ -21430,7 +21403,7 @@
       "mesh_id": -1,
       "id": 106,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_14",
@@ -21462,7 +21435,7 @@
       "mesh_id": -1,
       "id": 107,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_optic_flow_panel_15",
@@ -21494,7 +21467,7 @@
       "mesh_id": -1,
       "id": 108,
       "owner": 0,
-      "render_mesh": -25
+      "render_mesh": -24
     },
     {
       "name": "habitat_light_beacon",
@@ -21526,7 +21499,7 @@
       "mesh_id": -1,
       "id": 109,
       "owner": 0,
-      "render_mesh": -26
+      "render_mesh": -25
     }
   ],
   "standard_projection": true,
@@ -21555,12 +21528,12 @@
         "position": [
           0.0,
           1.3,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -21582,12 +21555,12 @@
         "position": [
           0.0,
           -1.3,
-          0.045500000000000006
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.09100000000000001
+          0.42
         ],
         "colour": [
           0.42,
@@ -21596,7 +21569,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -21609,12 +21582,12 @@
         "position": [
           1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -21636,12 +21609,12 @@
         "position": [
           -1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -25268,5 +25241,5 @@
     }
   ],
   "collision_filter_scope": "source masks aggregated per rigid cluster; joint-neighbour exclusions native; different instances retain external contact",
-  "digest": "00bac2a240390f6d55d57e4f90460698c4cb7cfe98efff941dcddb2c94ed8ec3"
+  "digest": "0e56f127740b9874c4e2394c2882798944f96d38e7b7a53a13e1a3e3024279e6"
 }

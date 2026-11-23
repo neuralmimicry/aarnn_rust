@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 [fpaa0]
 io5p = "GPIO_FPAA0_IO5P"
 io5n = "GPIO_FPAA0_IO5N"

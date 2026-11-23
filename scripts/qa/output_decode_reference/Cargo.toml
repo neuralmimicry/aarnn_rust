@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
+# Reference-vector printer for the legacy-body decoders (see src/main.rs).
+[package]
+name = "output_decode_reference"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+aarnn-embodiment = { path = "../../../crates/aarnn-embodiment" }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+
+[workspace]

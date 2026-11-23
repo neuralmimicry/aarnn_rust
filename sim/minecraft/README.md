@@ -273,7 +273,14 @@ response budgets are 60 seconds for flies, 10 seconds for fish and 2.5 seconds
 for the smaller profiles. These are wall-clock budgets, not biological timesteps.
 The visible body waits without moving while inference is pending. The companion thresholds inputs above 0.5
 into AER1 events, negotiates 1 ms Rust steps, validates output addresses and
-preserves the legacy reply timestamp. This is not the future AARNN-AER/1
+preserves the legacy reply timestamp. It forwards the brain's handshake
+`output_code` with every reply and refuses any code other than `spikes` (or
+none) and `pulse_density`. Both editions decode each reply as one 1 ms brain
+step with the shared decoder (`OutputDecoder` in Java, `NmWorld.decodeOutputs`
+in the Bedrock/WebGL script): spikes keep the preview display (× 0.82 per
+reply, 1 on an event), while a pulse-density code is decoded linearly with the
+MuJoCo reference filters (20 ms readout, 55 ms C. elegans muscle). The result
+only steers the kinematic preview. This is not the future AARNN-AER/1
 peripheral protocol and does not certify production capture-clock mapping,
 EffectId fencing, durable admission or committed-output semantics.
 

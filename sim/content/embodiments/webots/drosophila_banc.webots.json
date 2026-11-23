@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "profile_id": "drosophila_banc",
-  "model_digest": "d0ef1676345636fb0a8d67e05c2bd135d40d20d04191c916e7fc7dce8a8b8b40",
-  "io_digest": "873f9123c39ee3a94b2e75ab1a982d134df9e73971d9423d79276dbdfc53a8df",
+  "model_digest": "55cb6ef7d354aff50d385af474d10707fa32a12c9818f9de1436d848ef9919ce",
+  "io_digest": "ebf5b2e60cfcd2adc49752be39c709798692764f91dcf5f91881dfae447a8fcf",
   "targets": [
     {
       "joint": "lf_coxa",
@@ -11,19 +11,20 @@
       "body": 2,
       "kind": "rotational",
       "actuator": 0,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.03,
         0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": -0.35
     },
     {
       "joint": "lf_femur",
@@ -32,19 +33,20 @@
       "body": 3,
       "kind": "rotational",
       "actuator": 1,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.03,
         0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": -0.55
     },
     {
       "joint": "lf_tibia",
@@ -53,19 +55,20 @@
       "body": 4,
       "kind": "rotational",
       "actuator": 2,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.025,
         0.025
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": -0.625
     },
     {
       "joint": "lf_tarsus",
@@ -74,19 +77,20 @@
       "body": 5,
       "kind": "rotational",
       "actuator": 3,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.02,
         0.02
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": -0.375
     },
     {
       "joint": "lm_coxa",
@@ -95,19 +99,20 @@
       "body": 6,
       "kind": "rotational",
       "actuator": 4,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.03,
         0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": -0.35
     },
     {
       "joint": "lm_femur",
@@ -116,19 +121,20 @@
       "body": 7,
       "kind": "rotational",
       "actuator": 5,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.03,
         0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": -0.55
     },
     {
       "joint": "lm_tibia",
@@ -137,19 +143,20 @@
       "body": 8,
       "kind": "rotational",
       "actuator": 6,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.025,
         0.025
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": -0.625
     },
     {
       "joint": "lm_tarsus",
@@ -158,19 +165,20 @@
       "body": 9,
       "kind": "rotational",
       "actuator": 7,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.02,
         0.02
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": -0.375
     },
     {
       "joint": "lr_coxa",
@@ -179,19 +187,20 @@
       "body": 10,
       "kind": "rotational",
       "actuator": 8,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.03,
         0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": -0.35
     },
     {
       "joint": "lr_femur",
@@ -200,19 +209,20 @@
       "body": 11,
       "kind": "rotational",
       "actuator": 9,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.03,
         0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": -0.55
     },
     {
       "joint": "lr_tibia",
@@ -221,19 +231,20 @@
       "body": 12,
       "kind": "rotational",
       "actuator": 10,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.025,
         0.025
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": -0.625
     },
     {
       "joint": "lr_tarsus",
@@ -242,19 +253,20 @@
       "body": 13,
       "kind": "rotational",
       "actuator": 11,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.02,
         0.02
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": -0.375
     },
     {
       "joint": "rf_coxa",
@@ -263,19 +275,20 @@
       "body": 14,
       "kind": "rotational",
       "actuator": 12,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.03,
         0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": 0.35
     },
     {
       "joint": "rf_femur",
@@ -284,19 +297,20 @@
       "body": 15,
       "kind": "rotational",
       "actuator": 13,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.03,
         0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": 0.55
     },
     {
       "joint": "rf_tibia",
@@ -305,19 +319,20 @@
       "body": 16,
       "kind": "rotational",
       "actuator": 14,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.025,
         0.025
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": 0.625
     },
     {
       "joint": "rf_tarsus",
@@ -326,19 +341,20 @@
       "body": 17,
       "kind": "rotational",
       "actuator": 15,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.02,
         0.02
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": 0.375
     },
     {
       "joint": "rm_coxa",
@@ -347,19 +363,20 @@
       "body": 18,
       "kind": "rotational",
       "actuator": 16,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.03,
         0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": 0.35
     },
     {
       "joint": "rm_femur",
@@ -368,19 +385,20 @@
       "body": 19,
       "kind": "rotational",
       "actuator": 17,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.03,
         0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": 0.55
     },
     {
       "joint": "rm_tibia",
@@ -389,19 +407,20 @@
       "body": 20,
       "kind": "rotational",
       "actuator": 18,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.025,
         0.025
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": 0.625
     },
     {
       "joint": "rm_tarsus",
@@ -410,19 +429,20 @@
       "body": 21,
       "kind": "rotational",
       "actuator": 19,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.02,
         0.02
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": 0.375
     },
     {
       "joint": "rr_coxa",
@@ -431,19 +451,20 @@
       "body": 22,
       "kind": "rotational",
       "actuator": 20,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.03,
         0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": 0.35
     },
     {
       "joint": "rr_femur",
@@ -452,19 +473,20 @@
       "body": 23,
       "kind": "rotational",
       "actuator": 21,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.03,
         0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": 0.55
     },
     {
       "joint": "rr_tibia",
@@ -473,19 +495,20 @@
       "body": 24,
       "kind": "rotational",
       "actuator": 22,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.025,
         0.025
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": 0.625
     },
     {
       "joint": "rr_tarsus",
@@ -494,19 +517,20 @@
       "body": 25,
       "kind": "rotational",
       "actuator": 23,
-      "gain": 0.01,
+      "gain": 0.03,
       "bias": [
         0.0,
-        -0.01,
-        -0.0005
+        -0.03,
+        -0.0015
       ],
       "gear": 1.0,
       "force_range": [
         -0.02,
         0.02
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0002,
+      "driven": true,
+      "qpos0": 0.375
     },
     {
       "joint": "left_wing_flap",
@@ -514,46 +538,92 @@
       "sensor": "left_wing_flap_position",
       "body": 26,
       "kind": "rotational",
-      "actuator": 24,
-      "gain": 0.01,
+      "actuator": null,
+      "gain": 0,
       "bias": [
-        0.0,
-        -0.01,
-        -0.0005
+        0,
+        0,
+        0
       ],
-      "gear": 1.0,
+      "gear": 1,
       "force_range": [
-        -0.02,
-        0.02
+        0,
+        0
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0005,
+      "driven": false,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "left_wing_pitch",
+      "device": "left_wing_pitch",
+      "sensor": "left_wing_pitch_position",
+      "body": 27,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 7e-06,
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "right_wing_flap",
       "device": "right_wing_flap",
       "sensor": "right_wing_flap_position",
-      "body": 27,
+      "body": 28,
       "kind": "rotational",
-      "actuator": 25,
-      "gain": 0.01,
+      "actuator": null,
+      "gain": 0,
       "bias": [
-        0.0,
-        -0.01,
-        -0.0005
+        0,
+        0,
+        0
       ],
-      "gear": 1.0,
+      "gear": 1,
       "force_range": [
-        -0.02,
-        0.02
+        0,
+        0
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.0005,
+      "driven": false,
+      "qpos0": 0.0
+    },
+    {
+      "joint": "right_wing_pitch",
+      "device": "right_wing_pitch",
+      "sensor": "right_wing_pitch_position",
+      "body": 29,
+      "kind": "rotational",
+      "actuator": null,
+      "gain": 0,
+      "bias": [
+        0,
+        0,
+        0
+      ],
+      "gear": 1,
+      "force_range": [
+        0,
+        0
+      ],
+      "damping": 7e-06,
+      "driven": false,
+      "qpos0": 0.0
     }
   ],
   "constraints": [],
   "fixed_world_bodies": [],
-  "composite_mass_kg": 0.0104,
+  "composite_mass_kg": 0.0103,
   "controller_transfer": "legacy-native-projections-v1; native MuJoCo engineering adapter; calibration unvalidated",
   "calibration": "ODE contact/constraint response not calibrated; all self-collision suppressed; mesh collisions use Webots dynamic convex policy; fixed-link masses merged exactly",
   "coordinates": "X-forward Y-left Z-up; SI",
@@ -610,12 +680,12 @@
         "position": [
           0.0,
           -0.55,
-          0.019250000000000003
+          0.22000000000000003
         ],
         "size": [
           1.1,
           0.013750000000000002,
-          0.038500000000000006
+          0.44000000000000006
         ],
         "colour": [
           0.42,
@@ -624,7 +694,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -3845,8 +3915,44 @@
         "internal": false
       }
     ],
-    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
+    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model; quasi-steady wing-blade aerodynamics (engineering air model, not CFD)",
+    "aerodynamics": {
+      "model": "quasi-steady-panel-v2",
+      "density_kg_m3": 1.225,
+      "polars": {
+        "insect_wing": {
+          "lift_slope_per_rad": 4.5,
+          "lift_max": 1.5,
+          "drag_zero": 0.08,
+          "drag_induced": 0.15,
+          "drag_stall": 6.0
+        }
+      },
+      "panels": [
+        {
+          "body": "left_wing_blade",
+          "point_m": [
+            0.0,
+            0.041999999999999996,
+            0.0
+          ],
+          "area_m2": 0.0011780972450961724,
+          "polar": "insect_wing"
+        },
+        {
+          "body": "right_wing_blade",
+          "point_m": [
+            0.0,
+            -0.041999999999999996,
+            0.0
+          ],
+          "area_m2": 0.0011780972450961724,
+          "polar": "insect_wing"
+        }
+      ],
+      "note": "quasi-steady wing blades at the stroke and wing-rotation velocity; engineering estimate"
+    }
   },
   "world_geometry_count": 121,
-  "digest": "4fa08e64d91fe5aec80689fb783463e09fe79147533f38545f1233b2b1b0fb3f"
+  "digest": "fb35105724941f49dbb9d2abeebd14a28bf000a2ed363c56191116e331a9e974"
 }

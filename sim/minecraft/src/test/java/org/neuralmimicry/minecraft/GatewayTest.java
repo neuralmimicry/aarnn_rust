@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 AARNN contributors
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See sim/minecraft/LICENSE in the project root.
 package org.neuralmimicry.minecraft;
 
 import com.google.gson.JsonParser;
@@ -15,6 +19,29 @@ final class GatewayTest {
     static byte[] reply(String network,long step,String spikes) {
         return ("{\"network_id\":\""+network+"\",\"output_step_index\":"+step+",\"output_spike_indices\":"+spikes+"}").getBytes(StandardCharsets.UTF_8);
     }
+    static byte[] coded(String network,long step,String spikes,String code) {
+        return ("{\"network_id\":\""+network+"\",\"output_step_index\":"+step+",\"output_spike_indices\":"+spikes+",\"output_code\":"+code+"}").getBytes(StandardCharsets.UTF_8);
+    }
+    /** The output code is negotiated once; a later change within the session faults it. */
+    @Test void outputCodeChangeWithinSessionFaults() throws Exception {
+        var codes=new java.util.concurrent.ConcurrentLinkedQueue<>(java.util.List.of("\"pulse_density\"","\"spikes\""));
+        var step=new java.util.concurrent.atomic.AtomicLong();
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        server.createContext("/api/aer/infer",exchange->{
+            exchange.getRequestBody().readAllBytes();
+            byte[] output=coded("brain",step.incrementAndGet(),"[]",codes.poll());exchange.sendResponseHeaders(200,output.length);
+            exchange.getResponseBody().write(output);exchange.close();
+        });server.start();
+        var p=Content.profile("hexapod");
+        var session=new Gateway.Session(p,new Gateway.Binding("brain",null,p.sensory(),p.output(),0),
+                URI.create("http://127.0.0.1:"+server.getAddress().getPort()+"/api/aer/infer"),"fixture-token");
+        try {
+            session.submit(new double[p.sensory()],1);session.completion().toCompletableFuture().get(4,TimeUnit.SECONDS);
+            assertEquals(OutputDecoder.Code.PULSE_DENSITY,session.poll().code());
+            session.submit(new double[p.sensory()],2);session.completion().toCompletableFuture().get(4,TimeUnit.SECONDS);
+            assertNull(session.poll());assertFalse(session.active());
+        } finally {session.stop("cleanup");server.stop(0);}
+    }
     @Test void hostileAndStaleResponsesFailClosed() {
         var p=Content.profile("hexapod");
         assertThrows(RuntimeException.class,()->Gateway.decode(reply("wrong",2,"[0]"),p,"brain",0));
@@ -22,6 +49,9 @@ final class GatewayTest {
             assertThrows(RuntimeException.class,()->Gateway.decode(reply("brain",2,indices),p,"brain",0));
         assertThrows(RuntimeException.class,()->Gateway.decode(reply("brain",2,"[0]"),p,"brain",2));
         assertThrows(RuntimeException.class,()->Gateway.decode(new byte[65537],p,"brain",0));
+        assertEquals(OutputDecoder.Code.SPIKES,Gateway.decode(reply("brain",2,"[0]"),p,"brain",0).code());
+        assertEquals(OutputDecoder.Code.PULSE_DENSITY,Gateway.decode(coded("brain",2,"[0]","\"pulse_density\""),p,"brain",0).code());
+        assertThrows(IllegalArgumentException.class,()->Gateway.decode(coded("brain",2,"[0]","\"analog\""),p,"brain",0));
         for(String uri:new String[]{"http://example.com/api/aer/infer","https://a:b@example.com/api/aer/infer","https://example.com/other"})
             assertThrows(IllegalArgumentException.class,()->Gateway.endpoint(uri));
     }

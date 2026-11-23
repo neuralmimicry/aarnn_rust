@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // Webots NAO controller that talks to the NN server over Unix datagram sockets (UDS)
 // Instead of linking the Rust FFI in-process, this controller sends sensor frames
 // to a separate Rust process (nn_uds_server) and receives actuator outputs back.
@@ -164,6 +168,26 @@ static void start_motion(WbMotionRef motion) {
     wbu_motion_play(motion);
     currently_playing = motion;
   }
+}
+
+// Brain output encoding advertised in the IPC size hint (`output_code`):
+// "spikes" (absent/null) or "pulse_density" (graded cells; event density per
+// 2 ms frame = activation). Anything else is refused (empty result).
+static std::string parse_output_code(const char* data, size_t len) {
+  const std::string text(data, len);
+  const std::string key = "\"output_code\"";
+  size_t at = text.find(key);
+  if (at == std::string::npos) return "spikes";
+  at = text.find(':', at + key.size());
+  if (at == std::string::npos) return "";
+  at = text.find_first_not_of(" \t\r\n", at + 1);
+  if (at == std::string::npos) return "";
+  if (text.compare(at, 4, "null") == 0) return "spikes";
+  if (text[at] != '"') return "";
+  const size_t end = text.find('"', at + 1);
+  if (end == std::string::npos) return "";
+  const std::string value = text.substr(at + 1, end - at - 1);
+  return (value == "spikes" || value == "pulse_density") ? value : "";
 }
 
 // Minimal UDS datagram helper
@@ -391,6 +415,7 @@ public:
   uint64_t rx_aer_frames() const { return rx_aer_frames_; }
   uint64_t rx_raw_frames() const { return rx_raw_frames_; }
   uint64_t rx_aer_events() const { return rx_aer_events_; }
+  const std::string& output_code() const { return output_code_; }
 
 private:
   struct PendingFrame {
@@ -655,7 +680,10 @@ private:
         continue;
       }
       if (r > 0 && (buf[0] == '{' || buf[0] == '[')) {
-        // Skip textual control packets from the IPC server.
+        // Textual control packets (size hints) carry the output encoding.
+        if (buf[0] == '{') {
+          output_code_ = parse_output_code(buf.data(), static_cast<size_t>(r));
+        }
         continue;
       }
       // Ignore malformed datagrams and continue draining.
@@ -701,6 +729,7 @@ private:
   struct sockaddr_un server_{};
   std::vector<char> recv_buf_;       // reused across drain_replies() calls
   std::vector<uint8_t> aer_out_buf_; // reused across encode_aer_payload() calls
+  std::string output_code_ = "spikes";
 };
 
 struct BrainInstance {
@@ -1023,6 +1052,8 @@ struct HexapodLegBridge {
     std::vector<float> filtered;
     bool active = false;
     bool twitch_fallback = true;
+    // A graded (pulse_density) brain owns its body: no programmed twitch gait.
+    bool graded_brain = false;
     int flat_steps = 0;
     int flat_steps_trigger = 5;
     int twitch_hold_steps = 22;
@@ -1195,7 +1226,7 @@ struct HexapodLegBridge {
         } else {
             flat_steps = std::max(0, flat_steps - 2);
         }
-        if (twitch_fallback && flat_steps >= flat_steps_trigger) {
+        if (twitch_fallback && !graded_brain && flat_steps >= flat_steps_trigger) {
             twitch_hold_remaining = std::max(twitch_hold_remaining, twitch_hold_steps);
         } else if (!low_motion_drive && abs_drive_max >= (1.8f * flat_drive_eps)) {
             twitch_hold_remaining = 0;
@@ -1203,7 +1234,7 @@ struct HexapodLegBridge {
 
         bool injected_twitch = false;
         float injected_amp = 0.0f;
-        if (twitch_fallback && twitch_hold_remaining > 0) {
+        if (twitch_fallback && !graded_brain && twitch_hold_remaining > 0) {
             injected_twitch = true;
             twitch_hold_remaining = std::max(0, twitch_hold_remaining - 1);
             const float activity_hint =
@@ -2329,6 +2360,23 @@ int main(int argc, char** argv) {
             }
 
             if (xfer_ok) {
+                const std::string& code = b.cli->output_code();
+                if (code.empty()) {
+                    std::cerr << "[nao_nn_controller_uds] Brain '" << b.id
+                              << "': unsupported output_code; actuation refused." << std::endl;
+                    continue;
+                }
+                if (code == "pulse_density" && !hexapod_bridge.graded_brain) {
+                    hexapod_bridge.graded_brain = true;
+                    std::cout << "[nao_nn_controller_uds] Brain '" << b.id
+                              << "': output_code=pulse_density (graded); twitch fallback disabled." << std::endl;
+                    if (std::fabs(ipc_dt_ms - 2.0f) > 1e-6f) {
+                        std::cerr << "[nao_nn_controller_uds] WARNING: a pulse-density code needs 2 ms frames;"
+                                  << " this world steps " << ipc_dt_ms << " ms, so each frame only reports"
+                                  << " whether a channel fired. Use run_sim.sh --sim webots --control aarnn"
+                                  << " (native 2 ms controller, shared Rust decoder) for MuJoCo parity." << std::endl;
+                    }
+                }
                 if (fly_body) last_fly_reply_s = now;
                 if (!b.connected) {
                     std::cout << "[nao_nn_controller_uds] Brain '" << b.id << "': Connected." << std::endl;

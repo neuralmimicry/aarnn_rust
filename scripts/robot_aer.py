@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Bounded asynchronous AER1 reference adapter for simulated bodies only.
 
 This does not implement AARNN-AER/1 leases or FPAA UDP. A binding pins the

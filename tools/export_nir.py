@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """
 Export a Neuromorphic Intermediate Representation (NIR) JSON from a
 aarnn_rust Runner snapshot (network.json produced by export_network_json).

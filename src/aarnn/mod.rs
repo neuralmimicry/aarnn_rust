@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! AARNN-specific algorithm partitions.
 //!
 //! The broader project mixes platform concerns (UI, Webots, distributed transport,

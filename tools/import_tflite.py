@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """
 Import a TFLite MLP (as exported by tools/export_tflite.py) and emit a
 aarnn_rust Runner snapshot JSON ("network.json" shape) to the

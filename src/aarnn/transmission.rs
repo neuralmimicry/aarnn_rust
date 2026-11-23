@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Morphology-aware transmission kernels for AARNN.
 //!
 //! This module turns morphological path information into an effective conduction delay

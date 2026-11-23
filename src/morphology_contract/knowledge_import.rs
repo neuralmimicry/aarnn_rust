@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Bounded physical placement proposals for explicitly imported SNNs.
 //! Proposals preserve the existing brain and do not grant mutation authority.
 

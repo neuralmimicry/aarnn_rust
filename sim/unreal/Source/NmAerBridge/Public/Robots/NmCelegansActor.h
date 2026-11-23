@@ -1,4 +1,7 @@
-// Copyright NeuralMimicry. All Rights Reserved.
+// SPDX-FileCopyrightText: NEURALMIMICRY LTD
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -43,7 +46,13 @@ public:
     virtual void GetSensorNames(TArray<FString>& OutNames) const override;
     virtual void GetActuatorNames(TArray<FString>& OutNames) const override;
 
+protected:
+    virtual void ResetGradedDecode() override { GradedMuscles.Reset(); }
+
 private:
+    // Graded (pulse-density) brain: reference 55 ms linear muscle filter.
+    NmOutputDecode::FMuscleActivations GradedMuscles{static_cast<size_t>(NumActuators)};
+
     // Previous root angular velocity (for vibration delta)
     FVector PreviousLinearVelocity = FVector::ZeroVector;
     FVector PrevRootAngularVel = FVector::ZeroVector;

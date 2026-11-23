@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use crate::config::{LIFParams, NetworkConfig, STDPParams};
 use crate::morphology_contract::{
     AnatomicalId, AnatomicalKind, AxisAlignedBox, DisplayEdge, DisplayMode, DisplayNode,

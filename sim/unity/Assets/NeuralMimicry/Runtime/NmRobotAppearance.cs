@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // Shared visual morphology attached to the existing physical articulation.
 using System;
 using System.Collections.Generic;

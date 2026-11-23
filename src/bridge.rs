@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Generic robot IO bridge for mapping external sensors and actuators to the neural network.
 //!
 //! This module provides the infrastructure to connect the neuromorphic simulation

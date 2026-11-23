@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // Shared content adapter. Authored axes are X forward, Y left, Z up.
 // Geometry is illustrative; colliders and ArticulationBody remain the physical model.
 using System;

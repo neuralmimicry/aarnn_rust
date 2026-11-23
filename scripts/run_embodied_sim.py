@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Launch native embodiments with one physics owner per instance.
 
 Reference AER is explicit; this launcher never attaches physical devices or
@@ -29,7 +33,7 @@ def main():
     args=parser.parse_args()
     if args.steps<1 or args.steps>10000000: parser.error('steps must be 1..10000000')
     if args.sim=='isaacsim':
-        parser.error('Isaac native runner is not yet validated: generated USD is available; see sim/isaacsim/README.md. Run the supported Kit integration lane before enabling actuation.')
+        parser.error('Isaac Sim runs under its own interpreter: use scripts/run_sim.sh --sim isaacsim (sim/isaacsim/run_isaacsim.py); see sim/isaacsim/README.md.')
     try:
         from sim.mujoco.runtime import World
     except ImportError as error:

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! AARNN current-domain kernels.
 //!
 //! These functions describe how spike-driven synaptic currents are shaped before they
@@ -207,6 +211,48 @@ where
         out[i] = (ampa[i] + nmda[i] - gaba[i])
             * params.synaptic_gain
             * params.neuromod_excitability_gain;
+    }
+    out
+}
+
+/// Depth-0 synaptic current carrying the same charge per event as the
+/// AMPA/NMDA/GABA filter, delivered within the current step.
+///
+/// The filtered path holds a state that decays by `d` per step, so a unit
+/// excitatory sample deposits `(1 - r) / (1 - d_ampa) + r g / (1 - d_nmda)`
+/// step-currents in total (`g` is the NMDA gate at the present membrane
+/// potential) and a unit inhibitory sample `1 / (1 - d_gaba)`. Without this
+/// scaling an unfiltered (depth 0) synapse carried only `dt` worth of charge
+/// per spike, ~14x less than the same weight at depth >= 1 with default time
+/// constants, so the detail levels did not approximate the same synapse.
+pub fn instantaneous_synaptic_charge<F>(
+    raw: &Array1<f64>,
+    vmem: Option<&Array1<f64>>,
+    nmda_voltage_sensitivity: f64,
+    mut params_for_index: F,
+) -> Array1<f64>
+where
+    F: FnMut(usize) -> SynapticDriveParams,
+{
+    let mut out = Array1::<f64>::zeros(raw.len());
+    for i in 0..raw.len() {
+        let params = params_for_index(i);
+        let val = raw[i];
+        let exc = val.max(0.0);
+        let inh = (-val).max(0.0);
+        let nmda_gate = if nmda_voltage_sensitivity > 0.0 {
+            let vm = vmem.and_then(|v| v.get(i)).copied().unwrap_or(0.0);
+            let x = (nmda_voltage_sensitivity * (vm + 40.0)).clamp(-60.0, 60.0);
+            1.0 / (1.0 + (-x).exp())
+        } else {
+            1.0
+        };
+        let sum = |d: f64| 1.0 / (1.0 - d.clamp(0.0, 1.0 - 1.0e-9));
+        let charge = exc
+            * ((1.0 - params.nmda_ratio) * sum(params.decay_ampa)
+                + params.nmda_ratio * nmda_gate * sum(params.decay_nmda))
+            - inh * sum(params.decay_gaba);
+        out[i] = charge * params.synaptic_gain * params.neuromod_excitability_gain;
     }
     out
 }

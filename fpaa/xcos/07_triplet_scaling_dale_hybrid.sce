@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // AARNN triplet-metaplasticity, synaptic scaling, and Dale-constraint demo.
 // Mirrors src/aarnn/plasticity.rs and is intended as a hybrid analog + host-supervised flow.
 

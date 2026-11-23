@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 /* Shared browser-side stage policy; thresholds match the versioned QA fixture. */
 (function (root) {
   "use strict";

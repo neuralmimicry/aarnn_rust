@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! FPAA detection, verification, and per-kernel routing support.
 //!
 //! The current implementation focuses on three concerns:

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "galbot_g1_golf",
-  "model_digest": "365f3db34bfaf7bf8e3436bee070a937e697155e6f11c957ce9a56fc81457a33",
+  "model_digest": "7b9c075cbb4b91cb5912364fb6531f85291c34f4e323ab2447be51c5691204d3",
   "io_digest": "e7ec78c9180a8261316c86b76af3419b358fdc048e650e547033a1edd97230e4",
   "targets": [
     {
@@ -23,7 +23,10 @@
         420.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "leg_joint2",
@@ -44,7 +47,10 @@
         420.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "leg_joint3",
@@ -65,7 +71,10 @@
         280.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "leg_joint4",
@@ -86,7 +95,10 @@
         200.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "leg_joint5",
@@ -107,7 +119,10 @@
         100.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "head_joint1",
@@ -128,7 +143,10 @@
         10.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "head_joint2",
@@ -149,7 +167,10 @@
         10.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_arm_joint1",
@@ -170,7 +191,10 @@
         180.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_arm_joint2",
@@ -191,7 +215,10 @@
         180.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_arm_joint3",
@@ -212,7 +239,10 @@
         60.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_arm_joint4",
@@ -233,7 +263,10 @@
         60.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_arm_joint5",
@@ -254,7 +287,10 @@
         30.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_arm_joint6",
@@ -275,7 +311,10 @@
         30.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_arm_joint7",
@@ -296,7 +335,10 @@
         30.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_gripper_joint",
@@ -317,7 +359,10 @@
         5.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_gripper_r_inner_knuckle_joint",
@@ -338,7 +383,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "left_gripper_r_finger_joint",
@@ -359,7 +405,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "left_gripper_l_knuckle_joint",
@@ -380,7 +427,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "left_gripper_l_inner_knuckle_joint",
@@ -401,7 +449,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "left_gripper_l_finger_joint",
@@ -422,7 +471,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "right_arm_joint1",
@@ -443,7 +493,10 @@
         180.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "right_arm_joint2",
@@ -464,7 +517,10 @@
         180.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "right_arm_joint3",
@@ -485,7 +541,10 @@
         60.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "right_arm_joint4",
@@ -506,7 +565,10 @@
         60.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "right_arm_joint5",
@@ -527,7 +589,10 @@
         30.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "right_arm_joint6",
@@ -548,7 +613,10 @@
         30.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "right_arm_joint7",
@@ -569,7 +637,10 @@
         30.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "right_gripper_joint",
@@ -590,7 +661,10 @@
         5.0
       ],
       "damping": 0.5,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.05,
+      "spring_reference": 0.0
     },
     {
       "joint": "right_gripper_r_inner_knuckle_joint",
@@ -611,7 +685,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "right_gripper_r_finger_joint",
@@ -632,7 +707,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "right_gripper_l_knuckle_joint",
@@ -653,7 +729,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "right_gripper_l_inner_knuckle_joint",
@@ -674,7 +751,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "right_gripper_l_finger_joint",
@@ -695,7 +773,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel1_joint",
@@ -716,7 +795,8 @@
         120.0
       ],
       "damping": 0.1,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_1_passive_0_joint",
@@ -737,7 +817,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_1_passive_1_joint",
@@ -758,7 +839,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_1_passive_2_joint",
@@ -779,7 +861,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_1_passive_3_joint",
@@ -800,7 +883,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_1_passive_4_joint",
@@ -821,7 +905,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_1_passive_5_joint",
@@ -842,7 +927,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_1_passive_6_joint",
@@ -863,7 +949,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_1_passive_7_joint",
@@ -884,7 +971,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_1_passive_8_joint",
@@ -905,7 +993,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_1_passive_9_joint",
@@ -926,7 +1015,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel2_joint",
@@ -947,7 +1037,8 @@
         120.0
       ],
       "damping": 0.1,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_2_passive_0_joint",
@@ -968,7 +1059,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_2_passive_1_joint",
@@ -989,7 +1081,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_2_passive_2_joint",
@@ -1010,7 +1103,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_2_passive_3_joint",
@@ -1031,7 +1125,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_2_passive_4_joint",
@@ -1052,7 +1147,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_2_passive_5_joint",
@@ -1073,7 +1169,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_2_passive_6_joint",
@@ -1094,7 +1191,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_2_passive_7_joint",
@@ -1115,7 +1213,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_2_passive_8_joint",
@@ -1136,7 +1235,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_2_passive_9_joint",
@@ -1157,7 +1257,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel3_joint",
@@ -1178,7 +1279,8 @@
         120.0
       ],
       "damping": 0.1,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_3_passive_0_joint",
@@ -1199,7 +1301,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_3_passive_1_joint",
@@ -1220,7 +1323,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_3_passive_2_joint",
@@ -1241,7 +1345,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_3_passive_3_joint",
@@ -1262,7 +1367,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_3_passive_4_joint",
@@ -1283,7 +1389,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_3_passive_5_joint",
@@ -1304,7 +1411,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_3_passive_6_joint",
@@ -1325,7 +1433,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_3_passive_7_joint",
@@ -1346,7 +1455,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_3_passive_8_joint",
@@ -1367,7 +1477,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_3_passive_9_joint",
@@ -1388,7 +1499,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel4_joint",
@@ -1409,7 +1521,8 @@
         120.0
       ],
       "damping": 0.1,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_4_passive_0_joint",
@@ -1430,7 +1543,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_4_passive_1_joint",
@@ -1451,7 +1565,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_4_passive_2_joint",
@@ -1472,7 +1587,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_4_passive_3_joint",
@@ -1493,7 +1609,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_4_passive_4_joint",
@@ -1514,7 +1631,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_4_passive_5_joint",
@@ -1535,7 +1653,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_4_passive_6_joint",
@@ -1556,7 +1675,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_4_passive_7_joint",
@@ -1577,7 +1697,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_4_passive_8_joint",
@@ -1598,7 +1719,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_4_passive_9_joint",
@@ -1619,7 +1741,8 @@
         0
       ],
       "damping": 0.0,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     }
   ],
   "constraints": [
@@ -1743,7 +1866,7 @@
         "id": "rim_0",
         "shape": "box",
         "position": [
-          0.75,
+          0.0,
           3.0,
           1.2000000000000002
         ],
@@ -1770,14 +1893,14 @@
         "id": "rim_1",
         "shape": "box",
         "position": [
-          0.75,
+          0.0,
           -3.0,
-          0.10500000000000001
+          1.2000000000000002
         ],
         "size": [
           6.0,
           0.07500000000000001,
-          0.21000000000000002
+          2.4000000000000004
         ],
         "colour": [
           0.42,
@@ -1786,7 +1909,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -1797,7 +1920,7 @@
         "id": "rim_2",
         "shape": "box",
         "position": [
-          3.75,
+          3.0,
           0.0,
           1.2000000000000002
         ],
@@ -1824,7 +1947,7 @@
         "id": "rim_3",
         "shape": "box",
         "position": [
-          -3.75,
+          -3.0,
           0.0,
           1.2000000000000002
         ],
@@ -4227,5 +4350,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 92,
-  "digest": "36fada4d51e4ef25caee56e6445b31c368b856747d24b6d1a2930a7ef23aba69"
+  "digest": "77786c2fef3adcb11c7aad67f7183afa90dbd298c9dd1dcf8325263a0d5f486e"
 }

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 /* Optional real-browser SIM-CONTENT-001 lane. Requires Playwright and Chromium.
  * Serves only local assets and mocks the neural gateway; no live brain is used. */
 const { chromium } = require('playwright');

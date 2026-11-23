@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Launch native Unity/Chaos bodies using one shared graph and Rust AER ABI.
 
 An explicitly isolated AER1 reference experiment. Does not start or manage a

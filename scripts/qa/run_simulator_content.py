@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Run one simulator QA lane and retain a unique, machine-readable evidence bundle."""
 import argparse
 from datetime import datetime, timezone

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Opt-in local superdense execution adapter.
 //!
 //! This module is the Phase 2 migration seam around the legacy biological

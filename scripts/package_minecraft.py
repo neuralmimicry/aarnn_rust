@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Stage the built Minecraft adapter, official Fabric prerequisites and saved world.
 
 Downloads are bounded and pinned by SHA-256. No installation or account files are changed.

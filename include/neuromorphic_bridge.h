@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // Minimal C ABI for aarnn_rust FFI bridge (Linux/C++/Clang)
 // Build the shared library with:
 //   cargo build --release --features ffi_bridge

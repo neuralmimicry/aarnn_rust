@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Behavioural admission/isolation tests; synthetic output here is not neural proof."""
 import copy
 import hashlib

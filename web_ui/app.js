@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 const targetContainer = document.getElementById("targets");
 const targetTemplate = document.getElementById("target-row");
 const input = document.getElementById("addr");

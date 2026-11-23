@@ -10,6 +10,7 @@ internal static class EmbodimentNative {
     internal const uint NM_CONTROL_NPC = 1;
     internal const uint NM_CONTROL_SILENT = 2;
     internal const uint NM_CONTROL_AARNN = 3;
+    internal const uint NM_HYDRO_INPUT_WIDTH = 21;
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern uint nm_embodiment_version();
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
@@ -27,6 +28,10 @@ internal static class EmbodimentNative {
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int nm_reference_step(ulong handle, ulong source_step, [In] double[] sensors, uint sensor_count, [Out] double[] controls, uint control_capacity);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int nm_reference_apply(ulong handle, ulong source_step, [In] double[] sensors, uint sensor_count, [Out] double[] controls, uint control_capacity);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int nm_reference_submit(ulong handle, ulong source_step, [In] double[] sensors, uint sensor_count);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int nm_reference_status(ulong handle, [Out] byte[] output, uint capacity);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int nm_control_mode(ulong handle, uint mode);
@@ -34,6 +39,8 @@ internal static class EmbodimentNative {
     internal static extern int nm_reference_motor_mask(ulong handle, [Out] byte[] output, uint capacity);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int nm_reference_project(ulong handle, [In] double[] measurements, uint measurement_count, [Out] double[] sensors, uint sensor_capacity);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int nm_reference_hydro(ulong handle, [In] double[] inputs, uint row_count, [Out] double[] outputs, uint output_capacity);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int nm_panel_forces([In] double[] inputs, uint panel_count, [Out] double[] outputs, uint output_capacity);
 }

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 /* Executes the production canvas functions against the shared Rust fixture.
  * Chrome is optional only when --browser was not requested. No live brain. */
 const fs = require('node:fs');

@@ -8,8 +8,8 @@
 def Xform "Robot" (
     prepend apiSchemas = ["PhysicsArticulationRootAPI"]
     customData = {
-        string aarnnIODigest = "08fcb08c55ae94fad081ac79ad8f57f50b5bac6a9909c8121ed3bcacc91b6f52"
-        string aarnnModelDigest = "7866788b1a77fe3d7148c9be25a0babb1b5793cbc602153ccec05aa6cec102d5"
+        string aarnnIODigest = "bd85f639ac3991aec6019cf4b90c08cee78496c58f42bef3186b10313888f91d"
+        string aarnnModelDigest = "28f3d75621a73b2c7968bafe2dcc0de2fc89dd706c2ee567d24aa004c9c08098"
     }
 )
 {
@@ -17,24 +17,35 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.0150833335, 0.012416666, 0.010833333)
-        float physics:mass = 2.5
+        point3f physics:centerOfMass = (-0.005, 0, 0.025)
+        float3 physics:diagonalInertia = (0.0038569302, 0.0029476266, 0.0023262636)
+        float physics:mass = 1.0496
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0, 0.4)
+        double3 xformOp:translate = (0, 0, 0.3351)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Cube "torso_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.07, 0.09, 0.1)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.045, 0.068, 0.08)
+            double3 xformOp:translate = (-0.005, 0, 0.025)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Cube "torso_chest_plate"
+        {
+            color3f[] primvars:displayColor = [(0.25, 0.3, 0.38)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.006, 0.045, 0.05)
+            double3 xformOp:translate = (0.04, 0, 0.04)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -43,24 +54,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00016, 0.00016, 0.00016)
-        float physics:mass = 0.15
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        point3f physics:centerOfMass = (0, 0, 0.015)
+        float3 physics:diagonalInertia = (0.000010292625, 0.000010292625, 0.00000882225)
+        float physics:mass = 0.07842
+        quatf physics:principalAxes = (6.123234e-17, 1, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0, 0.52)
+        double3 xformOp:translate = (0, 0, 0.4616)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "HeadYaw_link_collision" (
+        def Cylinder "HeadYaw_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.03
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.04, 0.04, 0.04)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.015
+            quatf xformOp:orient = (6.123234e-17, 1, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, 0.015)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -69,24 +82,393 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00016, 0.00016, 0.00016)
-        float physics:mass = 0.15
+        point3f physics:centerOfMass = (0, 0, 0.06)
+        float3 physics:diagonalInertia = (0.00094734144, 0.0007385026, 0.00081416883)
+        float physics:mass = 0.60533
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0, 0.52)
+        double3 xformOp:translate = (0, 0, 0.4616)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "HeadPitch_link_collision" (
+        def Sphere "HeadPitch_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.05, 0.065, 0.06)
+            double3 xformOp:translate = (0, 0, 0.06)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "HeadPitch_shell_1"
+        {
+            color3f[] primvars:displayColor = [(0.25, 0.3, 0.38)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.018, 0.05, 0.03)
+            double3 xformOp:translate = (0.035, 0, 0.065)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "LShoulderPitch_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.00002326, 0.00002326, 0.00002326)
+        float physics:mass = 0.09304
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, 0.098, 0.43510000000000004)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Sphere "LShoulderPitch_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.025, 0.025, 0.025)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "LShoulderRoll_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.0525, 0, 0)
+        float3 physics:diagonalInertia = (0.00016529586, 0.00016529586, 0.00003603346)
+        float physics:mass = 0.15777
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, 0.098, 0.43510000000000004)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Capsule "LShoulderRoll_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.075
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.022
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.0525, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "LElbowYaw_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.000008401968, 0.000008401968, 0.000008401968)
+        float physics:mass = 0.06483
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.105, 0.113, 0.43510000000000004)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Sphere "LElbowYaw_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.018, 0.018, 0.018)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "LElbowRoll_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.03, 0, 0)
+        float3 physics:diagonalInertia = (0.00003756324, 0.00003756324, 0.00001428024)
+        float physics:mass = 0.07761
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.105, 0.113, 0.43510000000000004)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Capsule "LElbowRoll_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.04
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.02
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.030000000000000002, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "LWristYaw_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.03, 0, -0.006)
+        float3 physics:diagonalInertia = (0.00004560621, 0.00007811758, 0.00006908664)
+        float physics:mass = 0.16933
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.16094999999999998, 0.113, 0.43510000000000004)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Cube "LWristYaw_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.04, 0.04, 0.04)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.03, 0.018, 0.022)
+            double3 xformOp:translate = (0.03, 0, -0.006)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "LPhalanx1_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.21894999999999998, 0.125, 0.42280000000000006)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Capsule "LPhalanx1_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "LPhalanx2_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.22494999999999998, 0.117, 0.42280000000000006)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Capsule "LPhalanx2_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "LPhalanx3_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.23095, 0.109, 0.42280000000000006)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Capsule "LPhalanx3_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "LPhalanx4_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.21894999999999998, 0.101, 0.42280000000000006)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Capsule "LPhalanx4_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "LPhalanx5_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.22494999999999998, 0.125, 0.41880000000000006)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Capsule "LPhalanx5_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "LPhalanx6_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.23095, 0.117, 0.41880000000000006)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Capsule "LPhalanx6_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "LPhalanx7_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.21894999999999998, 0.109, 0.41880000000000006)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Capsule "LPhalanx7_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "LPhalanx8_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
+        float physics:mass = 0.002
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.22494999999999998, 0.101, 0.41880000000000006)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Capsule "LPhalanx8_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -96,22 +478,22 @@ def Xform "Robot" (
     )
     {
         point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00003796, 0.00003796, 0.00002592)
-        float physics:mass = 0.12
+        float3 physics:diagonalInertia = (0.0000111696, 0.0000111696, 0.0000111696)
+        float physics:mass = 0.06981
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.05, 0.32)
+        double3 xformOp:translate = (0, 0.05, 0.2501)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LHipYawPitch_link_collision" (
+        def Sphere "LHipYawPitch_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 1
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.018, 0.018, 0.025)
+            float3 xformOp:scale = (0.02, 0.02, 0.02)
             double3 xformOp:translate = (0, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
@@ -122,22 +504,22 @@ def Xform "Robot" (
     )
     {
         point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00003796, 0.00003796, 0.00002592)
-        float physics:mass = 0.12
+        float3 physics:diagonalInertia = (0.00004407021, 0.00004407021, 0.00004407021)
+        float physics:mass = 0.14053
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.05, 0.28500000000000003)
+        double3 xformOp:translate = (0, 0.05, 0.2501)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LHipRoll_link_collision" (
+        def Sphere "LHipRoll_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 1
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.018, 0.018, 0.025)
+            float3 xformOp:scale = (0.028, 0.028, 0.028)
             double3 xformOp:translate = (0, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
@@ -147,24 +529,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00003796, 0.00003796, 0.00002592)
-        float physics:mass = 0.12
+        point3f physics:centerOfMass = (0, 0, -0.0525)
+        float3 physics:diagonalInertia = (0.00050628214, 0.00050628214, 0.00019505057)
+        float physics:mass = 0.38968
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.05, 0.25)
+        double3 xformOp:translate = (0, 0.05, 0.2501)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LHipPitch_link_collision" (
+        def Capsule "LHipPitch_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.065
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 0.033
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.018, 0.018, 0.025)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, -0.052500000000000005)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -173,24 +557,37 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00003796, 0.00003796, 0.00002592)
-        float physics:mass = 0.12
+        point3f physics:centerOfMass = (0, 0, -0.0525)
+        float3 physics:diagonalInertia = (0.00038495177, 0.00038495177, 0.000110302906)
+        float physics:mass = 0.30142
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.05, 0.215)
+        double3 xformOp:translate = (0, 0.05, 0.15009999999999998)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LKneePitch_link_collision" (
+        def Capsule "LKneePitch_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.075
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.028
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, -0.0525)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Cube "LKneePitch_shell_1"
+        {
+            color3f[] primvars:displayColor = [(0.25, 0.3, 0.38)]
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.018, 0.018, 0.025)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.006, 0.022, 0.02)
+            double3 xformOp:translate = (0.026, 0, -0.02)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -200,22 +597,22 @@ def Xform "Robot" (
     )
     {
         point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00003796, 0.00003796, 0.00002592)
-        float physics:mass = 0.12
+        float3 physics:diagonalInertia = (0.000025973375, 0.000025973375, 0.000025973375)
+        float physics:mass = 0.13416
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.05, 0.18)
+        double3 xformOp:translate = (0, 0.05, 0.04719999999999998)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LAnklePitch_link_collision" (
+        def Sphere "LAnklePitch_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 1
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.018, 0.018, 0.025)
+            float3 xformOp:scale = (0.022, 0.022, 0.022)
             double3 xformOp:translate = (0, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
@@ -225,362 +622,393 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00003796, 0.00003796, 0.00002592)
-        float physics:mass = 0.12
+        point3f physics:centerOfMass = (0.03, 0.005, -0.03319)
+        float3 physics:diagonalInertia = (0.0001191424, 0.0003748403, 0.0004774861)
+        float physics:mass = 0.17184
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.05, 0.145)
+        double3 xformOp:translate = (0, 0.05, 0.04719999999999998)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LAnkleRoll_link_collision" (
+        def Cube "LAnkleRoll_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.018, 0.018, 0.025)
+            float3 xformOp:scale = (0.08, 0.044, 0.012)
+            double3 xformOp:translate = (0.03, 0.005, -0.03319)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Cube "LAnkleRoll_shell_1"
+        {
+            color3f[] primvars:displayColor = [(0.25, 0.3, 0.38)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.06, 0.036, 0.012)
+            double3 xformOp:translate = (0.019999999999999997, 0.005, -0.02)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "RShoulderPitch_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.00002326, 0.00002326, 0.00002326)
+        float physics:mass = 0.09304
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, -0.098, 0.43510000000000004)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Sphere "RShoulderPitch_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.025, 0.025, 0.025)
             double3 xformOp:translate = (0, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
 
-    def Xform "LShoulderPitch_link" (
+    def Xform "RShoulderRoll_link" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0.0525, 0, 0)
+        float3 physics:diagonalInertia = (0.00016529586, 0.00016529586, 0.00003603346)
+        float physics:mass = 0.15777
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0, -0.098, 0.43510000000000004)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Capsule "RShoulderRoll_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            uniform token axis = "Z"
+            double height = 0.075
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.022
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.0525, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "RElbowYaw_link" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
         point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000016, 0.0000125, 0.0000125)
-        float physics:mass = 0.06
+        float3 physics:diagonalInertia = (0.000008401968, 0.000008401968, 0.000008401968)
+        float physics:mass = 0.06483
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.12, 0.44)
+        double3 xformOp:translate = (0.105, -0.113, 0.43510000000000004)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LShoulderPitch_link_collision" (
+        def Sphere "RElbowYaw_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 1
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.015, 0.02, 0.02)
+            float3 xformOp:scale = (0.018, 0.018, 0.018)
             double3 xformOp:translate = (0, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
 
-    def Xform "LShoulderRoll_link" (
+    def Xform "RElbowRoll_link" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000016, 0.0000125, 0.0000125)
-        float physics:mass = 0.06
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        point3f physics:centerOfMass = (0.03, 0, 0)
+        float3 physics:diagonalInertia = (0.00003756324, 0.00003756324, 0.00001428024)
+        float physics:mass = 0.07761
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.15, 0.42)
+        double3 xformOp:translate = (0.105, -0.113, 0.43510000000000004)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LShoulderRoll_link_collision" (
+        def Capsule "RElbowRoll_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.04
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.015, 0.02, 0.02)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.02
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.030000000000000002, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
 
-    def Xform "LElbowYaw_link" (
+    def Xform "RWristYaw_link" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000016, 0.0000125, 0.0000125)
-        float physics:mass = 0.06
+        point3f physics:centerOfMass = (0.03, 0, -0.006)
+        float3 physics:diagonalInertia = (0.00004560621, 0.00007811758, 0.00006908664)
+        float physics:mass = 0.16933
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.18, 0.39999999999999997)
+        double3 xformOp:translate = (0.16094999999999998, -0.113, 0.43510000000000004)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LElbowYaw_link_collision" (
+        def Cube "RWristYaw_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.015, 0.02, 0.02)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.03, 0.018, 0.022)
+            double3 xformOp:translate = (0.03, 0, -0.006)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
 
-    def Xform "LElbowRoll_link" (
+    def Xform "RPhalanx1_link" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000016, 0.0000125, 0.0000125)
-        float physics:mass = 0.06
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.21, 0.37999999999999995)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "LElbowRoll_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.015, 0.02, 0.02)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "LWristYaw_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000016, 0.0000125, 0.0000125)
-        float physics:mass = 0.06
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.24, 0.35999999999999993)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "LWristYaw_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.015, 0.02, 0.02)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "LPhalanx1_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
         float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.008, 0.26, 0.35999999999999993)
+        double3 xformOp:translate = (0.21894999999999998, -0.125, 0.42280000000000006)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LPhalanx1_link_collision" (
+        def Capsule "RPhalanx1_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
 
-    def Xform "LPhalanx2_link" (
+    def Xform "RPhalanx2_link" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
         float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.016, 0.26, 0.35999999999999993)
+        double3 xformOp:translate = (0.22494999999999998, -0.117, 0.42280000000000006)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LPhalanx2_link_collision" (
+        def Capsule "RPhalanx2_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
 
-    def Xform "LPhalanx3_link" (
+    def Xform "RPhalanx3_link" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
         float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.024, 0.26, 0.35999999999999993)
+        double3 xformOp:translate = (0.23095, -0.109, 0.42280000000000006)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LPhalanx3_link_collision" (
+        def Capsule "RPhalanx3_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
 
-    def Xform "LPhalanx4_link" (
+    def Xform "RPhalanx4_link" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
         float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.26, 0.36799999999999994)
+        double3 xformOp:translate = (0.21894999999999998, -0.101, 0.42280000000000006)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LPhalanx4_link_collision" (
+        def Capsule "RPhalanx4_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
 
-    def Xform "LPhalanx5_link" (
+    def Xform "RPhalanx5_link" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
         float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.008, 0.26, 0.36799999999999994)
+        double3 xformOp:translate = (0.22494999999999998, -0.125, 0.41880000000000006)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LPhalanx5_link_collision" (
+        def Capsule "RPhalanx5_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
 
-    def Xform "LPhalanx6_link" (
+    def Xform "RPhalanx6_link" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
         float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.016, 0.26, 0.36799999999999994)
+        double3 xformOp:translate = (0.23095, -0.117, 0.41880000000000006)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LPhalanx6_link_collision" (
+        def Capsule "RPhalanx6_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
 
-    def Xform "LPhalanx7_link" (
+    def Xform "RPhalanx7_link" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
         float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.024, 0.26, 0.36799999999999994)
+        double3 xformOp:translate = (0.21894999999999998, -0.109, 0.41880000000000006)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LPhalanx7_link_collision" (
+        def Capsule "RPhalanx7_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
 
-    def Xform "LPhalanx8_link" (
+    def Xform "RPhalanx8_link" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
+        point3f physics:centerOfMass = (0.009, 0, 0)
+        float3 physics:diagonalInertia = (1.0012572e-7, 1.0012572e-7, 1.5268572e-8)
         float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf physics:principalAxes = (0.70710677, 0, -0.70710677, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.26, 0.37599999999999995)
+        double3 xformOp:translate = (0.22494999999999998, -0.101, 0.41880000000000006)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "LPhalanx8_link_collision" (
+        def Capsule "RPhalanx8_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.018
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.004
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0.009, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -590,22 +1018,22 @@ def Xform "Robot" (
     )
     {
         point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00003796, 0.00003796, 0.00002592)
-        float physics:mass = 0.12
+        float3 physics:diagonalInertia = (0.0000111696, 0.0000111696, 0.0000111696)
+        float physics:mass = 0.06981
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.05, 0.32)
+        double3 xformOp:translate = (0, -0.05, 0.2501)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "RHipYawPitch_link_collision" (
+        def Sphere "RHipYawPitch_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 1
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.018, 0.018, 0.025)
+            float3 xformOp:scale = (0.02, 0.02, 0.02)
             double3 xformOp:translate = (0, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
@@ -616,22 +1044,22 @@ def Xform "Robot" (
     )
     {
         point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00003796, 0.00003796, 0.00002592)
-        float physics:mass = 0.12
+        float3 physics:diagonalInertia = (0.00004407021, 0.00004407021, 0.00004407021)
+        float physics:mass = 0.14053
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.05, 0.28500000000000003)
+        double3 xformOp:translate = (0, -0.05, 0.2501)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "RHipRoll_link_collision" (
+        def Sphere "RHipRoll_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 1
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.018, 0.018, 0.025)
+            float3 xformOp:scale = (0.028, 0.028, 0.028)
             double3 xformOp:translate = (0, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
@@ -641,24 +1069,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00003796, 0.00003796, 0.00002592)
-        float physics:mass = 0.12
+        point3f physics:centerOfMass = (0, 0, -0.0525)
+        float3 physics:diagonalInertia = (0.00050628214, 0.00050628214, 0.00019505057)
+        float physics:mass = 0.38968
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.05, 0.25)
+        double3 xformOp:translate = (0, -0.05, 0.2501)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "RHipPitch_link_collision" (
+        def Capsule "RHipPitch_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.065
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 0.033
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.018, 0.018, 0.025)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, -0.052500000000000005)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -667,24 +1097,37 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00003796, 0.00003796, 0.00002592)
-        float physics:mass = 0.12
+        point3f physics:centerOfMass = (0, 0, -0.0525)
+        float3 physics:diagonalInertia = (0.00038495177, 0.00038495177, 0.000110302906)
+        float physics:mass = 0.30142
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.05, 0.215)
+        double3 xformOp:translate = (0, -0.05, 0.15009999999999998)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "RKneePitch_link_collision" (
+        def Capsule "RKneePitch_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            uniform token axis = "Z"
+            double height = 0.075
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.028
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, -0.0525)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Cube "RKneePitch_shell_1"
+        {
+            color3f[] primvars:displayColor = [(0.25, 0.3, 0.38)]
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.018, 0.018, 0.025)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.006, 0.022, 0.02)
+            double3 xformOp:translate = (0.026, 0, -0.02)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -694,22 +1137,22 @@ def Xform "Robot" (
     )
     {
         point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00003796, 0.00003796, 0.00002592)
-        float physics:mass = 0.12
+        float3 physics:diagonalInertia = (0.000025973375, 0.000025973375, 0.000025973375)
+        float physics:mass = 0.13416
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.05, 0.18)
+        double3 xformOp:translate = (0, -0.05, 0.04719999999999998)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "RAnklePitch_link_collision" (
+        def Sphere "RAnklePitch_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 1
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.018, 0.018, 0.025)
+            float3 xformOp:scale = (0.022, 0.022, 0.022)
             double3 xformOp:translate = (0, 0, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
@@ -719,362 +1162,35 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.00003796, 0.00003796, 0.00002592)
-        float physics:mass = 0.12
+        point3f physics:centerOfMass = (0.03, -0.005, -0.03319)
+        float3 physics:diagonalInertia = (0.0001191424, 0.0003748403, 0.0004774861)
+        float physics:mass = 0.17184
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.05, 0.145)
+        double3 xformOp:translate = (0, -0.05, 0.04719999999999998)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "RAnkleRoll_link_collision" (
+        def Cube "RAnkleRoll_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            color3f[] primvars:displayColor = [(0.9, 0.9, 0.88)]
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.018, 0.018, 0.025)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.08, 0.044, 0.012)
+            double3 xformOp:translate = (0.03, -0.005, -0.03319)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
-    }
 
-    def Xform "RShoulderPitch_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000016, 0.0000125, 0.0000125)
-        float physics:mass = 0.06
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.12, 0.44)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "RShoulderPitch_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
+        def Cube "RAnkleRoll_shell_1"
         {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
+            color3f[] primvars:displayColor = [(0.25, 0.3, 0.38)]
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.015, 0.02, 0.02)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "RShoulderRoll_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000016, 0.0000125, 0.0000125)
-        float physics:mass = 0.06
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.15, 0.42)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "RShoulderRoll_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.015, 0.02, 0.02)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "RElbowYaw_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000016, 0.0000125, 0.0000125)
-        float physics:mass = 0.06
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.18, 0.39999999999999997)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "RElbowYaw_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.015, 0.02, 0.02)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "RElbowRoll_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000016, 0.0000125, 0.0000125)
-        float physics:mass = 0.06
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.21, 0.37999999999999995)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "RElbowRoll_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.015, 0.02, 0.02)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "RWristYaw_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000016, 0.0000125, 0.0000125)
-        float physics:mass = 0.06
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.24, 0.35999999999999993)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "RWristYaw_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.015, 0.02, 0.02)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "RPhalanx1_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
-        float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.008, -0.26, 0.35999999999999993)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "RPhalanx1_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "RPhalanx2_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
-        float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.016, -0.26, 0.35999999999999993)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "RPhalanx2_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "RPhalanx3_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
-        float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.024, -0.26, 0.35999999999999993)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "RPhalanx3_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "RPhalanx4_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
-        float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.26, 0.36799999999999994)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "RPhalanx4_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "RPhalanx5_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
-        float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.008, -0.26, 0.36799999999999994)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "RPhalanx5_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "RPhalanx6_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
-        float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.016, -0.26, 0.36799999999999994)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "RPhalanx6_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "RPhalanx7_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
-        float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.024, -0.26, 0.36799999999999994)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "RPhalanx7_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "RPhalanx8_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (5.3333334e-8, 3.4666666e-8, 6.6666665e-8)
-        float physics:mass = 0.002
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.26, 0.37599999999999995)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "RPhalanx8_link_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.006, 0.008, 0.004)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.06, 0.036, 0.012)
+            double3 xformOp:translate = (0.019999999999999997, -0.005, -0.02)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -1083,6 +1199,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "HeadYaw"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1093,18 +1210,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/torso>
         rel physics:body1 = </Robot/HeadYaw_link>
-        point3f physics:localPos0 = (0, 0, 0.12)
+        point3f physics:localPos0 = (0, 0, 0.1265)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
         quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
-        float physics:lowerLimit = -119.175224
-        float physics:upperLimit = 119.175224
+        float physics:lowerLimit = -119.50181
+        float physics:upperLimit = 119.50181
     }
 
     def PhysicsRevoluteJoint "joint_HeadPitch" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "HeadPitch"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1119,146 +1237,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -38.388172
-        float physics:upperLimit = 29.220848
-    }
-
-    def PhysicsRevoluteJoint "joint_LHipYawPitch" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        customData = {
-            string aarnnJointName = "LHipYawPitch"
-        }
-    )
-    {
-        float drive:angular:physics:damping = 0
-        float drive:angular:physics:maxForce = 0
-        float drive:angular:physics:stiffness = 0
-        uniform token drive:angular:physics:type = "force"
-        uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/torso>
-        rel physics:body1 = </Robot/LHipYawPitch_link>
-        point3f physics:localPos0 = (0, 0.05, -0.08)
-        point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
-    }
-
-    def PhysicsRevoluteJoint "joint_LHipRoll" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        customData = {
-            string aarnnJointName = "LHipRoll"
-        }
-    )
-    {
-        float drive:angular:physics:damping = 0
-        float drive:angular:physics:maxForce = 0
-        float drive:angular:physics:stiffness = 0
-        uniform token drive:angular:physics:type = "force"
-        uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/LHipYawPitch_link>
-        rel physics:body1 = </Robot/LHipRoll_link>
-        point3f physics:localPos0 = (0, 0, -0.035)
-        point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
-    }
-
-    def PhysicsRevoluteJoint "joint_LHipPitch" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        customData = {
-            string aarnnJointName = "LHipPitch"
-        }
-    )
-    {
-        float drive:angular:physics:damping = 0
-        float drive:angular:physics:maxForce = 0
-        float drive:angular:physics:stiffness = 0
-        uniform token drive:angular:physics:type = "force"
-        uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/LHipRoll_link>
-        rel physics:body1 = </Robot/LHipPitch_link>
-        point3f physics:localPos0 = (0, 0, -0.035)
-        point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
-    }
-
-    def PhysicsRevoluteJoint "joint_LKneePitch" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        customData = {
-            string aarnnJointName = "LKneePitch"
-        }
-    )
-    {
-        float drive:angular:physics:damping = 0
-        float drive:angular:physics:maxForce = 0
-        float drive:angular:physics:stiffness = 0
-        uniform token drive:angular:physics:type = "force"
-        uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/LHipPitch_link>
-        rel physics:body1 = </Robot/LKneePitch_link>
-        point3f physics:localPos0 = (0, 0, -0.035)
-        point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
-    }
-
-    def PhysicsRevoluteJoint "joint_LAnklePitch" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        customData = {
-            string aarnnJointName = "LAnklePitch"
-        }
-    )
-    {
-        float drive:angular:physics:damping = 0
-        float drive:angular:physics:maxForce = 0
-        float drive:angular:physics:stiffness = 0
-        uniform token drive:angular:physics:type = "force"
-        uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/LKneePitch_link>
-        rel physics:body1 = </Robot/LAnklePitch_link>
-        point3f physics:localPos0 = (0, 0, -0.035)
-        point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
-    }
-
-    def PhysicsRevoluteJoint "joint_LAnkleRoll" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        customData = {
-            string aarnnJointName = "LAnkleRoll"
-        }
-    )
-    {
-        float drive:angular:physics:damping = 0
-        float drive:angular:physics:maxForce = 0
-        float drive:angular:physics:stiffness = 0
-        uniform token drive:angular:physics:type = "force"
-        uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/LAnklePitch_link>
-        rel physics:body1 = </Robot/LAnkleRoll_link>
-        point3f physics:localPos0 = (0, 0, -0.035)
-        point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        float physics:lowerLimit = -38.502766
+        float physics:upperLimit = 29.501596
     }
 
     def PhysicsRevoluteJoint "joint_LShoulderPitch" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "LShoulderPitch"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1269,18 +1256,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/torso>
         rel physics:body1 = </Robot/LShoulderPitch_link>
-        point3f physics:localPos0 = (0, 0.12, 0.04)
+        point3f physics:localPos0 = (0, 0.098, 0.1)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        float physics:lowerLimit = -119.50181
+        float physics:upperLimit = 119.50181
     }
 
     def PhysicsRevoluteJoint "joint_LShoulderRoll" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "LShoulderRoll"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1291,18 +1279,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/LShoulderPitch_link>
         rel physics:body1 = </Robot/LShoulderRoll_link>
-        point3f physics:localPos0 = (0, 0.03, -0.02)
+        point3f physics:localPos0 = (0, 0, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
+        float physics:lowerLimit = -18.002335
+        float physics:upperLimit = 76.00285
     }
 
     def PhysicsRevoluteJoint "joint_LElbowYaw" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "LElbowYaw"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1313,18 +1302,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/LShoulderRoll_link>
         rel physics:body1 = </Robot/LElbowYaw_link>
-        point3f physics:localPos0 = (0, 0.03, -0.02)
+        point3f physics:localPos0 = (0.105, 0.015, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -119.50181
+        float physics:upperLimit = 119.50181
     }
 
     def PhysicsRevoluteJoint "joint_LElbowRoll" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "LElbowRoll"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1335,18 +1325,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/LElbowYaw_link>
         rel physics:body1 = </Robot/LElbowRoll_link>
-        point3f physics:localPos0 = (0, 0.03, -0.02)
+        point3f physics:localPos0 = (0, 0, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
+        float physics:lowerLimit = -88.49906
+        float physics:upperLimit = -1.9996227
     }
 
     def PhysicsRevoluteJoint "joint_LWristYaw" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "LWristYaw"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1357,18 +1348,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/LElbowRoll_link>
         rel physics:body1 = </Robot/LWristYaw_link>
-        point3f physics:localPos0 = (0, 0.03, -0.02)
+        point3f physics:localPos0 = (0.05595, 0, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -104.49604
+        float physics:upperLimit = 104.49604
     }
 
     def PhysicsRevoluteJoint "joint_LPhalanx1" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "LPhalanx1"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1379,7 +1371,7 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/LWristYaw_link>
         rel physics:body1 = </Robot/LPhalanx1_link>
-        point3f physics:localPos0 = (0.008, 0.02, 0)
+        point3f physics:localPos0 = (0.058, 0.012, -0.0123)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
@@ -1391,6 +1383,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "LPhalanx2"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1401,7 +1394,7 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/LWristYaw_link>
         rel physics:body1 = </Robot/LPhalanx2_link>
-        point3f physics:localPos0 = (0.016, 0.02, 0)
+        point3f physics:localPos0 = (0.064, 0.004, -0.0123)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
@@ -1413,6 +1406,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "LPhalanx3"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1423,7 +1417,7 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/LWristYaw_link>
         rel physics:body1 = </Robot/LPhalanx3_link>
-        point3f physics:localPos0 = (0.024, 0.02, 0)
+        point3f physics:localPos0 = (0.07, -0.004, -0.0123)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
@@ -1435,6 +1429,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "LPhalanx4"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1445,7 +1440,7 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/LWristYaw_link>
         rel physics:body1 = </Robot/LPhalanx4_link>
-        point3f physics:localPos0 = (0, 0.02, 0.008)
+        point3f physics:localPos0 = (0.058, -0.012, -0.0123)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
@@ -1457,6 +1452,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "LPhalanx5"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1467,7 +1463,7 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/LWristYaw_link>
         rel physics:body1 = </Robot/LPhalanx5_link>
-        point3f physics:localPos0 = (0.008, 0.02, 0.008)
+        point3f physics:localPos0 = (0.064, 0.012, -0.0163)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
@@ -1479,6 +1475,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "LPhalanx6"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1489,7 +1486,7 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/LWristYaw_link>
         rel physics:body1 = </Robot/LPhalanx6_link>
-        point3f physics:localPos0 = (0.016, 0.02, 0.008)
+        point3f physics:localPos0 = (0.07, 0.004, -0.0163)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
@@ -1501,6 +1498,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "LPhalanx7"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1511,7 +1509,7 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/LWristYaw_link>
         rel physics:body1 = </Robot/LPhalanx7_link>
-        point3f physics:localPos0 = (0.024, 0.02, 0.008)
+        point3f physics:localPos0 = (0.058, -0.004, -0.0163)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
@@ -1523,6 +1521,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "LPhalanx8"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1533,7 +1532,7 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/LWristYaw_link>
         rel physics:body1 = </Robot/LPhalanx8_link>
-        point3f physics:localPos0 = (0, 0.02, 0.016)
+        point3f physics:localPos0 = (0.064, -0.012, -0.0163)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
@@ -1541,10 +1540,11 @@ def Xform "Robot" (
         float physics:upperLimit = 57.29578
     }
 
-    def PhysicsRevoluteJoint "joint_RHipYawPitch" (
+    def PhysicsRevoluteJoint "joint_LHipYawPitch" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
-            string aarnnJointName = "RHipYawPitch"
+            string aarnnJointName = "LHipYawPitch"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1554,19 +1554,20 @@ def Xform "Robot" (
         uniform token drive:angular:physics:type = "force"
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/torso>
-        rel physics:body1 = </Robot/RHipYawPitch_link>
-        point3f physics:localPos0 = (0, -0.05, -0.08)
+        rel physics:body1 = </Robot/LHipYawPitch_link>
+        point3f physics:localPos0 = (0, 0.05, -0.085)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        quatf physics:localRot0 = (0.70710677, 0, 0.5, 0.5)
+        quatf physics:localRot1 = (0.70710677, -0, 0.5, 0.5)
+        float physics:lowerLimit = -65.621025
+        float physics:upperLimit = 42.445286
     }
 
-    def PhysicsRevoluteJoint "joint_RHipRoll" (
+    def PhysicsRevoluteJoint "joint_LHipRoll" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
-            string aarnnJointName = "RHipRoll"
+            string aarnnJointName = "LHipRoll"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1575,20 +1576,21 @@ def Xform "Robot" (
         float drive:angular:physics:stiffness = 0
         uniform token drive:angular:physics:type = "force"
         uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/RHipYawPitch_link>
-        rel physics:body1 = </Robot/RHipRoll_link>
-        point3f physics:localPos0 = (0, 0, -0.035)
+        rel physics:body0 = </Robot/LHipYawPitch_link>
+        rel physics:body1 = </Robot/LHipRoll_link>
+        point3f physics:localPos0 = (0, 0, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -21.742144
+        float physics:upperLimit = 45.290997
     }
 
-    def PhysicsRevoluteJoint "joint_RHipPitch" (
+    def PhysicsRevoluteJoint "joint_LHipPitch" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
-            string aarnnJointName = "RHipPitch"
+            string aarnnJointName = "LHipPitch"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1597,20 +1599,21 @@ def Xform "Robot" (
         float drive:angular:physics:stiffness = 0
         uniform token drive:angular:physics:type = "force"
         uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/RHipRoll_link>
-        rel physics:body1 = </Robot/RHipPitch_link>
-        point3f physics:localPos0 = (0, 0, -0.035)
+        rel physics:body0 = </Robot/LHipRoll_link>
+        rel physics:body1 = </Robot/LHipPitch_link>
+        point3f physics:localPos0 = (0, 0, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        float physics:lowerLimit = -87.999954
+        float physics:upperLimit = 27.736315
     }
 
-    def PhysicsRevoluteJoint "joint_RKneePitch" (
+    def PhysicsRevoluteJoint "joint_LKneePitch" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
-            string aarnnJointName = "RKneePitch"
+            string aarnnJointName = "LKneePitch"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1619,20 +1622,21 @@ def Xform "Robot" (
         float drive:angular:physics:stiffness = 0
         uniform token drive:angular:physics:type = "force"
         uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/RHipPitch_link>
-        rel physics:body1 = </Robot/RKneePitch_link>
-        point3f physics:localPos0 = (0, 0, -0.035)
+        rel physics:body0 = </Robot/LHipPitch_link>
+        rel physics:body1 = </Robot/LKneePitch_link>
+        point3f physics:localPos0 = (0, 0, -0.1)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        float physics:lowerLimit = -5.291036
+        float physics:upperLimit = 121.03894
     }
 
-    def PhysicsRevoluteJoint "joint_RAnklePitch" (
+    def PhysicsRevoluteJoint "joint_LAnklePitch" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
-            string aarnnJointName = "RAnklePitch"
+            string aarnnJointName = "LAnklePitch"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1641,20 +1645,21 @@ def Xform "Robot" (
         float drive:angular:physics:stiffness = 0
         uniform token drive:angular:physics:type = "force"
         uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/RKneePitch_link>
-        rel physics:body1 = </Robot/RAnklePitch_link>
-        point3f physics:localPos0 = (0, 0, -0.035)
+        rel physics:body0 = </Robot/LKneePitch_link>
+        rel physics:body1 = </Robot/LAnklePitch_link>
+        point3f physics:localPos0 = (0, 0, -0.1029)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        float physics:lowerLimit = -68.15424
+        float physics:upperLimit = 52.869507
     }
 
-    def PhysicsRevoluteJoint "joint_RAnkleRoll" (
+    def PhysicsRevoluteJoint "joint_LAnkleRoll" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
-            string aarnnJointName = "RAnkleRoll"
+            string aarnnJointName = "LAnkleRoll"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1663,20 +1668,21 @@ def Xform "Robot" (
         float drive:angular:physics:stiffness = 0
         uniform token drive:angular:physics:type = "force"
         uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/RAnklePitch_link>
-        rel physics:body1 = </Robot/RAnkleRoll_link>
-        point3f physics:localPos0 = (0, 0, -0.035)
+        rel physics:body0 = </Robot/LAnklePitch_link>
+        rel physics:body1 = </Robot/LAnkleRoll_link>
+        point3f physics:localPos0 = (0, 0, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -22.796844
+        float physics:upperLimit = 44.060513
     }
 
     def PhysicsRevoluteJoint "joint_RShoulderPitch" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "RShoulderPitch"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1687,18 +1693,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/torso>
         rel physics:body1 = </Robot/RShoulderPitch_link>
-        point3f physics:localPos0 = (0, -0.12, 0.04)
+        point3f physics:localPos0 = (0, -0.098, 0.1)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        float physics:lowerLimit = -119.50181
+        float physics:upperLimit = 119.50181
     }
 
     def PhysicsRevoluteJoint "joint_RShoulderRoll" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "RShoulderRoll"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1709,18 +1716,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/RShoulderPitch_link>
         rel physics:body1 = </Robot/RShoulderRoll_link>
-        point3f physics:localPos0 = (0, -0.03, -0.02)
+        point3f physics:localPos0 = (0, 0, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
+        float physics:lowerLimit = -76.00285
+        float physics:upperLimit = 18.002335
     }
 
     def PhysicsRevoluteJoint "joint_RElbowYaw" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "RElbowYaw"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1731,18 +1739,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/RShoulderRoll_link>
         rel physics:body1 = </Robot/RElbowYaw_link>
-        point3f physics:localPos0 = (0, -0.03, -0.02)
+        point3f physics:localPos0 = (0.105, -0.015, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -119.50181
+        float physics:upperLimit = 119.50181
     }
 
     def PhysicsRevoluteJoint "joint_RElbowRoll" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "RElbowRoll"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1753,18 +1762,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/RElbowYaw_link>
         rel physics:body1 = </Robot/RElbowRoll_link>
-        point3f physics:localPos0 = (0, -0.03, -0.02)
+        point3f physics:localPos0 = (0, 0, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
+        float physics:lowerLimit = 1.9996227
+        float physics:upperLimit = 88.49906
     }
 
     def PhysicsRevoluteJoint "joint_RWristYaw" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "RWristYaw"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1775,18 +1785,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/RElbowRoll_link>
         rel physics:body1 = </Robot/RWristYaw_link>
-        point3f physics:localPos0 = (0, -0.03, -0.02)
+        point3f physics:localPos0 = (0.05595, 0, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = -68.75494
-        float physics:upperLimit = 68.75494
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -104.49604
+        float physics:upperLimit = 104.49604
     }
 
     def PhysicsRevoluteJoint "joint_RPhalanx1" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "RPhalanx1"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1797,10 +1808,10 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/RWristYaw_link>
         rel physics:body1 = </Robot/RPhalanx1_link>
-        point3f physics:localPos0 = (0.008, -0.02, 0)
+        point3f physics:localPos0 = (0.058, -0.012, -0.0123)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot0 = (0.70710677, 0, 0, -0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, -0.70710677)
         float physics:lowerLimit = 0
         float physics:upperLimit = 57.29578
     }
@@ -1809,6 +1820,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "RPhalanx2"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1819,10 +1831,10 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/RWristYaw_link>
         rel physics:body1 = </Robot/RPhalanx2_link>
-        point3f physics:localPos0 = (0.016, -0.02, 0)
+        point3f physics:localPos0 = (0.064, -0.004, -0.0123)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot0 = (0.70710677, 0, 0, -0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, -0.70710677)
         float physics:lowerLimit = 0
         float physics:upperLimit = 57.29578
     }
@@ -1831,6 +1843,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "RPhalanx3"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1841,10 +1854,10 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/RWristYaw_link>
         rel physics:body1 = </Robot/RPhalanx3_link>
-        point3f physics:localPos0 = (0.024, -0.02, 0)
+        point3f physics:localPos0 = (0.07, 0.004, -0.0123)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot0 = (0.70710677, 0, 0, -0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, -0.70710677)
         float physics:lowerLimit = 0
         float physics:upperLimit = 57.29578
     }
@@ -1853,6 +1866,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "RPhalanx4"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1863,10 +1877,10 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/RWristYaw_link>
         rel physics:body1 = </Robot/RPhalanx4_link>
-        point3f physics:localPos0 = (0, -0.02, 0.008)
+        point3f physics:localPos0 = (0.058, 0.012, -0.0123)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot0 = (0.70710677, 0, 0, -0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, -0.70710677)
         float physics:lowerLimit = 0
         float physics:upperLimit = 57.29578
     }
@@ -1875,6 +1889,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "RPhalanx5"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1885,10 +1900,10 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/RWristYaw_link>
         rel physics:body1 = </Robot/RPhalanx5_link>
-        point3f physics:localPos0 = (0.008, -0.02, 0.008)
+        point3f physics:localPos0 = (0.064, -0.012, -0.0163)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot0 = (0.70710677, 0, 0, -0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, -0.70710677)
         float physics:lowerLimit = 0
         float physics:upperLimit = 57.29578
     }
@@ -1897,6 +1912,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "RPhalanx6"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1907,10 +1923,10 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/RWristYaw_link>
         rel physics:body1 = </Robot/RPhalanx6_link>
-        point3f physics:localPos0 = (0.016, -0.02, 0.008)
+        point3f physics:localPos0 = (0.07, -0.004, -0.0163)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot0 = (0.70710677, 0, 0, -0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, -0.70710677)
         float physics:lowerLimit = 0
         float physics:upperLimit = 57.29578
     }
@@ -1919,6 +1935,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "RPhalanx7"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1929,10 +1946,10 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/RWristYaw_link>
         rel physics:body1 = </Robot/RPhalanx7_link>
-        point3f physics:localPos0 = (0.024, -0.02, 0.008)
+        point3f physics:localPos0 = (0.058, 0.004, -0.0163)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
-        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot0 = (0.70710677, 0, 0, -0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, -0.70710677)
         float physics:lowerLimit = 0
         float physics:upperLimit = 57.29578
     }
@@ -1941,6 +1958,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "RPhalanx8"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1951,12 +1969,150 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/RWristYaw_link>
         rel physics:body1 = </Robot/RPhalanx8_link>
-        point3f physics:localPos0 = (0, -0.02, 0.016)
+        point3f physics:localPos0 = (0.064, 0.012, -0.0163)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, -0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, -0.70710677)
+        float physics:lowerLimit = 0
+        float physics:upperLimit = 57.29578
+    }
+
+    def PhysicsRevoluteJoint "joint_RHipYawPitch" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "RHipYawPitch"
+            double aarnnJointRef = 0
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/torso>
+        rel physics:body1 = </Robot/RHipYawPitch_link>
+        point3f physics:localPos0 = (0, -0.05, -0.085)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, -0.5, 0.5)
+        quatf physics:localRot1 = (0.70710677, 0, -0.5, 0.5)
+        float physics:lowerLimit = -65.621025
+        float physics:upperLimit = 42.445286
+    }
+
+    def PhysicsRevoluteJoint "joint_RHipRoll" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "RHipRoll"
+            double aarnnJointRef = 0
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/RHipYawPitch_link>
+        rel physics:body1 = </Robot/RHipRoll_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -45.290997
+        float physics:upperLimit = 21.742144
+    }
+
+    def PhysicsRevoluteJoint "joint_RHipPitch" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "RHipPitch"
+            double aarnnJointRef = 0
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/RHipRoll_link>
+        rel physics:body1 = </Robot/RHipPitch_link>
+        point3f physics:localPos0 = (0, 0, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
-        float physics:lowerLimit = 0
-        float physics:upperLimit = 57.29578
+        float physics:lowerLimit = -87.999954
+        float physics:upperLimit = 27.736315
+    }
+
+    def PhysicsRevoluteJoint "joint_RKneePitch" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "RKneePitch"
+            double aarnnJointRef = 0
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/RHipPitch_link>
+        rel physics:body1 = </Robot/RKneePitch_link>
+        point3f physics:localPos0 = (0, 0, -0.1)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -5.906221
+        float physics:upperLimit = 121.47839
+    }
+
+    def PhysicsRevoluteJoint "joint_RAnklePitch" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "RAnklePitch"
+            double aarnnJointRef = 0
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/RKneePitch_link>
+        rel physics:body1 = </Robot/RAnklePitch_link>
+        point3f physics:localPos0 = (0, 0, -0.1029)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (0.70710677, 0, 0, 0.70710677)
+        quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
+        float physics:lowerLimit = -67.97846
+        float physics:upperLimit = 53.402874
+    }
+
+    def PhysicsRevoluteJoint "joint_RAnkleRoll" (
+        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        customData = {
+            string aarnnJointName = "RAnkleRoll"
+            double aarnnJointRef = 0
+        }
+    )
+    {
+        float drive:angular:physics:damping = 0
+        float drive:angular:physics:maxForce = 0
+        float drive:angular:physics:stiffness = 0
+        uniform token drive:angular:physics:type = "force"
+        uniform token physics:axis = "X"
+        rel physics:body0 = </Robot/RAnklePitch_link>
+        rel physics:body1 = </Robot/RAnkleRoll_link>
+        point3f physics:localPos0 = (0, 0, 0)
+        point3f physics:localPos1 = (0, 0, 0)
+        quatf physics:localRot0 = (1, 0, 0, 0)
+        quatf physics:localRot1 = (1, 0, 0, 0)
+        float physics:lowerLimit = -44.059998
+        float physics:upperLimit = 22.799995
     }
 }
 
@@ -1993,11 +2149,11 @@ def Xform "Habitat"
     )
     {
         color3f[] primvars:displayColor = [(0.42, 0.5, 0.47)]
-        float[] primvars:displayOpacity = [1]
+        float[] primvars:displayOpacity = [0.2]
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
-        float3 xformOp:scale = (1.5, 0.01875, 0.0525)
-        double3 xformOp:translate = (0, -1.5, 0.052500000000000005)
+        float3 xformOp:scale = (1.5, 0.01875, 0.6)
+        double3 xformOp:translate = (0, -1.5, 0.6000000000000001)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 

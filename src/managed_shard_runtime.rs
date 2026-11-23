@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Runtime ownership boundary for stable virtual shards.
 //!
 //! The placement planner produces a value describing where a shard should

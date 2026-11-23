@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 
 # Shared Webots build/runtime profile.  Keep feature selection and the local
 # management transport in one place: an explicit Webots binary does not link

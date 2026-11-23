@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Validate the deployment contract required by the stable AARNN profile.
 
 The SwarmHPC Ansible role lives in a sibling checkout, so the repository's

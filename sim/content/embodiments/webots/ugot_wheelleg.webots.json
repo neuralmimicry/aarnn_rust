@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "profile_id": "ugot_wheelleg",
-  "model_digest": "b4f03e5fc2370af8fbfed91f46007c9d94fa8ef0121e6110c20e54220aebf021",
-  "io_digest": "75f072b1cdca4c0dd0624765a53b4afff25ad23564559725ab0b13ca01c1eb94",
+  "model_digest": "e5d9753ee58be1448523c11731b8d13bb36120e7989098ebcc2617a1c2f70c20",
+  "io_digest": "53b9255d54438d446c43b5f479c335a6e1056029ddc252ce0c66d1b0a8023ed9",
   "targets": [
     {
       "joint": "leg_-1_0",
@@ -17,13 +17,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.196133,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "leg_-1_1",
@@ -38,13 +39,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.196133,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_-1",
@@ -64,8 +66,9 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.005202589408907118,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "leg_1_0",
@@ -80,13 +83,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.196133,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "leg_1_1",
@@ -101,13 +105,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.196133,
+      "gear": 1.2748645,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.20290098694737765,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "wheel_1",
@@ -127,8 +132,9 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.005202589408907118,
+      "driven": true,
+      "qpos0": 0.0
     }
   ],
   "constraints": [],
@@ -163,12 +169,12 @@
         "position": [
           0.0,
           1.3,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -190,12 +196,12 @@
         "position": [
           0.0,
           -1.3,
-          0.045500000000000006
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.09100000000000001
+          0.42
         ],
         "colour": [
           0.42,
@@ -204,7 +210,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -217,12 +223,12 @@
         "position": [
           1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -244,12 +250,12 @@
         "position": [
           -1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -3104,5 +3110,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 109,
-  "digest": "24cdca7725641f051f92aa5eb5f4398363a20786a24cec16d6b3d0c73397688a"
+  "digest": "df5de5bf6ef6c25453ae53a2d35da9491a0e5dc4e6cd36a504f54df41c273d66"
 }

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use aarnn_rust::config::NetworkConfig;
 use aarnn_rust::morphology_contract::DisplayMode;
 use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager};

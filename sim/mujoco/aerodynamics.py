@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Quasi-steady reduced panels v1. SI, X chord/Y span/Z normal.
 
 Model assumptions are in policy.json. Forces derive from local air velocity,

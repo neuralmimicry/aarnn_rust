@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Generated management-contract boundary.
 //!
 //! The source of truth is `proto/management.proto`; `build.rs` regenerates

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Bounded local verification for the compatibility example sharder.
 
 The helper accepts the legacy layer projection for compatibility, but prefers

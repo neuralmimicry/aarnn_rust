@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """SIM-CONTENT-001: real catalogue generation, adapter assets and spatial oracles."""
 import hashlib
 import json
@@ -57,7 +61,10 @@ class ContentParity(unittest.TestCase):
         self.assertTrue(set(LEGACY_TYPES).issubset(PROFILES))
         for p in profiles:
             ref=PROFILES[p['id']]
-            self.assertEqual((p['sensory'],p['output']),(ref.sensory,ref.output))
+            # The catalogue carries the cross-engine device contract; the MuJoCo
+            # worm profile adds 24 proprioceptive bend channels (48 inputs).
+            expected_sensory = 24 if p['id'] == 'celegans' else ref.sensory
+            self.assertEqual((p['sensory'],p['output']),(expected_sensory,ref.output))
             self.assertTrue(20<len(p['parts'])<512)
             self.assertFalse(any(o['collision'] for o in p['parts']))
             if p['id']!='nao':

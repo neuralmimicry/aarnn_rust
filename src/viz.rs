@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! # Simulation Result Visualization (Static PNG)
 //!
 //! This module provides utility functions for generating static graphical reports

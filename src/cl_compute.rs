@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! # OpenCL GPGPU Acceleration Manager
 //!
 //! This module provides the infrastructure to accelerate neural simulation
@@ -525,15 +529,27 @@ kernel void izh_step(
     cv = fmin(fmax(cv, v_min), v_max);
     cu = fmin(fmax(cu, u_min), u_max);
     double current = isfinite(i_total[id]) ? i_total[id] : 0.0;
-    double nv = cv + dt * (0.04 * cv * cv + 5.0 * cv + 140.0 - cu + current);
-    double nu = cu + dt * (recovery_time_constant_a * (recovery_sensitivity_b * nv - cu));
-    if (!isfinite(nv) || !isfinite(nu)) {
-        nv = rest_v;
-        nu = rest_u;
+    int n = (dt > 0.0 && isfinite(dt)) ? (int)ceil(dt / 0.5) : 1;
+    n = n < 1 ? 1 : (n > 64 ? 64 : n);
+    double h = dt / (double)n;
+    double nv = cv;
+    double nu = cu;
+    bool fired = false;
+    for (int k = 0; k < n; ++k) {
+        double tv = nv + h * (0.04 * nv * nv + 5.0 * nv + 140.0 - nu + current);
+        double tu = nu + h * (recovery_time_constant_a * (recovery_sensitivity_b * tv - nu));
+        if (!isfinite(tv) || !isfinite(tu)) {
+            nv = rest_v;
+            nu = rest_u;
+            break;
+        }
+        nv = fmin(fmax(tv, v_min), v_max);
+        nu = fmin(fmax(tu, u_min), u_max);
+        if (nv >= v_th) {
+            fired = true;
+            break;
+        }
     }
-    nv = fmin(fmax(nv, v_min), v_max);
-    nu = fmin(fmax(nu, u_min), u_max);
-    bool fired = nv >= v_th;
     if (fired) {
         v[id] = membrane_reset_potential_c;
         u[id] = nu + recovery_increment_d;
@@ -590,26 +606,46 @@ kernel void aarnn_step(
     cv = fmin(fmax(cv, v_min), v_max);
     cu = fmin(fmax(cu, u_min), u_max);
     double current = isfinite(i_total[id]) ? i_total[id] : 0.0;
-    double nv = cv + dt * (0.04 * cv * cv + 5.0 * cv + 140.0 - cu + current);
-    double nu = cu + dt * (recovery_time_constant_a * (recovery_sensitivity_b * nv - cu));
-    if (!isfinite(nv) || !isfinite(nu)) {
-        nv = rest_v;
-        nu = rest_u;
-        unstable = 1;
-    }
-    nv = fmin(fmax(nv, v_min), v_max);
-    nu = fmin(fmax(nu, u_min), u_max);
     double input_threshold = threshold_offset[id];
     double effective_threshold = 0.0;
     if (adaptive_threshold_enabled != 0) {
         effective_threshold = fmin(fmax(input_threshold, threshold_min), threshold_max);
     }
+    // Same sub-stepped Euler scheme as neuron_kernels::izh_transition:
+    // h <= 0.5 ms, stop at the spike-peak crossing; the adaptive threshold
+    // is a subtractive adaptation current.
+    double drive = current - effective_threshold;
+    int n = (dt > 0.0 && isfinite(dt)) ? (int)ceil(dt / 0.5) : 1;
+    n = n < 1 ? 1 : (n > 64 ? 64 : n);
+    double h = dt / (double)n;
+    double nv = cv;
+    double nu = cu;
+    int crossed = 0;
+    for (int k = 0; k < n && unstable == 0; ++k) {
+        double tv = nv + h * (0.04 * nv * nv + 5.0 * nv + 140.0 - nu + drive);
+        double tu = nu + h * (recovery_time_constant_a * (recovery_sensitivity_b * tv - nu));
+        if (!isfinite(tv) || !isfinite(tu)) {
+            nv = rest_v;
+            nu = rest_u;
+            unstable = 1;
+            break;
+        }
+        nv = fmin(fmax(tv, v_min), v_max);
+        nu = fmin(fmax(tu, u_min), u_max);
+        if (nv >= v_th) {
+            crossed = 1;
+            break;
+        }
+    }
     int old_refr = refr[id];
     int blocked = refractory_enabled != 0 && old_refr > 0;
-    int fired = unstable == 0 && blocked == 0 && nv >= (v_th + effective_threshold);
+    int fired = unstable == 0 && blocked == 0 && crossed != 0;
     if (fired != 0) {
         v[id] = membrane_reset_potential_c;
         u[id] = nu + recovery_increment_d;
+    } else if (crossed != 0) {
+        v[id] = membrane_reset_potential_c;
+        u[id] = nu;
     } else {
         v[id] = nv;
         u[id] = nu;
@@ -1060,7 +1096,21 @@ kernel void plasticity_update(
         dw = eta * (post * pre - post * post * weights[idx]);
     }
     
-    weights[idx] = clamp(weights[idx] + dw, w_min, w_max);
+    // Mirrors plasticity::apply_weight_delta: an absent synapse stays absent,
+    // an existing one keeps its sign and at least the silent-synapse floor,
+    // and an imported efficacy above the bound is not truncated.
+    double w = weights[idx];
+    if (w == 0.0) return;
+    double lo = fmin(w_min, w_max);
+    double hi = fmax(w_min, w_max);
+    if (w_min >= 0.0) {
+        double mag = fabs(w);
+        double hi_eff = fmax(hi, mag);
+        double lo_eff = fmin(fmax(lo, 1.0e-6), hi_eff);
+        weights[idx] = copysign(clamp(mag + dw, lo_eff, hi_eff), w);
+    } else {
+        weights[idx] = clamp(w + dw, fmin(lo, w), fmax(hi, w));
+    }
 }
 
 // Morphological energy density at points

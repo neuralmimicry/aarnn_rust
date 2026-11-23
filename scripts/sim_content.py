@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Authoritative bounded procedural content compiler. No random global state or assets.
 
 All primitive dimensions are full extents, Z-up; angles are radians around Z.
@@ -216,6 +220,12 @@ def compile_catalog():
     for p in data['profiles']:
         ref=PROFILES[p['id']]; p.update(sensory=ref.sensory,output=ref.output)
         alignment=ROOT/Path(ref.config_rel).with_suffix('.io_alignment.json')
+        if p['id']=='celegans':
+            # The catalogue describes the cross-engine device contract (Webots,
+            # Unity, Unreal, Minecraft): 24 worm devices. The MuJoCo profile
+            # extends it with 24 proprioceptive bend channels in its own record.
+            alignment=ROOT/'webots_world/configs/config_celegans_webots.io_alignment.json'
+            p['sensory']=24
         if alignment.exists():
             d=json.loads(alignment.read_text()); s=d['sensory_channels']
             p['sensor_names']=[v if isinstance(v,str) else v['device_port'] for v in s]

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use aarnn_rust::deterministic::NeuronId;
 use aarnn_rust::hierarchical_sharding::{
     BiologicalAreaVolume, BiologicalEllipsoid, BiologicalGrowthDecision, BiologicalGrowthSpace,

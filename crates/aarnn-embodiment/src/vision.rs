@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Versioned log-luminance event cell from the repository's DeviceMapper.
 //! Native adapters supply measured light; no neural or engine state is shared.
 #[derive(Clone, Default)]

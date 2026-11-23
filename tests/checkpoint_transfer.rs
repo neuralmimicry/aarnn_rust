@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Verification of the bounded network checkpoint/bootstrap transfer seam.
 
 use aarnn_rust::authoritative_shard::FIXED_POINT_SCALE;

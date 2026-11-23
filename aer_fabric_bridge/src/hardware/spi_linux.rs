@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use crate::hardware::spi::SpiBackend;
 use async_trait::async_trait;
 #[cfg(feature = "linux-spi")]

@@ -1,4 +1,7 @@
-// Copyright NeuralMimicry. All Rights Reserved.
+// SPDX-FileCopyrightText: NEURALMIMICRY LTD
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 
 #include "NmAerClient.h"
 
@@ -175,6 +178,9 @@ bool FNmAerClient::SendHandshake(const TArray<FString>& SensorNames,
     Obj->SetArrayField(TEXT("o_names"), OArr);
     Obj->SetNumberField(TEXT("sensory"), SensorNames.Num());
     Obj->SetNumberField(TEXT("output"),  ActuatorNames.Num());
+    // One AER exchange is one 2 ms brain frame, as in the MuJoCo reference;
+    // without it the brain falls back to NM_IPC_DT_MS.
+    Obj->SetNumberField(TEXT("dt_ms"), NmOutputDecode::FrameMs);
 
     FString JsonStr;
     TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&JsonStr);
@@ -192,11 +198,22 @@ bool FNmAerClient::SendHandshake(const TArray<FString>& SensorNames,
         return false;
     }
 
-    // Receive ack (discard body – AARNN echoes or sends a short ack).
+    // Receive the ack and negotiate the output encoding (aer.rs
+    // OutputCode::from_handshake): absent/null/"spikes" or "pulse_density".
+    OutputCode = NmOutputDecode::EOutputCode::Spikes;
     TArray<uint8> AckPayload;
     if (!RecvFrame(AckPayload))
     {
         UE_LOG(LogTemp, Error, TEXT("NmAerClient: No handshake ack received."));
+        return false;
+    }
+    const std::string Ack(reinterpret_cast<const char*>(AckPayload.GetData()),
+                          static_cast<size_t>(AckPayload.Num()));
+    std::string CodeError;
+    if (!NmOutputDecode::ParseHandshake(Ack, OutputCode, &CodeError))
+    {
+        UE_LOG(LogTemp, Error, TEXT("NmAerClient: refusing brain – %s."),
+               UTF8_TO_TCHAR(CodeError.c_str()));
         return false;
     }
 
@@ -204,8 +221,10 @@ bool FNmAerClient::SendHandshake(const TArray<FString>& SensorNames,
     NumOutputChannels   = ActuatorNames.Num();
 
     UE_LOG(LogTemp, Log,
-           TEXT("NmAerClient: Handshake OK – %d sensors, %d outputs."),
-           NumSensoryChannels, NumOutputChannels);
+           TEXT("NmAerClient: Handshake OK – %d sensors, %d outputs, output_code=%s."),
+           NumSensoryChannels, NumOutputChannels,
+           OutputCode == NmOutputDecode::EOutputCode::PulseDensity ? TEXT("pulse_density")
+                                                                  : TEXT("spikes"));
     return true;
 }
 

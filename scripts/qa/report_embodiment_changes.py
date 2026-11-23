@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Hash the reviewable task diff, excluding immutable supplied input packs."""
 from datetime import datetime, timezone
 import hashlib

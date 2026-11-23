@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // AARNN synaptic front-end filter demo.
 // Matches the structure of src/aarnn/dynamics.rs::apply_synaptic_filter.
 

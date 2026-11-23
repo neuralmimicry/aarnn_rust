@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // AARNN short-term plasticity demo.
 // Matches src/aarnn/plasticity.rs::stp_step.
 

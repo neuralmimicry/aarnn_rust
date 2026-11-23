@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // Run all FPAA-oriented Xcos / Scilab demos.
 
 this_dir = get_absolute_file_path("00_generate_all.sce");

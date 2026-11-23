@@ -1,4 +1,7 @@
-// Copyright NeuralMimicry. All Rights Reserved.
+// SPDX-FileCopyrightText: NEURALMIMICRY LTD
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 
 #include "Robots/NmZebrafishActor.h"
 
@@ -215,6 +218,21 @@ void UNmZebrafishComponent::ApplyActuators(const TArray<float>& Actuators)
     constexpr float MaxDorsalDeg   = 15.f;
     constexpr float MaxLateralDeg  = 30.f;
 
+    // A pulse-density brain: decode each channel's event density linearly
+    // (actuation.rs rate filter, 0..1) and feed it to the same segment
+    // mixing; silence keeps the legacy neutral pose.
+    const bool bGraded = IsGraded();
+    if (bGraded && IsFreshFrame())
+    {
+        GradedChannels.Accept(Actuators.GetData(), static_cast<size_t>(Actuators.Num()));
+        GradedChannels.Advance();
+    }
+    auto Channel = [&](int32 Index)
+    {
+        return bGraded ? static_cast<float>(GradedChannels.Normalized(static_cast<size_t>(Index)))
+                       : FMath::Clamp(Actuators[Index], -1.f, 1.f);
+    };
+
     for (int32 seg = 0; seg < NumSegments - 1 && seg < SegmentJoints.Num(); ++seg)
     {
         UPhysicsConstraintComponent* Joint = SegmentJoints[seg];
@@ -224,8 +242,8 @@ void UNmZebrafishComponent::ApplyActuators(const TArray<float>& Actuators)
         }
 
         const int32 Base    = seg * 2;
-        const float Dorsal  = FMath::Clamp(Actuators[Base + 0], -1.f, 1.f);
-        const float Ventral = FMath::Clamp(Actuators[Base + 1], -1.f, 1.f);
+        const float Dorsal  = Channel(Base + 0);
+        const float Ventral = Channel(Base + 1);
 
         // Dorsal-ventral → Swing2 (dorsal = positive, ventral = negative)
         const float DV  = (Dorsal - Ventral) * MaxDorsalDeg;

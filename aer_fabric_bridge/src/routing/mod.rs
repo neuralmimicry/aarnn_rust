@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 pub mod bridge_route_table;
 pub mod endpoint_table;
 pub mod host_subscription_table;

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // NmBrainConnector.cs — ScriptableObject that describes one AARNN brain instance.
 // Compatible with Unity 2022.3 LTS+.
 

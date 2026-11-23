@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use aer_fabric_bridge::aer::{AerEvent, AerFlags, SynapseId, encode_packet};
 use aer_fabric_bridge::config::ConfigBundle;
 use aer_fabric_bridge::runtime::tasks::run_bridge;

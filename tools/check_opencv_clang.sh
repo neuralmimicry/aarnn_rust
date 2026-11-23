@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 # Diagnostic helper for OpenCV (opencv4) and libclang detection
 # Usage:
 #   bash tools/check_opencv_clang.sh            # diagnostics + suggested exports

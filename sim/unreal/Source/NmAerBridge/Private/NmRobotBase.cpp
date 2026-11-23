@@ -1,4 +1,7 @@
-// Copyright NeuralMimicry. All Rights Reserved.
+// SPDX-FileCopyrightText: NEURALMIMICRY LTD
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 
 #include "NmRobotBase.h"
 
@@ -109,13 +112,14 @@ public:
         bHasPendingStep = true;
     }
 
-    bool ConsumeLatestOutputs(TArray<float>& OutOutputs)
+    bool ConsumeLatestOutputs(TArray<float>& OutOutputs, NmOutputDecode::EOutputCode& OutCode)
     {
         FScopeLock Lock(&DataMutex);
         if (!bHasFreshOutputs)
         {
             return false;
         }
+        OutCode = LatestOutputCode;
         OutOutputs = MoveTemp(LatestOutputs);
         LatestOutputs.Reset();
         bHasFreshOutputs = false;
@@ -186,6 +190,7 @@ public:
             {
                 FScopeLock Lock(&DataMutex);
                 LatestOutputs = MoveTemp(LocalOutputs);
+                LatestOutputCode = Client.GetOutputCode();
                 bHasFreshOutputs = true;
             }
         }
@@ -255,6 +260,7 @@ private:
     bool bHasPendingStep = false;
 
     TArray<float> LatestOutputs;
+    NmOutputDecode::EOutputCode LatestOutputCode = NmOutputDecode::EOutputCode::Spikes;
     bool bHasFreshOutputs = false;
 };
 
@@ -343,6 +349,7 @@ void UNmRobotBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
     bConnected = false;
     bHasLastActuatorOutputs = false;
     LastActuatorOutputs.Reset();
+    DisarmGraded();
 
     if (ANmSimManager* Mgr = ANmSimManager::Get(GetWorld()))
     {
@@ -375,6 +382,7 @@ void UNmRobotBase::TickComponent(float DeltaTime,
     {
         bHasLastActuatorOutputs = false;
         LastActuatorOutputs.Reset();
+        DisarmGraded();
         return;
     }
 
@@ -382,14 +390,31 @@ void UNmRobotBase::TickComponent(float DeltaTime,
     // neural output frame: replaying it on every render tick would turn a
     // sparse spike into a persistent actuator command.
     TArray<float> Outputs;
-    if (IoWorker->ConsumeLatestOutputs(Outputs))
+    NmOutputDecode::EOutputCode Code = NmOutputDecode::EOutputCode::Spikes;
+    if (IoWorker->ConsumeLatestOutputs(Outputs, Code))
     {
+        // A pulse-density brain arms the bodies' graded (reference) decode.
+        const bool bGraded = Code == NmOutputDecode::EOutputCode::PulseDensity;
+        if (bGraded != bGradedArmed)
+        {
+            ResetGradedDecode();
+        }
+        bGradedArmed = bGraded;
+        LastBrainFrameMs = SimTimeMs;
         LastActuatorOutputs = MoveTemp(Outputs);
         bHasLastActuatorOutputs = true;
+        bFreshFrame = true;
         ApplyActuators(LastActuatorOutputs);
+        bFreshFrame = false;
     }
     else if (bHasLastActuatorOutputs)
     {
+        // A graded body holds its decoded targets between frames, and disarms
+        // after the reference's 50-frame (100 ms) reply expiry.
+        if (bGradedArmed && SimTimeMs - LastBrainFrameMs > NmOutputDecode::HoldMs)
+        {
+            DisarmGraded();
+        }
         // No new neural frame arrived. Feed a neutral frame once per game tick
         // so actuator-side muscle traces and targets decay instead of holding a
         // stale spike indefinitely. Zero is the neutral value for the bridge
@@ -407,4 +432,14 @@ void UNmRobotBase::TickComponent(float DeltaTime,
     TArray<float> Sensors;
     CollectSensors(Sensors);
     IoWorker->SubmitStep(SimTimeMs, MoveTemp(Sensors));
+}
+
+void UNmRobotBase::DisarmGraded()
+{
+    if (!bGradedArmed)
+    {
+        return;
+    }
+    bGradedArmed = false;
+    ResetGradedDecode();
 }

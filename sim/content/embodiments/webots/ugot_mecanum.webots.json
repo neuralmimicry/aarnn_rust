@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "ugot_mecanum",
-  "model_digest": "10f2cf2da01a42db2081c25dce40802819a0a66daf33f9f81540d22901356094",
+  "model_digest": "c62f0638e3292a20851281ce40f03530b0fc8c62e845f0c71f9a57775c285490",
   "io_digest": "ce881cb857c332e8022959cf0401c51d36643bf7271a86279fc655d048a479de",
   "targets": [
     {
@@ -23,7 +23,8 @@
         1000000.0
       ],
       "damping": 0.002,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_00_joint",
@@ -44,7 +45,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_01_joint",
@@ -65,7 +67,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_02_joint",
@@ -86,7 +89,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_03_joint",
@@ -107,7 +111,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_04_joint",
@@ -128,7 +133,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_05_joint",
@@ -149,7 +155,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_06_joint",
@@ -170,7 +177,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_07_joint",
@@ -191,7 +199,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_left_roller_08_joint",
@@ -212,7 +221,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_joint",
@@ -233,7 +243,8 @@
         1000000.0
       ],
       "damping": 0.002,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_00_joint",
@@ -254,7 +265,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_01_joint",
@@ -275,7 +287,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_02_joint",
@@ -296,7 +309,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_03_joint",
@@ -317,7 +331,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_04_joint",
@@ -338,7 +353,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_05_joint",
@@ -359,7 +375,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_06_joint",
@@ -380,7 +397,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_07_joint",
@@ -401,7 +419,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "front_right_roller_08_joint",
@@ -422,7 +441,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_joint",
@@ -443,7 +463,8 @@
         1000000.0
       ],
       "damping": 0.002,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_00_joint",
@@ -464,7 +485,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_01_joint",
@@ -485,7 +507,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_02_joint",
@@ -506,7 +529,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_03_joint",
@@ -527,7 +551,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_04_joint",
@@ -548,7 +573,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_05_joint",
@@ -569,7 +595,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_06_joint",
@@ -590,7 +617,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_07_joint",
@@ -611,7 +639,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_left_roller_08_joint",
@@ -632,7 +661,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_joint",
@@ -653,7 +683,8 @@
         1000000.0
       ],
       "damping": 0.002,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_00_joint",
@@ -674,7 +705,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_01_joint",
@@ -695,7 +727,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_02_joint",
@@ -716,7 +749,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_03_joint",
@@ -737,7 +771,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_04_joint",
@@ -758,7 +793,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_05_joint",
@@ -779,7 +815,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_06_joint",
@@ -800,7 +837,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_07_joint",
@@ -821,7 +859,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     },
     {
       "joint": "rear_right_roller_08_joint",
@@ -842,7 +881,8 @@
         0
       ],
       "damping": 4e-05,
-      "driven": false
+      "driven": false,
+      "qpos0": 0.0
     }
   ],
   "constraints": [],
@@ -877,12 +917,12 @@
         "position": [
           0.0,
           1.3,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -904,12 +944,12 @@
         "position": [
           0.0,
           -1.3,
-          0.045500000000000006
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.09100000000000001
+          0.42
         ],
         "colour": [
           0.42,
@@ -918,7 +958,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -931,12 +971,12 @@
         "position": [
           1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -958,12 +998,12 @@
         "position": [
           -1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -3818,5 +3858,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 110,
-  "digest": "7ba018800eadeadff938e9fa952a574292e5b23afe5d0e25c82e9e2bfda1ff83"
+  "digest": "19e4dc93914ec06d32199ef24b6def401c50b9e39996f7ca7d0496dfd4dde4ba"
 }

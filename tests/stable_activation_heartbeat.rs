@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Network-level verification for digest-bound stable-worker activation.
 //!
 //! The test deliberately uses the distributed gRPC service rather than

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use crate::config::NodeConfig;
 use crate::time::{unix_time_ms, unix_time_ns};
 use serde::{Deserialize, Serialize};

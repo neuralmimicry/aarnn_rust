@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Pin named local simulation bindings without modifying the neural snapshot.
 
 Called once per managed body by the common cluster launcher. A generation here

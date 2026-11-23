@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! AARNN plasticity and constraint kernels.
 //!
 //! The functions here cover fast presynaptic resource dynamics, stochastic release,
@@ -15,6 +19,7 @@
 //!   fully analog.
 
 use ndarray::Array2;
+use serde::{Deserialize, Serialize};
 
 /// One pure long-term-plasticity proposal for a matrix-owned synapse.
 ///
@@ -157,10 +162,81 @@ pub fn weight_delta(
     }
 }
 
+/// Smallest efficacy long-term depression leaves on an existing synapse.
+///
+/// LTD silences a synapse; it does not delete it. Removal is structural
+/// (morphology pruning), so a depressed synapse keeps its place and its sign
+/// and can potentiate again (de-depression).
+pub const SILENT_SYNAPSE_FLOOR: f64 = 1.0e-6;
+
 /// Apply one proposal to a weight using the configured finite bounds.
+///
+/// Long-term plasticity changes the efficacy of synapses that exist; it
+/// never creates one. A weight of exactly zero is an absent synapse (the
+/// connectome or growth did not make it) and stays zero: creating synapses
+/// is structural plasticity, owned by growth. Letting a rate rule
+/// potentiate empty matrix entries wired every co-active pair together
+/// (C. elegans: 246 -> 12,381 of 14,496 input entries within 8 s), which
+/// gave every cell the same drive and locked the network into runaway
+/// synchrony.
+///
+/// `w_min..=w_max` bounds the synaptic *efficacy*. An inhibitory synapse is
+/// stored with a negative sign, so its magnitude is bounded instead and a
+/// positive (potentiating) proposal makes it more inhibitory. With
+/// non-negative bounds an existing synapse is held at least
+/// [`SILENT_SYNAPSE_FLOOR`] from zero, so it can neither vanish nor cross
+/// zero and change sign. An imported efficacy above `w_max` is kept (it can
+/// only be depressed until it is inside the bound) instead of being
+/// truncated the first time a zero delta touches it.
 #[inline]
 pub fn apply_weight_delta(current_weight: f64, delta: f64, w_min: f64, w_max: f64) -> f64 {
-    (current_weight + delta).clamp(w_min, w_max)
+    if current_weight == 0.0 {
+        return current_weight;
+    }
+    let lo = w_min.min(w_max);
+    let hi = w_max.max(w_min);
+    if w_min >= 0.0 {
+        let magnitude = current_weight.abs();
+        let hi_eff = hi.max(magnitude);
+        let lo_eff = lo.max(SILENT_SYNAPSE_FLOOR).min(hi_eff);
+        return (magnitude + delta).clamp(lo_eff, hi_eff).copysign(current_weight);
+    }
+    // Explicitly signed bounds: the rule may move a synapse across zero.
+    (current_weight + delta).clamp(lo.min(current_weight), hi.max(current_weight))
+}
+
+/// Per-cell multiplicative synaptic scaling toward a firing-rate set point.
+///
+/// `rate_error[j] = (set_point_j - rate_j) / set_point_j`, clamped to
+/// `[-1, 1]`. Row `j` of `mat` holds the synapses onto cell `j`. Excitatory
+/// synapses are scaled by `exp(k * e)` and inhibitory magnitudes by
+/// `exp(-k * e)`: an over-active cell weakens its excitation and strengthens
+/// its inhibition, an under-active cell the reverse (Turrigiano et al. 1998;
+/// Kilman, van Rossum & Turrigiano 2002). Scaling is multiplicative - each
+/// synapse in proportion to its strength (Turrigiano et al. 1998) - so it
+/// keeps the relative weights that Hebbian/STDP learning wrote into the row,
+/// keeps absent synapses absent and never changes a sign. Magnitudes stay within `[SILENT_SYNAPSE_FLOOR, max(w_max, |w|)]`.
+pub fn homeostatic_scale_rows(mat: &mut Array2<f64>, rate_error: &[f64], k: f64, w_max: f64) {
+    if k <= 0.0 || mat.is_empty() {
+        return;
+    }
+    for (j, mut row) in mat.axis_iter_mut(ndarray::Axis(0)).enumerate() {
+        let e = match rate_error.get(j) {
+            Some(e) if e.is_finite() && *e != 0.0 => e.clamp(-1.0, 1.0),
+            _ => continue,
+        };
+        let up = (k * e).exp();
+        let down = (-k * e).exp();
+        for w in row.iter_mut() {
+            if *w == 0.0 {
+                continue;
+            }
+            let magnitude = w.abs();
+            let scaled = magnitude * if *w > 0.0 { up } else { down };
+            let hi = w_max.abs().max(magnitude);
+            *w = scaled.clamp(SILENT_SYNAPSE_FLOOR.min(hi), hi).copysign(*w);
+        }
+    }
 }
 
 /// State of one short-term plasticity channel.
@@ -380,6 +456,95 @@ pub fn apply_synaptic_scaling_matrix_rows(mat: &mut Array2<f64>, strength: f64, 
     }
 }
 
+/// Lowest set point a cell defends (Hz): a cell silent over the warm-up still
+/// resists being driven into runaway firing by learning.
+pub const MIN_SET_POINT_HZ: f64 = 1.0;
+
+/// Firing-rate state of the homeostatic counterweight, one population per
+/// hidden layer followed by the output population.
+///
+/// Each cell's rate is an exponential average of its activity (spikes, or a
+/// graded cell's expected spikes). After the warm-up the cell's set point is
+/// fixed - its own average rate, or a common target - and the scaling
+/// error is `(set_point - rate) / set_point`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RateHomeostat {
+    pub rate_hz: Vec<Vec<f64>>,
+    /// Negative until the cell's set point is taken.
+    pub set_point_hz: Vec<Vec<f64>>,
+    /// Averaging time per population (ms).
+    pub age_ms: Vec<f64>,
+    /// Time since the last scaling pass (ms).
+    pub since_scale_ms: f64,
+}
+
+impl RateHomeostat {
+    /// Match the population sizes; a population whose size changed (growth,
+    /// pruning) restarts its warm-up so set points never belong to the wrong
+    /// cell.
+    pub fn fit(&mut self, sizes: &[usize]) {
+        self.rate_hz.resize_with(sizes.len(), Vec::new);
+        self.set_point_hz.resize_with(sizes.len(), Vec::new);
+        self.age_ms.resize(sizes.len(), 0.0);
+        for (p, &n) in sizes.iter().enumerate() {
+            if self.rate_hz[p].len() != n || self.set_point_hz[p].len() != n {
+                self.rate_hz[p] = vec![0.0; n];
+                self.set_point_hz[p] = vec![-1.0; n];
+                self.age_ms[p] = 0.0;
+            }
+        }
+    }
+
+    /// Advance population `pop` by one step of `dt_ms`; `activity[j]` is
+    /// cell `j`'s spikes this step (or expected spikes, in [0, 1]).
+    pub fn observe(
+        &mut self,
+        pop: usize,
+        activity: &[f64],
+        dt_ms: f64,
+        tau_ms: f64,
+        warmup_ms: f64,
+        target_hz: f64,
+    ) {
+        let (Some(rates), Some(sets)) = (self.rate_hz.get_mut(pop), self.set_point_hz.get_mut(pop))
+        else {
+            return;
+        };
+        if dt_ms <= 0.0 {
+            return;
+        }
+        let alpha = 1.0 - (-dt_ms / tau_ms.max(dt_ms)).exp();
+        for (r, a) in rates.iter_mut().zip(activity) {
+            *r += alpha * (a.clamp(0.0, 1.0) * 1000.0 / dt_ms - *r);
+        }
+        let age = &mut self.age_ms[pop];
+        *age += dt_ms;
+        if *age >= warmup_ms {
+            for (s, r) in sets.iter_mut().zip(rates.iter()) {
+                if *s < 0.0 {
+                    *s = if target_hz > 0.0 { target_hz } else { r.max(MIN_SET_POINT_HZ) };
+                }
+            }
+        }
+    }
+
+    /// Per-cell scaling error of population `pop`, or `None` before its
+    /// set points exist.
+    pub fn rate_error(&self, pop: usize) -> Option<Vec<f64>> {
+        let sets = self.set_point_hz.get(pop)?;
+        if sets.is_empty() || sets.iter().any(|s| *s < 0.0) {
+            return None;
+        }
+        Some(
+            sets.iter()
+                .zip(&self.rate_hz[pop])
+                .map(|(s, r)| ((s - r) / s).clamp(-1.0, 1.0))
+                .collect(),
+        )
+    }
+}
+
 /// Convert mean trace and rate signals into the multiplicative triplet plasticity gain.
 ///
 /// Returning the scale as a standalone function keeps the biological heuristic explicit
@@ -398,6 +563,113 @@ pub fn triplet_eta_scale(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn weight_delta_preserves_inhibitory_sign_and_bounds_magnitude() {
+        // Zero delta leaves an inhibitory synapse untouched (was clamped to 0).
+        assert_eq!(apply_weight_delta(-0.4, 0.0, 0.0, 1.0), -0.4);
+        // Potentiation strengthens inhibition; depression weakens it.
+        assert!((apply_weight_delta(-0.4, 0.1, 0.0, 1.0) + 0.5).abs() < 1e-12);
+        assert!((apply_weight_delta(-0.4, -0.1, 0.0, 1.0) + 0.3).abs() < 1e-12);
+        // Magnitude bounds apply to inhibitory synapses too; depression
+        // silences a synapse but keeps it (and its sign).
+        assert_eq!(apply_weight_delta(-0.95, 0.2, 0.0, 1.0), -1.0);
+        assert_eq!(apply_weight_delta(-0.05, -0.2, 0.0, 1.0), -SILENT_SYNAPSE_FLOOR);
+        assert_eq!(apply_weight_delta(0.95, 0.2, 0.0, 1.0), 1.0);
+        assert_eq!(apply_weight_delta(0.05, -0.2, 0.0, 1.0), SILENT_SYNAPSE_FLOOR);
+        // A silenced inhibitory synapse stays inhibitory when it recovers.
+        let silent = apply_weight_delta(-0.05, -0.2, 0.0, 1.0);
+        assert!(apply_weight_delta(silent, 0.1, 0.0, 1.0) < 0.0);
+        // Explicit signed bounds are honoured as before.
+        assert_eq!(apply_weight_delta(-0.5, -0.7, -1.0, 1.0), -1.0);
+    }
+
+    #[test]
+    fn plasticity_never_creates_a_synapse() {
+        // An absent synapse (exactly zero) stays absent under any proposal,
+        // with non-negative or signed bounds; creation belongs to growth.
+        assert_eq!(apply_weight_delta(0.0, 0.3, 0.0, 1.0), 0.0);
+        assert_eq!(apply_weight_delta(0.0, -0.3, 0.0, 1.0), 0.0);
+        assert_eq!(apply_weight_delta(0.0, 0.3, -1.0, 1.0), 0.0);
+        let mut matrix = Array2::from_shape_vec((1, 3), vec![0.0, 0.2, -0.2]).unwrap();
+        let proposals = [
+            WeightProposal::new(0, 0, 0.0, 0.5),
+            WeightProposal::new(0, 1, 0.2, 0.5),
+            WeightProposal::new(0, 2, -0.2, 0.5),
+        ];
+        commit_weight_proposals(&mut matrix, &proposals, 0.0, 1.0).unwrap();
+        assert_eq!(matrix[(0, 0)], 0.0);
+        assert!((matrix[(0, 1)] - 0.7).abs() < 1e-12);
+        assert!((matrix[(0, 2)] + 0.7).abs() < 1e-12);
+    }
+
+    #[test]
+    fn imported_efficacy_above_the_bound_is_not_truncated() {
+        // Connectome weights may exceed w_max; a zero delta keeps them and
+        // potentiation cannot push them further.
+        assert_eq!(apply_weight_delta(1.4, 0.0, 0.0, 1.0), 1.4);
+        assert_eq!(apply_weight_delta(1.4, 0.2, 0.0, 1.0), 1.4);
+        assert!((apply_weight_delta(1.4, -0.1, 0.0, 1.0) - 1.3).abs() < 1e-12);
+        assert_eq!(apply_weight_delta(-1.4, 0.2, 0.0, 1.0), -1.4);
+    }
+
+    #[test]
+    fn homeostatic_scaling_opposes_the_rate_error_and_keeps_structure() {
+        // Row 0 fires above its set point (error -1), row 1 below (+0.5),
+        // row 2 at its set point.
+        let mut mat = Array2::from_shape_vec(
+            (3, 3),
+            vec![0.4, -0.2, 0.0, 0.4, -0.2, 0.0, 0.4, -0.2, 0.0],
+        )
+        .unwrap();
+        homeostatic_scale_rows(&mut mat, &[-1.0, 0.5, 0.0], 0.1, 1.0);
+        // Over-active: excitation down, inhibition up.
+        assert!(mat[(0, 0)] < 0.4 && mat[(0, 0)] > 0.0);
+        assert!(mat[(0, 1)] < -0.2);
+        // Under-active: excitation up, inhibition down.
+        assert!(mat[(1, 0)] > 0.4);
+        assert!(mat[(1, 1)] > -0.2 && mat[(1, 1)] < 0.0);
+        // At the set point nothing changes; absent synapses stay absent.
+        assert_eq!(mat[(2, 0)], 0.4);
+        assert_eq!(mat[(2, 1)], -0.2);
+        for j in 0..3 {
+            assert_eq!(mat[(j, 2)], 0.0);
+        }
+        // Multiplicative: the ratio between a row's excitatory synapses is kept.
+        let mut row = Array2::from_shape_vec((1, 2), vec![0.2, 0.6]).unwrap();
+        homeostatic_scale_rows(&mut row, &[-0.5], 0.2, 1.0);
+        assert!((row[(0, 1)] / row[(0, 0)] - 3.0).abs() < 1e-12);
+        // Errors are clamped to [-1, 1] and the bound holds.
+        let mut big = Array2::from_shape_vec((1, 1), vec![0.9]).unwrap();
+        homeostatic_scale_rows(&mut big, &[50.0], 5.0, 1.0);
+        assert_eq!(big[(0, 0)], 1.0);
+    }
+
+    #[test]
+    fn rate_homeostat_takes_individual_set_points_after_warm_up() {
+        let mut h = RateHomeostat::default();
+        h.fit(&[2]);
+        // Cell 0 fires every 10th 1 ms step (100 Hz), cell 1 is silent.
+        for step in 0..3000 {
+            let a = [if step % 10 == 0 { 1.0 } else { 0.0 }, 0.0];
+            h.observe(0, &a, 1.0, 200.0, 2000.0, 0.0);
+            if step < 1990 {
+                assert!(h.rate_error(0).is_none(), "no scaling during the warm-up");
+            }
+        }
+        let e = h.rate_error(0).expect("set points after the warm-up");
+        assert!((h.set_point_hz[0][0] - 100.0).abs() < 15.0);
+        assert_eq!(h.set_point_hz[0][1], MIN_SET_POINT_HZ);
+        assert!(e[0].abs() < 0.2, "a cell at its own rate has ~no error");
+        // Learning drives cell 1 to 50 Hz: error saturates at -1.
+        for _ in 0..2000 {
+            h.observe(0, &[0.1, 0.05], 1.0, 200.0, 2000.0, 0.0);
+        }
+        assert_eq!(h.rate_error(0).unwrap()[1], -1.0);
+        // A resized population restarts its warm-up.
+        h.fit(&[3]);
+        assert!(h.rate_error(0).is_none());
+    }
 
     #[test]
     fn test_stp_step_releases_only_on_spike() {
@@ -435,7 +707,7 @@ mod tests {
         assert_eq!(delta, -0.375);
         assert_eq!(
             apply_weight_delta(0.1, delta, 0.0, 1.0),
-            0.0,
+            SILENT_SYNAPSE_FLOOR,
             "the rule emits a proposal; the commit boundary owns clamping"
         );
     }
@@ -463,7 +735,7 @@ mod tests {
             commit_weight_proposals(&mut matrix, &proposals, 0.0, 1.0),
             Ok(2)
         );
-        assert_eq!(matrix[(0, 0)], 0.0);
+        assert_eq!(matrix[(0, 0)], SILENT_SYNAPSE_FLOOR);
         assert_eq!(matrix[(0, 1)], 0.7);
 
         let before = matrix.clone();

@@ -8,7 +8,7 @@
   "exact_replica": "pending OEM variant and calibration",
   "controller_transfer": "untrained",
   "source": "scripts/embodiment_archetypes.py:build",
-  "source_digest": "2f4cd1909a47cd031ec8b5e099c1bb8737248320f6dd6c70fab87d8ff166f163",
+  "source_digest": "a2f0a10b13d7e755b75aca98929838ce2987f528a83c351b97123c5f4089ad5f",
   "policy_digest": "35a2dbc6477ae9308c4f5eae4d09ccffc2f7aadce2cb54ce29018d63e43b9e2f",
   "io": {
     "schema_version": 1,
@@ -261,8 +261,8 @@
         "axis": 0,
         "units": "rad/s",
         "range": [
-          -40,
-          40
+          -8,
+          8
         ],
         "rate_hz": 500,
         "missing": "fault-disarm"
@@ -273,8 +273,8 @@
         "axis": 1,
         "units": "rad/s",
         "range": [
-          -40,
-          40
+          -8,
+          8
         ],
         "rate_hz": 500,
         "missing": "fault-disarm"
@@ -285,8 +285,44 @@
         "axis": 2,
         "units": "rad/s",
         "range": [
-          -40,
-          40
+          -8,
+          8
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      },
+      {
+        "name": "body_gravity_x",
+        "kind": "body_gravity",
+        "axis": 0,
+        "units": "g",
+        "range": [
+          -0.5,
+          0.5
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      },
+      {
+        "name": "body_gravity_y",
+        "kind": "body_gravity",
+        "axis": 1,
+        "units": "g",
+        "range": [
+          -0.5,
+          0.5
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm"
+      },
+      {
+        "name": "body_gravity_z",
+        "kind": "body_gravity",
+        "axis": 2,
+        "units": "g",
+        "range": [
+          -0.5,
+          0.5
         ],
         "rate_hz": 500,
         "missing": "fault-disarm"
@@ -315,7 +351,7 @@
       "stale_s": 0.1,
       "neutral": "zero effort; passive dynamics continue"
     },
-    "digest": "75f072b1cdca4c0dd0624765a53b4afff25ad23564559725ab0b13ca01c1eb94"
+    "digest": "53b9255d54438d446c43b5f479c335a6e1056029ddc252ce0c66d1b0a8023ed9"
   },
   "actuators": [
     {
@@ -330,7 +366,7 @@
         0.0
       ],
       "gear": [
-        0.196133,
+        1.2748645,
         0.0,
         0.0,
         0.0,
@@ -353,7 +389,7 @@
         0.0
       ],
       "gear": [
-        0.196133,
+        1.2748645,
         0.0,
         0.0,
         0.0,
@@ -399,7 +435,7 @@
         0.0
       ],
       "gear": [
-        0.196133,
+        1.2748645,
         0.0,
         0.0,
         0.0,
@@ -422,7 +458,7 @@
         0.0
       ],
       "gear": [
-        0.196133,
+        1.2748645,
         0.0,
         0.0,
         0.0,
@@ -457,7 +493,7 @@
       "encoding": "antagonist-rate-v1"
     }
   ],
-  "native_mjcf_sha256": "ad331565f9cd90e83050f13ac9c72cf629660165f589d455d0323a679aa60ffe",
+  "native_mjcf_sha256": "2a2f68b130088c2b4d063bb9d23898c539f427e11781217a4ce06a4ea18c72ba",
   "source_licence": "repository-original",
   "assumptions": "sim/content/embodiments/policy.json",
   "total_mass_kg": 2.3,
@@ -486,12 +522,12 @@
         "position": [
           0.0,
           1.3,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -513,12 +549,12 @@
         "position": [
           0.0,
           -1.3,
-          0.045500000000000006
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.09100000000000001
+          0.42
         ],
         "colour": [
           0.42,
@@ -527,7 +563,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -540,12 +576,12 @@
         "position": [
           1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -567,12 +603,12 @@
         "position": [
           -1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -3426,9 +3462,9 @@
     ],
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
-  "scene_sources_sha256": "069c61ec98a416e5f5e95f67d33376ebbee22acab25e807a3a437a7c7f6da924",
-  "anatomy_sources_sha256": "99d64c74a569f856bab8839e8df2ae3c45eb1bf18bbc79e677fcf0301356111d",
-  "neural_sources_sha256": "ef1ae7875a7b4426ed37b8b815868929cb105df00974f3c82319f42f3813bd75",
+  "scene_sources_sha256": "a715a28f67ac75c9624deb144618f412dae8688b833c24e07b4ae9e8838d2884",
+  "anatomy_sources_sha256": "76e90c0ee8947775dbfb7ae187162c7c383557a5343383f64af84d2e625f2bd1",
+  "neural_sources_sha256": "491b1c8df3570eda7bb994493ecd7617ca21066362363aaaec542de36deab729",
   "bodies": [
     {
       "name": "controller_module",
@@ -3911,7 +3947,7 @@
       "position": [
         0.0,
         1.3,
-        0.11699999999999999
+        0.21
       ],
       "quaternion_wxyz": [
         1.0,
@@ -3922,7 +3958,7 @@
       "half_size_m": [
         1.3,
         0.01625,
-        0.11699999999999999
+        0.21
       ],
       "rgba": [
         0.41999998688697815,
@@ -3940,7 +3976,7 @@
       "position": [
         0.0,
         -1.3,
-        0.045500000000000006
+        0.21
       ],
       "quaternion_wxyz": [
         1.0,
@@ -3951,13 +3987,13 @@
       "half_size_m": [
         1.3,
         0.01625,
-        0.045500000000000006
+        0.21
       ],
       "rgba": [
         0.41999998688697815,
         0.5,
         0.4699999988079071,
-        1.0
+        0.20000000298023224
       ],
       "collision": true,
       "mesh_id": -1
@@ -3969,7 +4005,7 @@
       "position": [
         1.3,
         0.0,
-        0.11699999999999999
+        0.21
       ],
       "quaternion_wxyz": [
         1.0,
@@ -3980,7 +4016,7 @@
       "half_size_m": [
         0.01625,
         1.3,
-        0.11699999999999999
+        0.21
       ],
       "rgba": [
         0.41999998688697815,
@@ -3998,7 +4034,7 @@
       "position": [
         -1.3,
         0.0,
-        0.11699999999999999
+        0.21
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4009,7 +4045,7 @@
       "half_size_m": [
         0.01625,
         1.3,
-        0.11699999999999999
+        0.21
       ],
       "rgba": [
         0.41999998688697815,
@@ -7270,5 +7306,5 @@
     }
   ],
   "constraints": [],
-  "digest": "b4f03e5fc2370af8fbfed91f46007c9d94fa8ef0121e6110c20e54220aebf021"
+  "digest": "e5d9753ee58be1448523c11731b8d13bb36120e7989098ebcc2617a1c2f70c20"
 }

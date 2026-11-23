@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Placement-authorised dispatch for stable partial workers.
 //!
 //! This adapter is the control/data-plane join between the authoritative

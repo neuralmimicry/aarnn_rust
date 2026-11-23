@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Knowledge-region support for Evelyn (transformer feed-forward layers hosted
 //! as AARNN neuron meshes).
 //!

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Immutable checkpoint and fenced causal-log reference storage.
 
 use crate::causal::CausalEvent;

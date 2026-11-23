@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Bounded automatic placement reconciliation for the live stable executor.
 //!
 //! This adapter composes the deterministic planner, the placement controller,

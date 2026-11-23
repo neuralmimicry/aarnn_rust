@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // Official Webots R2025a RobotWindow API, matching the installed SDK examples.
 import RobotWindow from 'https://cyberbotics.com/wwi/R2025a/RobotWindow.js';
 const robotWindow = new RobotWindow();

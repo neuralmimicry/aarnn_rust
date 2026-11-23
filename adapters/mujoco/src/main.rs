@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use aarnn_mujoco::{
     aer::{Binding, Client, Model},
     world::World,
@@ -35,11 +39,23 @@ struct Options {
     screenshot: Option<PathBuf>,
     json: bool,
     close_view: bool,
+    trace: Option<PathBuf>,
+    trace_every: u64,
+    lockstep: bool,
+}
+/// Bound on trace lines per body; later samples are counted, not written.
+const TRACE_LIMIT: u64 = 200_000;
+struct Trace {
+    path: PathBuf,
+    writer: std::io::BufWriter<std::fs::File>,
+    records: u64,
+    skipped: u64,
 }
 struct Session {
     world: World,
     start: Instant,
     initial_capture: bool,
+    trace: Option<Trace>,
 }
 impl Session {
     fn load(
@@ -65,10 +81,34 @@ impl Session {
                 "C. elegans simulation projection: original reduced mechanics and light/heat/range proxies; calibration differs from Webots. Named muscle response v2, no twitch fallback."
             );
         }
+        let trace = match &options.trace {
+            Some(directory) => {
+                use std::io::Write;
+                std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
+                let path = directory.join(format!("{}.jsonl", world.instance_id));
+                let file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .map_err(|e| format!("trace {}: {e}", path.display()))?;
+                let mut writer = std::io::BufWriter::new(file);
+                let mut header = world.trace_header();
+                header["trace_every_steps"] = options.trace_every.into();
+                writeln!(writer, "{header}").map_err(|e| e.to_string())?;
+                Some(Trace {
+                    path,
+                    writer,
+                    records: 0,
+                    skipped: 0,
+                })
+            }
+            None => None,
+        };
         Ok(Self {
             world,
             start: Instant::now(),
             initial_capture: false,
+            trace,
         })
     }
     /// A private body begins its simulation after its first neural exchange.
@@ -101,7 +141,8 @@ impl Session {
         }
         if !self.initial_capture {
             let values = self.world.sensors()?;
-            self.world
+            if self
+                .world
                 .client
                 .as_ref()
                 .unwrap()
@@ -109,10 +150,46 @@ impl Session {
                     step: self.world.step,
                     timestamp_us: self.world.step * 2000,
                     values,
-                });
+                })
+            {
+                self.world.submitted += 1;
+            }
             self.initial_capture = true;
         }
         Ok(status.exchanges > 0)
+    }
+    /// Opt-in lock-step pacing: the body's source clock waits for the reply to
+    /// its previous capture, so every frame is admitted and neural output is
+    /// applied at its own source step. Slower than wall-clock real time; the
+    /// client's data fault still applies and a backstop bounds waiting: 30 s,
+    /// or 5 s beyond `NM_AER_REFERENCE_DATA_TIMEOUT_MS` when that explicitly
+    /// allows a slower brain (a fixed 30 s aborted contended depth-0 runs).
+    fn await_reply(&self, stop: &AtomicBool) -> Result<bool, String> {
+        let Some(client) = &self.world.client else {
+            return Ok(true);
+        };
+        let data_ms = std::env::var("NM_AER_REFERENCE_DATA_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|v| v.clamp(1_000, 600_000))
+            .unwrap_or(0);
+        let deadline = Instant::now() + Duration::from_millis((data_ms + 5_000).max(30_000));
+        loop {
+            let status = client.status();
+            if let Some(fault) = status.fault {
+                return Err(format!("reference transport failed: {fault}"));
+            }
+            if status.exchanges >= self.world.submitted {
+                return Ok(true);
+            }
+            if stop.load(Ordering::Relaxed) {
+                return Ok(false);
+            }
+            if Instant::now() >= deadline {
+                return Err("lock-step reply deadline exceeded".into());
+            }
+            std::thread::sleep(Duration::from_micros(250));
+        }
     }
     fn advance(&mut self, iteration: usize, options: &Options) -> Result<(), String> {
         if options.reset_at == Some(iteration) {
@@ -135,16 +212,33 @@ impl Session {
         if !self.world.physics.qpos().iter().all(|x| x.is_finite()) {
             return Err("nonfinite physical state".into());
         }
+        if let Some(trace) = &mut self.trace
+            && self.world.step.is_multiple_of(options.trace_every)
+        {
+            if trace.records < TRACE_LIMIT {
+                use std::io::Write;
+                self.world.observe_unbound()?;
+                writeln!(trace.writer, "{}", self.world.trace_record()?)
+                    .map_err(|e| format!("trace {}: {e}", trace.path.display()))?;
+                trace.records += 1;
+            } else {
+                trace.skipped += 1;
+            }
+        }
         Ok(())
     }
     fn finish(mut self) -> serde_json::Value {
+        let trace = self.trace.take().map(|mut t| {
+            use std::io::Write;
+            serde_json::json!({"path":t.path,"records":t.records,"skipped_over_limit":t.skipped,"flush_error":t.writer.flush().err().map(|e|e.to_string())})
+        });
         let status = self.world.client.as_ref().map(Client::status);
         let active_qpos = self.world.physics.qpos().to_vec();
         let snapshot = self.world.physics.snapshot();
         let energy = self.world.measured_energy();
         let (nq, nv, nu) = self.world.physics.dimensions();
         self.world.disarm();
-        serde_json::json!({"status":if status.as_ref().is_some_and(|s|s.fault.is_some()){"fail"}else{"pass"},"scope":"native physics and optional reference packets; no learned task/production commitment claim","controller_mode":if self.world.actuation.npc_control{"programmed-NPC"}else if self.world.brain_id.is_some(){"AER1-reference"}else{"silent-mechanics"},"npc_policy":aarnn_embodiment::npc::POLICY,"npc_steps":self.world.npc_steps,"physics":"MuJoCo 3.17.0","instance_id":self.world.instance_id,"profile":self.world.model.profile_id,"brain_id":self.world.brain_id,"model_digest":self.world.model.digest,"io_digest":self.world.model.io.digest,"nq":nq,"nv":nv,"nu":nu,"steps":self.world.step,"reset_epoch":self.world.reset_epoch,"time_s":self.world.physics.time(),"qpos":active_qpos,"energy_J":energy,"elapsed_s":self.start.elapsed().as_secs_f64(),"applied":self.world.applied,"active_steps":self.world.active_steps,"expired":self.world.expired,"transport":status,"physics_snapshot":snapshot})
+        serde_json::json!({"status":if status.as_ref().is_some_and(|s|s.fault.is_some()) || trace.as_ref().is_some_and(|t|!t["flush_error"].is_null()){"fail"}else{"pass"},"scope":"native physics and optional reference packets; no learned task/production commitment claim","controller_mode":if self.world.actuation.npc_control{"programmed-NPC"}else if self.world.brain_id.is_some(){"AER1-reference"}else{"silent-mechanics"},"npc_policy":aarnn_embodiment::npc::POLICY,"npc_steps":self.world.npc_steps,"physics":"MuJoCo 3.17.0","instance_id":self.world.instance_id,"profile":self.world.model.profile_id,"brain_id":self.world.brain_id,"model_digest":self.world.model.digest,"io_digest":self.world.model.io.digest,"nq":nq,"nv":nv,"nu":nu,"steps":self.world.step,"reset_epoch":self.world.reset_epoch,"time_s":self.world.physics.time(),"qpos":active_qpos,"energy_J":energy,"elapsed_s":self.start.elapsed().as_secs_f64(),"applied":self.world.applied,"applied_spikes":self.world.applied_spikes,"active_steps":self.world.active_steps,"expired":self.world.expired,"transport":status,"trace":trace,"physics_snapshot":snapshot})
     }
 }
 fn gate(options: &Options) -> bool {
@@ -166,6 +260,9 @@ fn simulate(
             std::thread::sleep(Duration::from_millis(10));
             next = Instant::now();
             continue;
+        }
+        if options.lockstep && !session.await_reply(&stop)? {
+            break;
         }
         session.advance(iteration, &options)?;
         iteration += 1;
@@ -277,7 +374,7 @@ fn main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "--help") {
         println!(
-            "aarnn-mujoco MODEL.xml | --robots PROFILE=COUNT [--control auto|npc|silent] [--assets DIR] [--steps N] [--realtime] [--reference-binding JSON | --reference-bindings MAP.json] [--output JSON] [--reset-at STEP]\nNative Rust interactive viewer by default; --headless uses a bounded diagnostic run. --steps N bounds either mode; --json prints full state; --output retains evidence. --arm-file FILE waits for managed startup. --screenshot FILE writes a rendered PPM. No production effect authority."
+            "aarnn-mujoco MODEL.xml | --robots PROFILE=COUNT [--control auto|npc|silent] [--assets DIR] [--steps N] [--realtime] [--reference-binding JSON | --reference-bindings MAP.json] [--output JSON] [--reset-at STEP] [--trace DIR [--trace-every N]] [--lockstep]\nNative Rust interactive viewer by default; --headless uses a bounded diagnostic run. --steps N bounds either mode; --json prints full state; --output retains evidence. --trace writes a new read-only DIR/INSTANCE.jsonl body/joint/sensor/spike sample every N physics steps (default 25). --lockstep (headless) waits for each reference reply before the next physics step instead of wall-clock pacing, so a slow brain receives every frame. --arm-file FILE waits for managed startup. --screenshot FILE writes a rendered PPM. No production effect authority."
         );
         return Ok(());
     }
@@ -292,6 +389,9 @@ fn main() -> Result<(), String> {
         screenshot: None,
         json: false,
         close_view: false,
+        trace: None,
+        trace_every: 25,
+        lockstep: false,
     };
     let mut model = None;
     let mut robots = None;
@@ -343,6 +443,7 @@ fn main() -> Result<(), String> {
                 i += 1;
             }
             "--realtime" => realtime_explicit = true,
+            "--lockstep" => options.lockstep = true,
             "--reference-binding" => {
                 single_binding = Some(PathBuf::from(value(i)?));
                 i += 1;
@@ -353,6 +454,17 @@ fn main() -> Result<(), String> {
             }
             "--output" => {
                 options.output = Some(PathBuf::from(value(i)?));
+                i += 1;
+            }
+            "--trace" => {
+                options.trace = Some(PathBuf::from(value(i)?));
+                i += 1;
+            }
+            "--trace-every" => {
+                options.trace_every = value(i)?.parse().map_err(|_| "invalid trace interval")?;
+                if !(1..=100_000).contains(&options.trace_every) {
+                    return Err("trace interval outside 1..=100000 steps".into());
+                }
                 i += 1;
             }
             "--reset-at" => {
@@ -374,6 +486,9 @@ fn main() -> Result<(), String> {
         options.steps = 1000;
     }
     options.realtime = !options.headless || realtime_explicit;
+    if options.lockstep && (!options.headless || realtime_explicit) {
+        return Err("--lockstep requires --headless and replaces --realtime pacing".into());
+    }
     if options.headless && options.screenshot.is_some() {
         return Err("screenshot requires a viewer".into());
     }

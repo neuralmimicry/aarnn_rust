@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! `aarnn-knowledge-curves [points] [steps]`
 //!
 //! Exports the measured steady-state transfer (f-I) curves of AARNN's neuron

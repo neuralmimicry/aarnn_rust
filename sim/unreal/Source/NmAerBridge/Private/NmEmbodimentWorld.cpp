@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 #include "NmEmbodimentWorld.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
@@ -163,6 +167,14 @@ struct FJoint {
                       Point(Data, TEXT("child_position")));
   }
   bool Linear() const { return Data->GetIntegerField(TEXT("type")) == 2; }
+  // MJCF joint reference (qpos0): the constructed pose is the reference
+  // configuration, so the measured angle is offset by it (as in MuJoCo).
+  double Qpos0() const {
+    double Ref = 0.;
+    if (Target.IsValid())
+      Target->TryGetNumberField(TEXT("qpos0"), Ref);
+    return Ref;
+  }
   FVector Axis() const {
     return Parent->GetComponentQuat().RotateVector(
                ParentFrame().GetRotation().RotateVector(
@@ -176,7 +188,7 @@ struct FJoint {
                         ParentFrame().GetLocation()),
                     C = Child->GetComponentTransform().TransformPosition(
                         ChildFrame().GetLocation());
-      Q = FVector::DotProduct(C - P, A) / 100.;
+      Q = FVector::DotProduct(C - P, A) / 100. + Qpos0();
       V = FVector::DotProduct(Child->GetPhysicsLinearVelocityAtPoint(C) -
                                   Parent->GetPhysicsLinearVelocityAtPoint(P),
                               A) /
@@ -187,7 +199,7 @@ struct FJoint {
           (Child->GetComponentQuat() * ChildFrame().GetRotation());
       const double Angle = -2. * std::atan2(D.X, D.W);
       if (bFirst) {
-        Q = Angle;
+        Q = Angle + Qpos0();
         bFirst = false;
       } else
         Q += FMath::UnwindRadians(Angle - LastAngle);

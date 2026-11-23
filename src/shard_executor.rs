@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Deterministic multi-shard biological execution fabric.
 //!
 //! This module is the first executable owner boundary between the stable-ID

@@ -8,8 +8,8 @@
 def Xform "Robot" (
     prepend apiSchemas = ["PhysicsArticulationRootAPI"]
     customData = {
-        string aarnnIODigest = "07baf3479ae1d5d5cce4bbecde7b970f29ac6cfe96a0177748def6f310784c0c"
-        string aarnnModelDigest = "7687426ce736983704a1d9b1ae1d36dc57431ffebe9cab075a5ff319444632a6"
+        string aarnnIODigest = "6e34cd92e33c31062202dadd3aff8095e0319c61db6a297c90fc686d56094361"
+        string aarnnModelDigest = "bd9830fe7e7dff95673d8a9e859d0eb1cc685b861d0458a18b0c8819da056bf7"
     }
 )
 {
@@ -59,19 +59,6 @@ def Xform "Robot" (
             quatf xformOp:orient = (1, 0, 0, 0)
             float3 xformOp:scale = (0.00028, 0.0061160536, 0.0061160536)
             double3 xformOp:translate = (0.0035, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-
-        def Capsule "segment_00_muscle_quadrant_0"
-        {
-            uniform token axis = "Z"
-            double height = 0.008
-            color3f[] primvars:displayColor = [(0.69, 0.32, 0.21)]
-            float[] primvars:displayOpacity = [1]
-            double radius = 0.0012
-            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
-            float3 xformOp:scale = (1, 1, 1)
-            double3 xformOp:translate = (0, 0.003158240083759377, 0.003158240083759377)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
 
@@ -2755,6 +2742,19 @@ def Xform "Robot" (
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
 
+        def Capsule "segment_23_muscle_quadrant_2"
+        {
+            uniform token axis = "Z"
+            double height = 0.008
+            color3f[] primvars:displayColor = [(0.69, 0.32, 0.21)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.0012
+            quatf xformOp:orient = (0.70710677, 0, -0.70710677, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0.0028731882935555965, -0.0028731882935555965)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
         def Capsule "segment_23_muscle_quadrant_3"
         {
             uniform token axis = "Z"
@@ -2786,6 +2786,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_02"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -2808,6 +2809,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_03"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -2830,6 +2832,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_04"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -2852,6 +2855,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_05"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -2874,6 +2878,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_06"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -2896,6 +2901,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_07"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -2918,6 +2924,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_08"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -2940,6 +2947,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_09"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -2962,6 +2970,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_10"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -2984,6 +2993,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_11"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -3006,6 +3016,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_12"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -3028,6 +3039,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_13"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -3050,6 +3062,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_14"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -3072,6 +3085,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_15"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -3094,6 +3108,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_16"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -3116,6 +3131,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_17"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -3138,6 +3154,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_18"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -3160,6 +3177,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_19"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -3182,6 +3200,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_20"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -3204,6 +3223,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_21"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -3226,6 +3246,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_22"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -3248,6 +3269,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_23"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -3270,6 +3292,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "celegans_spine_24"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -4880,6 +4903,500 @@ def Xform "Habitat"
         quatf xformOp:orient = (1, 0, 0, 0)
         float3 xformOp:scale = (0.017875, 0.017875, 0.0182)
         double3 xformOp:translate = (0.039, 0.11050000000000001, 0.0182)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cylinder "habitat_salt_spot"
+    {
+        uniform token axis = "Z"
+        double height = 0.0024
+        color3f[] primvars:displayColor = [(0.92, 0.92, 0.95)]
+        float[] primvars:displayOpacity = [0.55]
+        double radius = 0.08
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (-0.06, -0.3, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Cylinder "habitat_repellent_spot"
+    {
+        uniform token axis = "Z"
+        double height = 0.0024
+        color3f[] primvars:displayColor = [(0.55, 0.22, 0.62)]
+        float[] primvars:displayOpacity = [0.55]
+        double radius = 0.06
+        quatf xformOp:orient = (1, 0, 0, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (-0.4, 0.07, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_00"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643475
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.70441604, 0.061628416, -0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.2910163020075405, -0.41125628049606633, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_01"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643444
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.6830127, 0.18301271, -0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.28711139920342804, -0.38911047621572925, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_02"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164345
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.6408564, 0.29883623, -0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.27942024209092997, -0.367979195719663, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_03"
+    {
+        uniform token axis = "Z"
+        double height = 0.0225733373716435
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.579228, 0.40557978, -0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.2681765225869962, -0.3485045022727966, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_04"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164345
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.5, 0.5, -0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.25372187541915725, -0.3312781245808428, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_05"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164347
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.40557978, 0.579228, -0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.23649549772720344, -0.3168234774130038, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_06"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164345
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.29883623, 0.6408564, -0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.21702080428033707, -0.3055797579090701, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_07"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643486
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.18301271, 0.6830127, -0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.19588952378427082, -0.297888600796572, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_08"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643472
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.061628416, 0.70441604, -0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.17374371950393375, -0.2939836979924596, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_09"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643472
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.061628416, 0.70441604, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.15125628049606626, -0.2939836979924596, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_10"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643434
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.18301271, 0.6830127, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.12911047621572924, -0.297888600796572, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_11"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643454
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.29883623, 0.6408564, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.10797919571966298, -0.30557975790907005, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_12"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164351
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.40557978, 0.579228, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.0885045022727966, -0.31682347741300376, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_13"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643472
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.5, 0.5, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.07127812458084276, -0.3312781245808428, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_14"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643427
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.579228, 0.40557978, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.05682347741300379, -0.3485045022727966, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_15"
+    {
+        uniform token axis = "Z"
+        double height = 0.0225733373716435
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.6408564, 0.29883623, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.04557975790907005, -0.367979195719663, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_16"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164346
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.6830127, 0.18301271, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.037888600796571976, -0.38911047621572925, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_17"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643472
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.70441604, 0.061628416, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.03398369799245954, -0.41125628049606633, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_18"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643413
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.70441604, -0.061628416, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.033983697992459524, -0.43374371950393376, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_19"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164352
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.6830127, -0.18301271, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.037888600796571956, -0.45588952378427083, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_20"
+    {
+        uniform token axis = "Z"
+        double height = 0.0225733373716435
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.6408564, -0.29883623, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.04557975790907003, -0.4770208042803371, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_21"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643406
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.579228, -0.40557978, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.05682347741300375, -0.49649549772720347, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_22"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643458
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.5, -0.5, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.07127812458084273, -0.5137218754191573, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_23"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164342
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.40557978, -0.579228, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.08850450227279655, -0.5281765225869962, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_24"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643576
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.29883623, -0.6408564, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.10797919571966294, -0.53942024209093, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_25"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164342
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.18301271, -0.6830127, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.12911047621572924, -0.547111399203428, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_26"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643448
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, -0.061628416, -0.70441604, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.15125628049606626, -0.5510163020075405, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_27"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643437
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.061628416, -0.70441604, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.1737437195039337, -0.5510163020075405, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_28"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164355
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.18301271, -0.6830127, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.19588952378427077, -0.5471113992034281, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_29"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643354
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.29883623, -0.6408564, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.21702080428033704, -0.53942024209093, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_30"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643513
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.40557978, -0.579228, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.23649549772720338, -0.5281765225869963, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_31"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164343
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.5, -0.5, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.25372187541915725, -0.5137218754191574, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_32"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164359
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.579228, -0.40557978, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.2681765225869962, -0.49649549772720347, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_33"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164345
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.6408564, -0.29883623, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.27942024209092997, -0.4770208042803371, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_34"
+    {
+        uniform token axis = "Z"
+        double height = 0.022573337371643444
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.6830127, -0.18301271, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.28711139920342804, -0.45588952378427083, 0.0012)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+    }
+
+    def Capsule "habitat_copper_ring_35"
+    {
+        uniform token axis = "Z"
+        double height = 0.02257333737164342
+        color3f[] primvars:displayColor = [(0.72, 0.45, 0.2)]
+        float[] primvars:displayOpacity = [0.8]
+        double radius = 0.009
+        quatf xformOp:orient = (0.70710677, 0.70441604, -0.061628416, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0.2910163020075405, -0.4337437195039338, 0.0012)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Bounded shard checkpoint transfer and cutover evidence.
 //!
 //! This module is the data movement seam between the durable shard owner and

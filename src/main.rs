@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Entry point and CLI for the AARNN.
 //!
 //! Modes
@@ -55,6 +59,8 @@ mod hierarchical_sharding;
 mod knowledge;
 #[cfg(test)]
 mod knowledge_region;
+mod layer_shard;
+mod neuron_shard;
 mod managed_durability;
 mod managed_partial_shard_runtime;
 mod managed_shard_runtime;
@@ -3011,12 +3017,53 @@ fn normalize_ui_mode(args: &mut Cli) -> anyhow::Result<()> {
 /// 1. **Batch Mode**: Runs a fixed-duration simulation and generates visualizations.
 /// 2. **UI Mode**: Launches an interactive GUI for real-time observation and manipulation.
 /// 3. **Distributed Mode**: Participates in a multi-node simulation cluster (as orchestrator or node).
+fn neuron_shard_bench(spec: &str) -> anyhow::Result<()> {
+    let parts: Vec<&str> = spec.split(',').map(str::trim).collect();
+    anyhow::ensure!(parts.len() >= 4, "cells,density,steps,shards[,shards...]");
+    let cells: usize = parts[0].parse()?;
+    let density: f64 = parts[1].parse()?;
+    let steps: usize = parts[2].parse()?;
+    let counts = parts[3..]
+        .iter()
+        .map(|p| p.parse::<usize>())
+        .collect::<Result<Vec<_>, _>>()?;
+    crate::obs::SILENT.store(true, std::sync::atomic::Ordering::SeqCst);
+    let rows = neuron_shard::run_scaling_bench(cells, density, steps, &counts)?;
+    println!(
+        "cells={cells} density={density} steps={steps} spikes/run={}",
+        rows.first().map_or(0, |r| r.spikes)
+    );
+    println!(
+        "{:>6} {:>14} {:>14} {:>12} {:>10} {:>12} {:>10}  storage",
+        "shards", "weights/shard", "state/shard", "INIT/follower", "ms/step", "bytes/step", "identical"
+    );
+    for r in rows {
+        println!(
+            "{:>6} {:>14} {:>14} {:>12} {:>10.3} {:>12.0} {:>10}  {}",
+            r.shards,
+            r.weight_bytes_per_shard,
+            r.state_bytes_per_shard,
+            r.init_bytes_per_follower,
+            r.ms_per_step,
+            r.bytes_per_step,
+            r.bit_identical,
+            r.storage
+        );
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     // The complete feature graph also pulls reqwest's aws-lc-rs backend while
     // tonic uses ring. Rustls cannot choose a provider when both are linked;
     // install the tonic-compatible provider before any TLS listener/client is
     // constructed. The result is ignored when another caller installed one.
     let _ = rustls::crypto::ring::default_provider().install_default();
+    // Diagnostic: open-loop neuron-shard scaling benchmark
+    // (`NM_NEURON_SHARD_BENCH=cells,density,steps,shards[,shards...]`).
+    if let Ok(spec) = std::env::var("NM_NEURON_SHARD_BENCH") {
+        return neuron_shard_bench(&spec);
+    }
     let mut args = Cli::parse();
     if args.no_log {
         crate::obs::SILENT.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -3407,6 +3454,13 @@ fn main() -> anyhow::Result<()> {
     } else {
         None
     };
+
+    // A compute node without the embodiment endpoint serves as a follower
+    // shard when a neuron-shard group drives the body (`NM_BODY_SHARDS`).
+    if args.node && !args.ipc && !args.orchestrator {
+        let node_id = args.node_id.clone().unwrap_or_else(|| args.brain_id.clone());
+        neuron_shard::spawn_configured_follower(&node_id);
+    }
 
     // Configure distributed simulation roles (Orchestrator or Compute Node).
     let mut distributed_node = None;

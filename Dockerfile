@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 ARG TARGET_PAGE_SIZE=4k
 FROM cyberbotics/webots.cloud:R2022b-ubuntu20.04
 ARG PROJECT_PATH=webots-project

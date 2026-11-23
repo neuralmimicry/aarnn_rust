@@ -8,8 +8,8 @@
 def Xform "Robot" (
     prepend apiSchemas = ["PhysicsArticulationRootAPI"]
     customData = {
-        string aarnnIODigest = "b17ac35575a8e454992506f797fbe3dc0380edc21aa746b3a9f461bf3ffc3952"
-        string aarnnModelDigest = "0c4f1d76cb572e031a05afd9bfb5eb691c56c1045607a52f736d58fbfe2a3365"
+        string aarnnIODigest = "308bbd73d1d7f707e1a3b9d57898f83e0657029240b201781c87564923aff41b"
+        string aarnnModelDigest = "8c1a86fbd1b2d2659944896be3179d83bfbf2379d73a6600b06725099b61635f"
     }
 )
 {
@@ -43,8 +43,8 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000061666666, 0.000045633333, 0.000025633333)
+        point3f physics:centerOfMass = (0, -0.03, 0)
+        float3 physics:diagonalInertia = (0.0000348, 0.0000096, 0.0000348)
         float physics:mass = 0.1
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
@@ -59,8 +59,8 @@ def Xform "Robot" (
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.025, 0.035)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.03, 0.012)
+            double3 xformOp:translate = (0, -0.03, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -69,12 +69,12 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000061666666, 0.000045633333, 0.000025633333)
+        point3f physics:centerOfMass = (0, -0.01, -0.035)
+        float3 physics:diagonalInertia = (0.000058133333, 0.000058133333, 0.0000096)
         float physics:mass = 0.1
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.09000000000000001, -0.115, 0.16)
+        double3 xformOp:translate = (-0.07, -0.11, 0.2)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Cube "leg__1__1_1_collision" (
@@ -85,34 +85,8 @@ def Xform "Robot" (
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.025, 0.035)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "leg__1__1_2_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000061666666, 0.000045633333, 0.000025633333)
-        float physics:mass = 0.1
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.11000000000000001, -0.18, 0.12)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "leg__1__1_2_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.15, 0.35, 0.5)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.025, 0.035)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.04)
+            double3 xformOp:translate = (0, -0.01, -0.035)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -121,8 +95,8 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000061666666, 0.000045633333, 0.000025633333)
+        point3f physics:centerOfMass = (0, 0.03, 0)
+        float3 physics:diagonalInertia = (0.0000348, 0.0000096, 0.0000348)
         float physics:mass = 0.1
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
@@ -137,8 +111,8 @@ def Xform "Robot" (
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.025, 0.035)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.03, 0.012)
+            double3 xformOp:translate = (0, 0.03, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -147,12 +121,12 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000061666666, 0.000045633333, 0.000025633333)
+        point3f physics:centerOfMass = (0, 0.01, -0.035)
+        float3 physics:diagonalInertia = (0.000058133333, 0.000058133333, 0.0000096)
         float physics:mass = 0.1
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.09000000000000001, 0.115, 0.16)
+        double3 xformOp:translate = (-0.07, 0.11, 0.2)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Cube "leg__1_1_1_collision" (
@@ -163,34 +137,8 @@ def Xform "Robot" (
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.025, 0.035)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "leg__1_1_2_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000061666666, 0.000045633333, 0.000025633333)
-        float physics:mass = 0.1
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.11000000000000001, 0.18, 0.12)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "leg__1_1_2_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.15, 0.35, 0.5)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.025, 0.035)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.04)
+            double3 xformOp:translate = (0, 0.01, -0.035)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -199,8 +147,8 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000061666666, 0.000045633333, 0.000025633333)
+        point3f physics:centerOfMass = (0, -0.03, 0)
+        float3 physics:diagonalInertia = (0.0000348, 0.0000096, 0.0000348)
         float physics:mass = 0.1
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
@@ -215,8 +163,8 @@ def Xform "Robot" (
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.025, 0.035)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.03, 0.012)
+            double3 xformOp:translate = (0, -0.03, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -225,12 +173,12 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000061666666, 0.000045633333, 0.000025633333)
+        point3f physics:centerOfMass = (0, -0.01, -0.035)
+        float3 physics:diagonalInertia = (0.000058133333, 0.000058133333, 0.0000096)
         float physics:mass = 0.1
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.09000000000000001, -0.115, 0.16)
+        double3 xformOp:translate = (0.07, -0.11, 0.2)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Cube "leg_1__1_1_collision" (
@@ -241,34 +189,8 @@ def Xform "Robot" (
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.025, 0.035)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "leg_1__1_2_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000061666666, 0.000045633333, 0.000025633333)
-        float physics:mass = 0.1
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.11000000000000001, -0.18, 0.12)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "leg_1__1_2_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.15, 0.35, 0.5)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.025, 0.035)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.04)
+            double3 xformOp:translate = (0, -0.01, -0.035)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -277,8 +199,8 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000061666666, 0.000045633333, 0.000025633333)
+        point3f physics:centerOfMass = (0, 0.03, 0)
+        float3 physics:diagonalInertia = (0.0000348, 0.0000096, 0.0000348)
         float physics:mass = 0.1
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
@@ -293,8 +215,8 @@ def Xform "Robot" (
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.025, 0.035)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.03, 0.012)
+            double3 xformOp:translate = (0, 0.03, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -303,12 +225,12 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000061666666, 0.000045633333, 0.000025633333)
+        point3f physics:centerOfMass = (0, 0.01, -0.035)
+        float3 physics:diagonalInertia = (0.000058133333, 0.000058133333, 0.0000096)
         float physics:mass = 0.1
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.09000000000000001, 0.115, 0.16)
+        double3 xformOp:translate = (0.07, 0.11, 0.2)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Cube "leg_1_1_1_collision" (
@@ -319,34 +241,8 @@ def Xform "Robot" (
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.025, 0.035)
-            double3 xformOp:translate = (0, 0, 0)
-            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
-        }
-    }
-
-    def Xform "leg_1_1_2_link" (
-        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    )
-    {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000061666666, 0.000045633333, 0.000025633333)
-        float physics:mass = 0.1
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.11000000000000001, 0.18, 0.12)
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
-
-        def Cube "leg_1_1_2_collision" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
-        )
-        {
-            color3f[] primvars:displayColor = [(0.15, 0.35, 0.5)]
-            float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.025, 0.035)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.012, 0.04)
+            double3 xformOp:translate = (0, 0.01, -0.035)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -355,6 +251,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "leg_-1_-1_0"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -377,6 +274,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "leg_-1_-1_1"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -387,29 +285,7 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/leg__1__1_0_link>
         rel physics:body1 = </Robot/leg__1__1_1_link>
-        point3f physics:localPos0 = (-0.02, -0.065, -0.04)
-        point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (1, 0, 0, 0)
-        quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -85.94367
-        float physics:upperLimit = 85.94367
-    }
-
-    def PhysicsRevoluteJoint "joint_leg__1__1_2" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        customData = {
-            string aarnnJointName = "leg_-1_-1_2"
-        }
-    )
-    {
-        float drive:angular:physics:damping = 0
-        float drive:angular:physics:maxForce = 0
-        float drive:angular:physics:stiffness = 0
-        uniform token drive:angular:physics:type = "force"
-        uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/leg__1__1_1_link>
-        rel physics:body1 = </Robot/leg__1__1_2_link>
-        point3f physics:localPos0 = (-0.02, -0.065, -0.04)
+        point3f physics:localPos0 = (0, -0.06, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
@@ -421,6 +297,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "leg_-1_1_0"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -443,6 +320,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "leg_-1_1_1"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -453,29 +331,7 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/leg__1_1_0_link>
         rel physics:body1 = </Robot/leg__1_1_1_link>
-        point3f physics:localPos0 = (-0.02, 0.065, -0.04)
-        point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (1, 0, 0, 0)
-        quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -85.94367
-        float physics:upperLimit = 85.94367
-    }
-
-    def PhysicsRevoluteJoint "joint_leg__1_1_2" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        customData = {
-            string aarnnJointName = "leg_-1_1_2"
-        }
-    )
-    {
-        float drive:angular:physics:damping = 0
-        float drive:angular:physics:maxForce = 0
-        float drive:angular:physics:stiffness = 0
-        uniform token drive:angular:physics:type = "force"
-        uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/leg__1_1_1_link>
-        rel physics:body1 = </Robot/leg__1_1_2_link>
-        point3f physics:localPos0 = (-0.02, 0.065, -0.04)
+        point3f physics:localPos0 = (0, 0.06, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
@@ -487,6 +343,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "leg_1_-1_0"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -509,6 +366,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "leg_1_-1_1"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -519,29 +377,7 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/leg_1__1_0_link>
         rel physics:body1 = </Robot/leg_1__1_1_link>
-        point3f physics:localPos0 = (0.02, -0.065, -0.04)
-        point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (1, 0, 0, 0)
-        quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -85.94367
-        float physics:upperLimit = 85.94367
-    }
-
-    def PhysicsRevoluteJoint "joint_leg_1__1_2" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        customData = {
-            string aarnnJointName = "leg_1_-1_2"
-        }
-    )
-    {
-        float drive:angular:physics:damping = 0
-        float drive:angular:physics:maxForce = 0
-        float drive:angular:physics:stiffness = 0
-        uniform token drive:angular:physics:type = "force"
-        uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/leg_1__1_1_link>
-        rel physics:body1 = </Robot/leg_1__1_2_link>
-        point3f physics:localPos0 = (0.02, -0.065, -0.04)
+        point3f physics:localPos0 = (0, -0.06, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
@@ -553,6 +389,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "leg_1_1_0"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -575,6 +412,7 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "leg_1_1_1"
+            double aarnnJointRef = 0
         }
     )
     {
@@ -585,29 +423,7 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/leg_1_1_0_link>
         rel physics:body1 = </Robot/leg_1_1_1_link>
-        point3f physics:localPos0 = (0.02, 0.065, -0.04)
-        point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (1, 0, 0, 0)
-        quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -85.94367
-        float physics:upperLimit = 85.94367
-    }
-
-    def PhysicsRevoluteJoint "joint_leg_1_1_2" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
-        customData = {
-            string aarnnJointName = "leg_1_1_2"
-        }
-    )
-    {
-        float drive:angular:physics:damping = 0
-        float drive:angular:physics:maxForce = 0
-        float drive:angular:physics:stiffness = 0
-        uniform token drive:angular:physics:type = "force"
-        uniform token physics:axis = "X"
-        rel physics:body0 = </Robot/leg_1_1_1_link>
-        rel physics:body1 = </Robot/leg_1_1_2_link>
-        point3f physics:localPos0 = (0.02, 0.065, -0.04)
+        point3f physics:localPos0 = (0, 0.06, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
@@ -639,8 +455,8 @@ def Xform "Habitat"
         float[] primvars:displayOpacity = [1]
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
-        float3 xformOp:scale = (1.3, 0.01625, 0.117)
-        double3 xformOp:translate = (0, 1.3, 0.11699999999999999)
+        float3 xformOp:scale = (1.3, 0.01625, 0.21)
+        double3 xformOp:translate = (0, 1.3, 0.21)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 
@@ -649,11 +465,11 @@ def Xform "Habitat"
     )
     {
         color3f[] primvars:displayColor = [(0.42, 0.5, 0.47)]
-        float[] primvars:displayOpacity = [1]
+        float[] primvars:displayOpacity = [0.2]
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
-        float3 xformOp:scale = (1.3, 0.01625, 0.0455)
-        double3 xformOp:translate = (0, -1.3, 0.045500000000000006)
+        float3 xformOp:scale = (1.3, 0.01625, 0.21)
+        double3 xformOp:translate = (0, -1.3, 0.21)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 
@@ -665,8 +481,8 @@ def Xform "Habitat"
         float[] primvars:displayOpacity = [1]
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
-        float3 xformOp:scale = (0.01625, 1.3, 0.117)
-        double3 xformOp:translate = (1.3, 0, 0.11699999999999999)
+        float3 xformOp:scale = (0.01625, 1.3, 0.21)
+        double3 xformOp:translate = (1.3, 0, 0.21)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 
@@ -678,8 +494,8 @@ def Xform "Habitat"
         float[] primvars:displayOpacity = [1]
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
-        float3 xformOp:scale = (0.01625, 1.3, 0.117)
-        double3 xformOp:translate = (-1.3, 0, 0.11699999999999999)
+        float3 xformOp:scale = (0.01625, 1.3, 0.21)
+        double3 xformOp:translate = (-1.3, 0, 0.21)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 

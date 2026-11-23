@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 AARNN contributors
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See sim/minecraft/LICENSE in the project root.
 import { world, system, ScriptEventSource, CommandPermissionLevel, Player } from '@minecraft/server';
 import { content } from './content.generated.js';
 import { reference } from './reference.generated.js';
@@ -162,7 +166,8 @@ export function start(io) {
         if(!e.isValid || !io.available()){clear(p,'disarmed: unavailable or revoked');continue;}
         const reply=session.poll();
         if(reply) {
-          pose.actuators=pose.actuators.map(v=>v*.82);for(const i of reply.output_spike_indices)pose.actuators[i]=1;
+          // One reply is one 1 ms brain step (dt_ms=1), decoded by its output code.
+          reference.decodeOutputs(p,pose.actuators,reply.output_spike_indices,reply.output_code,1);
           const motion=reference.motion(p,pose.actuators);pose.heading+=motion.turn*.08;
           const dir=[Math.cos(pose.heading),Math.sin(pose.heading),0],range=p.body_length*.65;
           const hit=reference.ray(habitat(p),[pose.x,pose.z,p.body_height],dir,range);

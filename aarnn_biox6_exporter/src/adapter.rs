@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use crate::model::{AarnnSnapshot, LogicalConnection, LogicalNode, NodeKind, Vec3};
 use anyhow::{anyhow, Context, Result};
 use serde_json::{Map, Value};

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Main-thread GLFW/OpenGL window rendering the same native physics owner.
 //! GLFW is loaded at runtime; headless/service builds require no window stack.
 use super::{Physics, ffi};

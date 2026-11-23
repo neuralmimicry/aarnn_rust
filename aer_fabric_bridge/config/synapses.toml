@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 [[synapses]]
 synapse_id = "0x5001000200001234"
 description = "Neuron 17 bouton 3 feeds neuron 22 dendrite bouton 1 on same FPAA"

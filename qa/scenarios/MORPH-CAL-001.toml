@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 id = "MORPH-CAL-001"
 version = 1
 title = "Automatic modelled physical calibration for default and incomplete imported topology"

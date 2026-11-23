@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Load each robot's habitat in a separate Webots process without a brain.
 
 Requires an installed Webots R2025a and its supported display/OpenGL environment.

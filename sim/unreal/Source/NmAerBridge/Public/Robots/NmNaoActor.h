@@ -1,4 +1,7 @@
-// Copyright NeuralMimicry. All Rights Reserved.
+// SPDX-FileCopyrightText: NEURALMIMICRY LTD
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -79,7 +82,7 @@ public:
                                                 + NumJointPosSensors + NumJointVelSensors; // 58
     static constexpr int32 NumEyeChannels     = 192; // 8x6 retina × (L/R) × (on/off)
     static constexpr int32 NumSensors         = NumBaseSensors + NumEyeChannels; // 250
-    static constexpr int32 NumActuators       = 40;
+    static constexpr int32 NumActuators       = 40;  // reference NAO outputs (NmNaoOem::OutputNames)
 
     // Set by actor
     UPROPERTY()
@@ -135,8 +138,16 @@ public:
     virtual void GetSensorNames(TArray<FString>& OutNames) const override;
     virtual void GetActuatorNames(TArray<FString>& OutNames) const override;
 
+protected:
+    virtual void ResetGradedDecode() override { GradedJoints.Reset(); }
+
 private:
     float SampleFootPressure(int32 FootIndex, int32 PointIndex) const;
+
+    // Graded (pulse-density) brain: the reference decode of the OEM record
+    // (NmNaoOem): one readout per record link (40, incl. phalanges), its
+    // decode_tau_s and servo wake-up. Built in the constructor.
+    NmOutputDecode::FGradedJoints GradedJoints;
 };
 
 // ---------------------------------------------------------------------------

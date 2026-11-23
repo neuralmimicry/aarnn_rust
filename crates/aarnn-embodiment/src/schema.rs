@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Explicit model/IO digest encoding. This is a source-schema witness, separate
 //! from the authoritative neural runtime's state digest and logical semantics.
 use serde_json::Value;

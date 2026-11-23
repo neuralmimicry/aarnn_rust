@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 AARNN contributors
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See sim/minecraft/LICENSE in the project root.
 import {world,system,ScriptEventSource,CommandPermissionLevel,Player} from '@minecraft/server';
 import {PhysicsSession,gamePoint,gameEuler,rotate,multiply} from './physics-session.js';
 export function startPhysics(io) {

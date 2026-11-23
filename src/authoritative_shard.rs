@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Authoritative shard owner for the distributed causal data plane.
 //!
 //! This module is the migration boundary between the biological kernel and

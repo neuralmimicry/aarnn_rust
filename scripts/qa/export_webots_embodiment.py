@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Export an installed Webots body to URDF without connecting a neural brain.
 
 The export is an intermediate import artefact, not a licence grant. Store under

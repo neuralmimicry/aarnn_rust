@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Portable morphology, constrained growth and route timing contracts.
 //!
 //! This module is deliberately independent of the legacy renderer-facing

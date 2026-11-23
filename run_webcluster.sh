@@ -1,4 +1,8 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 set -euo pipefail
 
 # Keep relative binaries, snapshots, logs and runtime state within the

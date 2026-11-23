@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Shared robot profile and robot-spec parsing helpers for launch scripts."""
 
 from __future__ import annotations
@@ -36,10 +40,13 @@ class RobotProfile:
 PROFILES: Dict[str, RobotProfile] = {
     "celegans": RobotProfile(
         canonical="celegans",
-        sensory=24,
+        # 24 exteroceptive/inertial channels + 24 rectified body-bend
+        # (proprioceptive) channels; the Webots route keeps a 24-channel
+        # build (network_celegans_webots.json) until its proto has bend sensors.
+        sensory=48,
         output=96,
         network_rel="network_celegans.json",
-        config_rel="webots_world/configs/config_celegans_webots.json",
+        config_rel="webots_world/configs/config_celegans_mujoco.json",
         aliases=("celegans", "worm", "worms", "c_elegans"),
     ),
     "drosophila_banc": RobotProfile(

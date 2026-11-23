@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Network-specific spike I/O policies.
 
 use serde::{Deserialize, Serialize};
@@ -363,7 +367,9 @@ impl Default for ProfileOutputEncoding {
 
 /// Infer the most likely IO policy from network dimensions.
 pub fn classify_network_io_profile(sensory_count: usize, output_count: usize) -> NetworkIoProfile {
-    if sensory_count == 24 && output_count == 96 {
+    // 24 exteroceptive/inertial channels, plus 24 proprioceptive bend
+    // channels in the MuJoCo contract.
+    if (sensory_count == 24 || sensory_count == 48) && output_count == 96 {
         return NetworkIoProfile::Celegans;
     }
     if output_count == 48 && (64..=4096).contains(&sensory_count) {

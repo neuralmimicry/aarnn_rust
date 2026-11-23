@@ -8,7 +8,7 @@
   "exact_replica": "pending OEM variant and calibration",
   "controller_transfer": "untrained",
   "source": "scripts/embodiment_archetypes.py:build",
-  "source_digest": "2f4cd1909a47cd031ec8b5e099c1bb8737248320f6dd6c70fab87d8ff166f163",
+  "source_digest": "a2f0a10b13d7e755b75aca98929838ce2987f528a83c351b97123c5f4089ad5f",
   "policy_digest": "35a2dbc6477ae9308c4f5eae4d09ccffc2f7aadce2cb54ce29018d63e43b9e2f",
   "io": {
     "schema_version": 1,
@@ -382,7 +382,7 @@
         0.0
       ],
       "gear": [
-        0.1,
+        0.196133,
         0.0,
         0.0,
         0.0,
@@ -405,7 +405,7 @@
         0.0
       ],
       "gear": [
-        0.1,
+        0.196133,
         0.0,
         0.0,
         0.0,
@@ -428,7 +428,7 @@
         0.0
       ],
       "gear": [
-        0.1,
+        0.196133,
         0.0,
         0.0,
         0.0,
@@ -451,7 +451,7 @@
         0.0
       ],
       "gear": [
-        0.1,
+        0.196133,
         0.0,
         0.0,
         0.0,
@@ -474,7 +474,7 @@
         0.0
       ],
       "gear": [
-        2.0,
+        1.2748645,
         0.0,
         0.0,
         0.0,
@@ -497,7 +497,7 @@
         0.0
       ],
       "gear": [
-        2.0,
+        1.2748645,
         0.0,
         0.0,
         0.0,
@@ -520,7 +520,7 @@
         0.0
       ],
       "gear": [
-        2.0,
+        1.2748645,
         0.0,
         0.0,
         0.0,
@@ -555,7 +555,7 @@
       "encoding": "antagonist-rate-v1"
     }
   ],
-  "native_mjcf_sha256": "da8bd77a9302d711e5f202b35411b6471ec604575a7a802ad746f3eeba7140fe",
+  "native_mjcf_sha256": "0ce01c349f8765e792597a394bca9077ad13c1ef846459844e8fe18a0f5ce830",
   "source_licence": "repository-original",
   "assumptions": "sim/content/embodiments/policy.json",
   "total_mass_kg": 2.45,
@@ -584,12 +584,12 @@
         "position": [
           0.0,
           1.3,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -611,12 +611,12 @@
         "position": [
           0.0,
           -1.3,
-          0.045500000000000006
+          0.21
         ],
         "size": [
           2.6,
           0.0325,
-          0.09100000000000001
+          0.42
         ],
         "colour": [
           0.42,
@@ -625,7 +625,7 @@
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "glass",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -638,12 +638,12 @@
         "position": [
           1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -665,12 +665,12 @@
         "position": [
           -1.3,
           0.0,
-          0.11699999999999999
+          0.21
         ],
         "size": [
           0.0325,
           2.6,
-          0.23399999999999999
+          0.42
         ],
         "colour": [
           0.42,
@@ -3524,9 +3524,9 @@
     ],
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
-  "scene_sources_sha256": "069c61ec98a416e5f5e95f67d33376ebbee22acab25e807a3a437a7c7f6da924",
-  "anatomy_sources_sha256": "99d64c74a569f856bab8839e8df2ae3c45eb1bf18bbc79e677fcf0301356111d",
-  "neural_sources_sha256": "ef1ae7875a7b4426ed37b8b815868929cb105df00974f3c82319f42f3813bd75",
+  "scene_sources_sha256": "a715a28f67ac75c9624deb144618f412dae8688b833c24e07b4ae9e8838d2884",
+  "anatomy_sources_sha256": "76e90c0ee8947775dbfb7ae187162c7c383557a5343383f64af84d2e625f2bd1",
+  "neural_sources_sha256": "491b1c8df3570eda7bb994493ecd7617ca21066362363aaaec542de36deab729",
   "bodies": [
     {
       "name": "controller_module",
@@ -4198,7 +4198,7 @@
       "position": [
         0.0,
         1.3,
-        0.11699999999999999
+        0.21
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4209,7 +4209,7 @@
       "half_size_m": [
         1.3,
         0.01625,
-        0.11699999999999999
+        0.21
       ],
       "rgba": [
         0.41999998688697815,
@@ -4227,7 +4227,7 @@
       "position": [
         0.0,
         -1.3,
-        0.045500000000000006
+        0.21
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4238,13 +4238,13 @@
       "half_size_m": [
         1.3,
         0.01625,
-        0.045500000000000006
+        0.21
       ],
       "rgba": [
         0.41999998688697815,
         0.5,
         0.4699999988079071,
-        1.0
+        0.20000000298023224
       ],
       "collision": true,
       "mesh_id": -1
@@ -4256,7 +4256,7 @@
       "position": [
         1.3,
         0.0,
-        0.11699999999999999
+        0.21
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4267,7 +4267,7 @@
       "half_size_m": [
         0.01625,
         1.3,
-        0.11699999999999999
+        0.21
       ],
       "rgba": [
         0.41999998688697815,
@@ -4285,7 +4285,7 @@
       "position": [
         -1.3,
         0.0,
-        0.11699999999999999
+        0.21
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4296,7 +4296,7 @@
       "half_size_m": [
         0.01625,
         1.3,
-        0.11699999999999999
+        0.21
       ],
       "rgba": [
         0.41999998688697815,
@@ -7651,5 +7651,5 @@
       "polycoef": "0.0 1.0 0.0 0.0 0.0"
     }
   ],
-  "digest": "c47ea425ade6bc7a8e68bb075b429bd1ffcef3d487320f688689e84279142d33"
+  "digest": "aef5438935f081ceaa3e7780eed84887b5fa641285dbabb7a744315c763bf6a3"
 }

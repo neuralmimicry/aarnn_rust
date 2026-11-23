@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "crow_corvus_corone",
-  "model_digest": "928d66dc9134ec28f4900f8fd02b640bd163b96056aacaecb1582d29ba428524",
+  "model_digest": "fc4d3671a16032cdc85d20018e1c7b98f3da460839b038a5626fcbfd26b38fce",
   "io_digest": "1109d94dd58ac7a2c4f10120511e1dd54c21b63d7bf20efd1507caf4d742699a",
   "targets": [
     {
@@ -23,7 +23,8 @@
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "neck_pitch",
@@ -44,7 +45,8 @@
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "neck_roll",
@@ -65,7 +67,8 @@
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "beak_gape",
@@ -86,7 +89,8 @@
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "left_wing_shoulder_flap",
@@ -101,13 +105,16 @@
         0.0,
         0.0
       ],
-      "gear": 0.15,
+      "gear": 1.5,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.005,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.787,
+      "spring_reference": -0.245
     },
     {
       "joint": "left_wing_shoulder_sweep",
@@ -122,13 +129,16 @@
         0.0,
         0.0
       ],
-      "gear": 0.15,
+      "gear": 0.4,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.08,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 5.0,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_wing_humerus_twist",
@@ -143,13 +153,16 @@
         0.0,
         0.0
       ],
-      "gear": 0.15,
+      "gear": 0.4,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.01,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 1.0,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_wing_elbow_flex",
@@ -164,13 +177,16 @@
         0.0,
         0.0
       ],
-      "gear": 0.15,
+      "gear": 0.6,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.06,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 9.0,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_wing_wrist_fold",
@@ -190,8 +206,11 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.01,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 1.0,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_wing_wrist_twist",
@@ -206,13 +225,16 @@
         0.0,
         0.0
       ],
-      "gear": 0.15,
+      "gear": 0.2,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.006,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.5,
+      "spring_reference": 0.0
     },
     {
       "joint": "right_wing_shoulder_flap",
@@ -227,13 +249,16 @@
         0.0,
         0.0
       ],
-      "gear": 0.15,
+      "gear": 1.5,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.005,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.787,
+      "spring_reference": 0.245
     },
     {
       "joint": "right_wing_shoulder_sweep",
@@ -248,13 +273,16 @@
         0.0,
         0.0
       ],
-      "gear": 0.15,
+      "gear": 0.4,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.08,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 5.0,
+      "spring_reference": -0.0
     },
     {
       "joint": "right_wing_humerus_twist",
@@ -269,13 +297,16 @@
         0.0,
         0.0
       ],
-      "gear": 0.15,
+      "gear": 0.4,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.01,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 1.0,
+      "spring_reference": -0.0
     },
     {
       "joint": "right_wing_elbow_flex",
@@ -290,13 +321,16 @@
         0.0,
         0.0
       ],
-      "gear": 0.15,
+      "gear": 0.6,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.06,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 9.0,
+      "spring_reference": -0.0
     },
     {
       "joint": "right_wing_wrist_fold",
@@ -316,8 +350,11 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.01,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 1.0,
+      "spring_reference": -0.0
     },
     {
       "joint": "right_wing_wrist_twist",
@@ -332,13 +369,16 @@
         0.0,
         0.0
       ],
-      "gear": 0.15,
+      "gear": 0.2,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.006,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.5,
+      "spring_reference": -0.0
     },
     {
       "joint": "tail_pitch",
@@ -353,13 +393,16 @@
         0.0,
         0.0
       ],
-      "gear": 0.06,
+      "gear": 0.15,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.004,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.3,
+      "spring_reference": 0.0
     },
     {
       "joint": "tail_yaw",
@@ -379,8 +422,11 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.004,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.3,
+      "spring_reference": 0.0
     },
     {
       "joint": "tail_fan",
@@ -400,8 +446,11 @@
         -1000000.0,
         1000000.0
       ],
-      "damping": 0.05,
-      "driven": true
+      "damping": 0.004,
+      "driven": true,
+      "qpos0": 0.0,
+      "stiffness": 0.3,
+      "spring_reference": 0.0
     },
     {
       "joint": "left_leg_hip_pitch",
@@ -416,13 +465,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.06,
+      "gear": 0.3,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "left_leg_hip_roll",
@@ -437,13 +487,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.06,
+      "gear": 0.3,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "left_leg_knee_flex",
@@ -458,13 +509,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.06,
+      "gear": 0.3,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "left_leg_ankle_pitch",
@@ -479,13 +531,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.06,
+      "gear": 0.3,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "left_leg_front_toes_curl",
@@ -500,13 +553,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.06,
+      "gear": 0.3,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "left_leg_hallux_curl",
@@ -521,13 +575,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.06,
+      "gear": 0.3,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "right_leg_hip_pitch",
@@ -542,13 +597,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.06,
+      "gear": 0.3,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "right_leg_hip_roll",
@@ -563,13 +619,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.06,
+      "gear": 0.3,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "right_leg_knee_flex",
@@ -584,13 +641,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.06,
+      "gear": 0.3,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "right_leg_ankle_pitch",
@@ -605,13 +663,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.06,
+      "gear": 0.3,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "right_leg_front_toes_curl",
@@ -626,13 +685,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.06,
+      "gear": 0.3,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "right_leg_hallux_curl",
@@ -647,13 +707,14 @@
         0.0,
         0.0
       ],
-      "gear": 0.06,
+      "gear": 0.3,
       "force_range": [
         -1000000.0,
         1000000.0
       ],
       "damping": 0.05,
-      "driven": true
+      "driven": true,
+      "qpos0": 0.0
     }
   ],
   "constraints": [],
@@ -667,7 +728,7 @@
     "version": "native-habitats-v1",
     "habitat_id": "woodland",
     "title": "Carrion crow woodland edge",
-    "half_extent_m": 2.8,
+    "half_extent_m": 40.0,
     "catalogue_digest": "4d0d506e80f146acf04e34ee781f67ab465c6d1f336b73c799bc3e3904a6b2d8",
     "substrate": [
       0.19,
@@ -686,23 +747,23 @@
         "id": "rim_0",
         "shape": "box",
         "position": [
-          0.0,
-          2.8,
-          1.1199999999999999
+          0,
+          40.0,
+          4.0
         ],
         "size": [
-          5.6,
-          0.06999999999999999,
-          2.2399999999999998
+          80.0,
+          1.0,
+          8.0
         ],
         "colour": [
-          0.42,
-          0.5,
-          0.47
+          0.1,
+          0.18,
+          0.08
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "foliage",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -713,23 +774,23 @@
         "id": "rim_1",
         "shape": "box",
         "position": [
-          0.0,
-          -2.8,
-          0.098
+          0,
+          -40.0,
+          4.0
         ],
         "size": [
-          5.6,
-          0.06999999999999999,
-          0.196
+          80.0,
+          1.0,
+          8.0
         ],
         "colour": [
-          0.42,
-          0.5,
-          0.47
+          0.1,
+          0.18,
+          0.08
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "foliage",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -740,23 +801,23 @@
         "id": "rim_2",
         "shape": "box",
         "position": [
-          2.8,
-          0.0,
-          1.1199999999999999
+          40.0,
+          0,
+          4.0
         ],
         "size": [
-          0.06999999999999999,
-          5.6,
-          2.2399999999999998
+          1.0,
+          80.0,
+          8.0
         ],
         "colour": [
-          0.42,
-          0.5,
-          0.47
+          0.1,
+          0.18,
+          0.08
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "foliage",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -767,23 +828,23 @@
         "id": "rim_3",
         "shape": "box",
         "position": [
-          -2.8,
-          0.0,
-          1.1199999999999999
+          -40.0,
+          0,
+          4.0
         ],
         "size": [
-          0.06999999999999999,
-          5.6,
-          2.2399999999999998
+          1.0,
+          80.0,
+          8.0
         ],
         "colour": [
-          0.42,
-          0.5,
-          0.47
+          0.1,
+          0.18,
+          0.08
         ],
         "yaw": 0,
         "collision": true,
-        "material": "stone",
+        "material": "foliage",
         "cue": "",
         "radius": 0.0,
         "strength": 0,
@@ -3086,8 +3147,149 @@
         "internal": false
       }
     ],
-    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
+    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model; quasi-steady panel aerodynamics (engineering air model, not CFD)",
+    "aerodynamics": {
+      "model": "quasi-steady-panel-v2",
+      "density_kg_m3": 1.225,
+      "polars": {
+        "wing": {
+          "lift_slope_per_rad": 4.6,
+          "lift_max": 1.5,
+          "drag_zero": 0.025,
+          "drag_induced": 0.063,
+          "drag_stall": 1.2
+        },
+        "tail": {
+          "lift_slope_per_rad": 3.0,
+          "lift_max": 1.2,
+          "drag_zero": 0.03,
+          "drag_induced": 0.1,
+          "drag_stall": 1.2
+        },
+        "keel": {
+          "lift_slope_per_rad": 3.0,
+          "lift_max": 1.0,
+          "drag_zero": 0.02,
+          "drag_induced": 0.1,
+          "drag_stall": 1.2
+        },
+        "body": {
+          "lift_slope_per_rad": 0.0,
+          "lift_max": 0.0,
+          "drag_zero": 0.25,
+          "drag_induced": 0.0,
+          "drag_stall": 0.0
+        }
+      },
+      "panels": [
+        {
+          "body": "left_wing_humerus_twist_link",
+          "point_m": [
+            0.0,
+            0.07,
+            0.0
+          ],
+          "area_m2": 0.0263,
+          "polar": "wing"
+        },
+        {
+          "body": "left_wing_elbow_flex_link",
+          "point_m": [
+            0.0,
+            0.07,
+            0.0
+          ],
+          "area_m2": 0.0245,
+          "polar": "wing"
+        },
+        {
+          "body": "left_wing_wrist_twist_link",
+          "point_m": [
+            0.0,
+            0.08,
+            0.0
+          ],
+          "area_m2": 0.024,
+          "polar": "wing"
+        },
+        {
+          "body": "right_wing_humerus_twist_link",
+          "point_m": [
+            0.0,
+            -0.07,
+            0.0
+          ],
+          "area_m2": 0.0263,
+          "polar": "wing"
+        },
+        {
+          "body": "right_wing_elbow_flex_link",
+          "point_m": [
+            0.0,
+            -0.07,
+            0.0
+          ],
+          "area_m2": 0.0245,
+          "polar": "wing"
+        },
+        {
+          "body": "right_wing_wrist_twist_link",
+          "point_m": [
+            0.0,
+            -0.08,
+            0.0
+          ],
+          "area_m2": 0.024,
+          "polar": "wing"
+        },
+        {
+          "body": "tail_fan_link",
+          "point_m": [
+            -0.035,
+            0.0,
+            0.0
+          ],
+          "area_m2": 0.0143,
+          "polar": "tail"
+        },
+        {
+          "body": "tail_pitch_link",
+          "point_m": [
+            -0.06,
+            0.0,
+            0.0
+          ],
+          "area_m2": 0.012,
+          "polar": "keel",
+          "quaternion_wxyz": [
+            0.7071067811865476,
+            -0.7071067811865476,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "body": "torso",
+          "point_m": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "area_m2": 0.01123,
+          "polar": "body"
+        }
+      ],
+      "note": "quasi-steady blade elements; no unsteady lift, added mass or wake; polar is an engineering estimate, not a measured crow wing"
+    },
+    "launch": {
+      "root_linear_velocity_mps": [
+        7.424621202458749,
+        7.424621202458749,
+        0.0
+      ],
+      "note": "released in level flight from the spawn pose; engines set the free root velocity at load and reset"
+    }
   },
   "world_geometry_count": 89,
-  "digest": "08c7ac4a4a97622619371fceac4adf33d98e8c2b95a65405917364fac57f91c2"
+  "digest": "d585b000b1a59b19007229542f7b9976f73221db6e2cf537b40c5f299fe717a5"
 }

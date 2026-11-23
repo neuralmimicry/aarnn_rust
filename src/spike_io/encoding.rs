@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Shared spike encoding and decoding helpers.
 //!
 //! The functions here are intentionally small and composable so transports and

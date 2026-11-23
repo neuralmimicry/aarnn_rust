@@ -1,8 +1,12 @@
-// Copyright NeuralMimicry. All Rights Reserved.
+// SPDX-FileCopyrightText: NEURALMIMICRY LTD
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "NmOutputDecode.h"
 #include "NmRobotBase.generated.h"
 
 class FNmRobotIoWorker;
@@ -109,6 +113,20 @@ protected:
     /** Start the background I/O worker if needed. Safe to call repeatedly. */
     bool TryConnect();
 
+    /**
+     * True while a brain that negotiated output_code = pulse_density is armed:
+     * bodies decode its outputs with NmOutputDecode (the MuJoCo reference
+     * decode) and hold their targets between frames.
+     */
+    bool IsGraded() const { return bGradedArmed; }
+
+    /** True during an ApplyActuators call that carries a fresh brain frame;
+     *  false for the neutral frame of a tick without a reply. */
+    bool IsFreshFrame() const { return bFreshFrame; }
+
+    /** Forget any graded decoder state (graded brain disarmed or re-armed). */
+    virtual void ResetGradedDecode() {}
+
     /** Background worker that owns the TCP client and AER request/response loop. */
     FNmRobotIoWorker* IoWorker = nullptr;
 
@@ -123,4 +141,11 @@ protected:
 
     /** True once at least one actuator vector has been received this session. */
     bool bHasLastActuatorOutputs = false;
+
+private:
+    void DisarmGraded();
+
+    bool bGradedArmed = false;
+    bool bFreshFrame = false;
+    float LastBrainFrameMs = 0.0f;
 };

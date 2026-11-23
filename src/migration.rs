@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Rehearsal/canary/rollback evidence for the staged runtime migration.
 //!
 //! Legacy paths remain available until a successful, durable rehearsal and

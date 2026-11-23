@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Native measurements for preserved legacy names. Engineering optical/range
 //! proxies and proposed readouts are versioned separately from neural state.
 use crate::native::Physics;
@@ -70,8 +74,10 @@ impl Senses {
                     let delta = rotate(r, s.position_m.unwrap_or([0.; 3]));
                     let point = std::array::from_fn(|i| position[i] + delta[i]);
                     let reach = s.angle_rad.ok_or("legacy range reach absent")?;
+                    // Rays step over the robot's own links (a fly's thorax-
+                    // centred ring otherwise reports its legs as obstacles).
                     let distance = physics
-                        .ray(
+                        .ray_beyond_self(
                             point,
                             rotate(r, s.direction.ok_or("legacy ray direction absent")?),
                             body,

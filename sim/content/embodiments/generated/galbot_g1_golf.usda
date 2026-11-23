@@ -8,7 +8,7 @@
 def Xform "Robot" (
     customData = {
         string aarnnIODigest = "e7ec78c9180a8261316c86b76af3419b358fdc048e650e547033a1edd97230e4"
-        string aarnnModelDigest = "365f3db34bfaf7bf8e3436bee070a937e697155e6f11c957ce9a56fc81457a33"
+        string aarnnModelDigest = "7b9c075cbb4b91cb5912364fb6531f85291c34f4e323ab2447be51c5691204d3"
     }
     prepend references = @../../../../.agent/robot-expansion/assets/galbot-g1-golf/usd/galbot_one_golf.usda@
 )
@@ -39,7 +39,7 @@ def Xform "Habitat"
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
         float3 xformOp:scale = (3, 0.0375, 1.2)
-        double3 xformOp:translate = (0.75, 3, 1.2000000000000002)
+        double3 xformOp:translate = (0, 3, 1.2000000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 
@@ -48,11 +48,11 @@ def Xform "Habitat"
     )
     {
         color3f[] primvars:displayColor = [(0.42, 0.5, 0.47)]
-        float[] primvars:displayOpacity = [1]
+        float[] primvars:displayOpacity = [0.2]
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
-        float3 xformOp:scale = (3, 0.0375, 0.105)
-        double3 xformOp:translate = (0.75, -3, 0.10500000000000001)
+        float3 xformOp:scale = (3, 0.0375, 1.2)
+        double3 xformOp:translate = (0, -3, 1.2000000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 
@@ -65,7 +65,7 @@ def Xform "Habitat"
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
         float3 xformOp:scale = (0.0375, 3, 1.2)
-        double3 xformOp:translate = (3.75, 0, 1.2000000000000002)
+        double3 xformOp:translate = (3, 0, 1.2000000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 
@@ -78,7 +78,7 @@ def Xform "Habitat"
         double size = 2
         quatf xformOp:orient = (1, 0, 0, 0)
         float3 xformOp:scale = (0.0375, 3, 1.2)
-        double3 xformOp:translate = (-3.75, 0, 1.2000000000000002)
+        double3 xformOp:translate = (-3, 0, 1.2000000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
     }
 

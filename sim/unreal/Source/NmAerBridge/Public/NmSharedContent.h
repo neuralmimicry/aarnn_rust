@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // Shared generated habitat and visual morphology adapter; no neural state ownership.
 #pragma once
 #include "CoreMinimal.h"

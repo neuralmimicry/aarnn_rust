@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Run a fresh NAO social reference brain and bounded local simulator/chat interfaces."""
 from __future__ import annotations
 import argparse

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use aarnn_rust::causal::CausalEvent;
 use aarnn_rust::deterministic::{
     BrainId, CanonicalEventKey, EventId, EventStage, LeaseTerm, LogicalTag, NeuronId, ShardId,

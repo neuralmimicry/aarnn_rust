@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! # Sensory Input Providers for Interactive UI
 //!
 //! This module provides various real-time data sources that can drive the

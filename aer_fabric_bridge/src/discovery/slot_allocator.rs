@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use anyhow::Context;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};

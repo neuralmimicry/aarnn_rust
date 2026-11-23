@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Global configuration types for the simulator, UI Runner, and optional AARNN/morphology features.
 //!
 //! This module defines parameter structs used across both batch (matrix‑based) and
@@ -436,6 +440,52 @@ pub struct AarnnBioParams {
     pub acetylcholine_gain: f64,
     /// Serotonin gain multiplier for plasticity damping.
     pub serotonin_gain: f64,
+
+    /// Graded (non-spiking) membrane. The cell integrates its synaptic
+    /// current on a leaky membrane and releases transmitter continuously as a
+    /// sigmoid of voltage instead of firing Izhikevich spikes (most C. elegans
+    /// motor neurons; Liu et al. 2014, Kato et al. 2015). Spike-only
+    /// mechanisms (adaptive threshold, refractoriness, STP) do not apply.
+    pub graded_enabled: bool,
+    /// Graded membrane time constant (ms).
+    pub graded_tau_ms: f64,
+    /// Graded resting potential (mV); release is exactly zero here. The
+    /// default matches the -70 mV rest of the b = 0.2 Izhikevich presets so
+    /// gap junctions between graded and spiking cells carry no tonic current.
+    pub graded_v_rest_mv: f64,
+    /// Steady-state depolarisation per unit current (mV per mV/ms). With 5,
+    /// half release is reached at the current where a regular-spiking
+    /// Izhikevich cell starts to fire (~4 mV/ms).
+    pub graded_input_resistance: f64,
+    /// Voltage of half-maximal transmitter release (mV).
+    pub graded_release_v_half_mv: f64,
+    /// Release sigmoid slope (mV).
+    pub graded_release_slope_mv: f64,
+    /// Presynaptic event rate equivalent to full release (Hz): a graded cell
+    /// at release r delivers the mean synaptic charge of a spiking cell at
+    /// r times this rate. For output cells it is the pulse rate of the
+    /// pulse-density code sent to the body (500 Hz = one event per 2 ms frame).
+    pub graded_release_max_hz: f64,
+    /// Regenerative (plateau, e.g. L-type Ca2+) depolarisation at full
+    /// activation (mV). Above 4 x `graded_plateau_slope_mv` the membrane is
+    /// bistable (B-type motor neurons, RMD plateau potentials; Mellem et al.
+    /// 2008, Boyle et al. 2012). 0 disables.
+    pub graded_plateau_mv: f64,
+    /// Plateau activation half voltage (mV).
+    pub graded_plateau_v_half_mv: f64,
+    /// Plateau activation slope (mV).
+    pub graded_plateau_slope_mv: f64,
+    /// Reversal potential of depolarising (excitatory) drive (mV). Synaptic
+    /// and coupling input acts as a conductance: depolarisation saturates
+    /// towards this value instead of growing without bound.
+    pub graded_e_exc_mv: f64,
+    /// Reversal potential of hyperpolarising (inhibitory) drive (mV).
+    pub graded_e_inh_mv: f64,
+    /// Constant input current (mV/ms, the Izhikevich current unit) added to
+    /// the cell every step, for graded and spiking cells alike: a tonic
+    /// behavioural-state or descending drive (e.g. forward command input to
+    /// AVB, Boyle, Berri & Cohen 2012). 0 disables.
+    pub tonic_current: f64,
 }
 
 /// Selectable signal sources for neuromodulator dynamics (AARNN).
@@ -484,6 +534,19 @@ impl Default for AarnnBioParams {
             dopamine_gain: 1.0,
             acetylcholine_gain: 1.0,
             serotonin_gain: 1.0,
+            graded_enabled: false,
+            graded_tau_ms: 30.0,
+            graded_v_rest_mv: -70.0,
+            graded_input_resistance: 5.0,
+            graded_release_v_half_mv: -50.0,
+            graded_release_slope_mv: 5.0,
+            graded_release_max_hz: 50.0,
+            graded_plateau_mv: 0.0,
+            graded_plateau_v_half_mv: -55.0,
+            graded_plateau_slope_mv: 3.0,
+            graded_e_exc_mv: 0.0,
+            graded_e_inh_mv: -80.0,
+            tonic_current: 0.0,
         }
     }
 }
@@ -2603,6 +2666,38 @@ fn ensure_default_neuron_types(cfg: &mut NetworkConfig) {
     }
 }
 
+/// Cells whose incoming synapses learn (`NetworkConfig::aarnn_plastic_cells`).
+///
+/// `hidden[l][j]` marks hidden cell `j` of layer `l`, `outputs[k]` output
+/// `k`; a cell missing from the lists does not learn. Indices follow the
+/// built network, so growth that adds or removes cells leaves new cells
+/// non-plastic.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PlasticCellMask {
+    pub enabled: bool,
+    pub hidden: Vec<Vec<bool>>,
+    pub outputs: Vec<bool>,
+}
+
+impl PlasticCellMask {
+    #[inline]
+    pub fn hidden_learns(&self, layer: usize, cell: usize) -> bool {
+        !self.enabled
+            || self
+                .hidden
+                .get(layer)
+                .and_then(|l| l.get(cell))
+                .copied()
+                .unwrap_or(false)
+    }
+
+    #[inline]
+    pub fn output_learns(&self, cell: usize) -> bool {
+        !self.enabled || self.outputs.get(cell).copied().unwrap_or(false)
+    }
+}
+
 /// Configuration for the entire neural network and its simulation environment.
 ///
 /// This struct covers everything from layer sizes and connection probabilities to
@@ -2971,6 +3066,50 @@ pub struct NetworkConfig {
     // --- AARNN Multi-scale Detail ---
     /// Depth level for AARNN simulation detail (0 = macro, higher = more micro-detail).
     pub aarnn_layer_depth: usize,
+    /// Long-term synaptic plasticity (STDP/Hebb/Oja and the dendritic bouton
+    /// overlay). Imported adult connectomes disable it so the measured wiring
+    /// is not rewritten online; growth-based networks keep the default `true`.
+    pub aarnn_plasticity_enabled: bool,
+    /// Graded (non-spiking) cells take part in long-term plasticity: their
+    /// expected spikes per step (release x release_max_hz x dt) stand in for
+    /// spikes in the plasticity terms and traces, so analogue circuits (the
+    /// FPAA candidates) learn under the same STDP/Hebb/Oja rules. Off by
+    /// default: spiking networks are unchanged either way.
+    pub aarnn_graded_plasticity_enabled: bool,
+    /// Homeostatic counterweight to long-term plasticity (0 = off): every cell
+    /// defends a firing-rate set point by multiplicatively scaling the
+    /// synapses onto it - excitation down and inhibition up when it fires
+    /// above the set point, the reverse below it (synaptic scaling,
+    /// Turrigiano et al. 1998; inhibition scales the opposite way, Kilman et
+    /// al. 2002; Hebbian learning needs such compensatory processes, Zenke &
+    /// Gerstner 2017). Runs only while long-term plasticity is enabled.
+    /// Without it, rate-driven STDP ran away into whole-network lock-step
+    /// synchrony. Per scaling step the log-weight moves by
+    /// `gain * dt / aarnn_rate_homeostasis_tau_ms * error`, error in [-1, 1].
+    pub aarnn_rate_homeostasis_gain: f32,
+    /// Scaling time constant and firing-rate averaging window (ms).
+    pub aarnn_rate_homeostasis_tau_ms: f32,
+    /// Common set point (Hz) for every cell; 0 = each cell keeps the rate it
+    /// had over the warm-up (individual set points, as in vivo; Hengen et
+    /// al. 2016).
+    pub aarnn_rate_homeostasis_target_hz: f32,
+    /// Rate-averaging time before a cell's set point is taken and scaling
+    /// starts (ms).
+    pub aarnn_rate_homeostasis_warmup_ms: f32,
+    /// Which cells learn. Disabled (the default) = every cell. Enabled: only
+    /// synapses onto the marked cells take part in long-term plasticity and
+    /// its homeostatic counterweight; every other cell keeps its built
+    /// (connectome or designed, i.e. genetically specified) synapses - the
+    /// innate rhythm generators of locomotion stay fixed while specialised
+    /// circuits learn, as in C. elegans, where locomotion runs on motor
+    /// circuit rhythm generators and learning sits at identified
+    /// sensory-interneuron synapses.
+    pub aarnn_plastic_cells: PlasticCellMask,
+    /// Legacy automatic output gain control: whenever the output source layer
+    /// spikes, rescale every output current so the largest reaches a profile
+    /// peak (up to 512x). It erases relative motor drive and amplifies
+    /// inhibition, so faithful connectome imports disable it.
+    pub aarnn_output_gain_floor_enabled: bool,
     /// Biologically motivated AARNN parameters (gated by `aarnn_layer_depth`).
     pub aarnn_bio: AarnnBioParams,
 
@@ -3157,6 +3296,14 @@ impl Default for NetworkConfig {
             synaptic_growth_threshold: 0.6,
             synaptic_consolidation_factor: 0.1,
             aarnn_layer_depth: 5,
+            aarnn_plasticity_enabled: true,
+            aarnn_graded_plasticity_enabled: false,
+            aarnn_rate_homeostasis_gain: 1.0,
+            aarnn_rate_homeostasis_tau_ms: 1000.0,
+            aarnn_rate_homeostasis_target_hz: 0.0,
+            aarnn_rate_homeostasis_warmup_ms: 2000.0,
+            aarnn_plastic_cells: PlasticCellMask::default(),
+            aarnn_output_gain_floor_enabled: true,
             aarnn_bio: AarnnBioParams::default(),
             spike_io: SpikeIoConfig::default(),
             fpaa: FpaaConfig::default(),

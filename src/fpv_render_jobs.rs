@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Persistent, multi-worker FPV rendering from immutable display projections.
 //!
 //! Workers claim individual frames through process-shared file leases. A web

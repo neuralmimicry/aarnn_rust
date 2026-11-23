@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Genetic Algorithm for optimizing neural network parameters.
 //!
 //! This module implements a Genetic Algorithm (GA) to automatically find optimal

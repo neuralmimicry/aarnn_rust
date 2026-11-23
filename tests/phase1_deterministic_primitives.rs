@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use aarnn_rust::deterministic::{
     BrainId, CanonicalEvent, CanonicalEventKey, CounterRng, EventId, EventStage, LogicalTag,
     PrimitiveError, Q32_32, RngCoordinate, StableDenseMap, StateDigestBuilder, TopologyGeneration,

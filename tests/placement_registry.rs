@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Authoritative placement apply, fencing and restart verification.
 
 use aarnn_rust::deterministic::{BrainId, EventId, LeaseTerm, LogicalTag, ShardId, StateDigest};

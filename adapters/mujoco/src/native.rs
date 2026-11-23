@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Exclusive model/data ownership for the exact MuJoCo 3.17 ABI.
 use std::{
     ffi::{CStr, CString},
@@ -217,13 +221,41 @@ impl Physics {
             }
         }
     }
+    /// Add a generalised force to one degree of freedom (e.g. a joint torque
+    /// of a body-side muscle model); cleared with the applied forces.
+    pub fn add_joint_force(&mut self, dof: usize, value: f64) -> Result<(), String> {
+        if dof >= self.m().nv as usize || !value.is_finite() {
+            return Err("invalid joint force".into());
+        }
+        // SAFETY: dof is within nv; exclusive owner of qfrc_applied.
+        unsafe {
+            *self.d().qfrc_applied.add(dof) += value;
+        }
+        Ok(())
+    }
     pub fn force_at(
         &mut self,
         body: usize,
         force: [f64; 3],
         point: [f64; 3],
     ) -> Result<(), String> {
-        if body >= self.m().nbody as usize || !force.into_iter().chain(point).all(f64::is_finite) {
+        self.wrench_at(body, force, [0.; 3], point)
+    }
+    /// Apply a world force at a world point plus a world torque to `body`.
+    pub fn wrench_at(
+        &mut self,
+        body: usize,
+        force: [f64; 3],
+        torque: [f64; 3],
+        point: [f64; 3],
+    ) -> Result<(), String> {
+        if body >= self.m().nbody as usize
+            || !force
+                .into_iter()
+                .chain(torque)
+                .chain(point)
+                .all(f64::is_finite)
+        {
             return Err("invalid applied force".into());
         }
         // SAFETY: valid body, fixed-size finite arrays, matching model/data and
@@ -233,7 +265,7 @@ impl Physics {
                 self.model.as_ptr(),
                 self.data.as_ptr(),
                 force.as_ptr(),
-                [0.; 3].as_ptr(),
+                torque.as_ptr(),
                 point.as_ptr(),
                 body as i32,
                 self.d().qfrc_applied,
@@ -247,15 +279,24 @@ impl Physics {
         direction: [f64; 3],
         exclude: usize,
     ) -> Result<Option<f64>, String> {
+        // Range sensors exclude massless anatomical/scene decoration (group 2).
+        self.ray_groups(point, direction, exclude, [1, 1, 0, 1, 1, 1])
+    }
+    /// Ray cast with an explicit six-group visibility mask.
+    pub fn ray_groups(
+        &self,
+        point: [f64; 3],
+        direction: [f64; 3],
+        exclude: usize,
+        groups: [u8; 6],
+    ) -> Result<Option<f64>, String> {
         if exclude >= self.m().nbody as usize
             || !point.into_iter().chain(direction).all(f64::is_finite)
         {
             return Err("invalid ray".into());
         }
         let mut geom = -1;
-        // Range sensors exclude massless anatomical/scene decoration (group 2).
         // Retinal rays below still see the full rendered geometry.
-        let groups: [u8; 6] = [1, 1, 0, 1, 1, 1];
         // SAFETY: fixed arrays and valid model; group mask has six elements.
         let distance = unsafe {
             ffi::mj_ray(
@@ -271,6 +312,59 @@ impl Physics {
             )
         };
         Ok((distance >= 0.).then_some(distance))
+    }
+    /// Distance to the first geometry that does not belong to `root`'s own
+    /// articulated tree (decoration group 2 excluded). A mounted range ray on
+    /// a multi-body robot otherwise reports its own chassis or arm as an
+    /// obstacle at a few millimetres. Self hits are stepped over, up to 32.
+    pub fn ray_beyond_self(
+        &self,
+        point: [f64; 3],
+        direction: [f64; 3],
+        root: usize,
+    ) -> Result<Option<f64>, String> {
+        if root >= self.m().nbody as usize {
+            return Err("invalid ray root".into());
+        }
+        // SAFETY: checked body index into the immutable root-id table.
+        let tree = unsafe { *self.m().body_rootid.add(root) };
+        let mut origin = point;
+        let mut exclude = root;
+        let mut travelled = 0.;
+        for _ in 0..32 {
+            let mut geom = -1;
+            // SAFETY: as in `ray_groups`; `exclude` is a valid body index.
+            let distance = unsafe {
+                ffi::mj_ray(
+                    self.model.as_ptr(),
+                    self.data.as_ptr(),
+                    origin.as_ptr(),
+                    direction.as_ptr(),
+                    [1u8, 1, 0, 1, 1, 1].as_ptr(),
+                    true,
+                    exclude as i32,
+                    &mut geom,
+                    std::ptr::null_mut(),
+                )
+            };
+            if distance < 0. || geom < 0 {
+                return Ok(None);
+            }
+            if i64::from(geom) >= self.m().ngeom {
+                return Err("invalid ray geom".into());
+            }
+            // SAFETY: geom index checked above; body index from the model.
+            let body = unsafe { *self.m().geom_bodyid.add(geom as usize) } as usize;
+            let body_tree = unsafe { *self.m().body_rootid.add(body) };
+            if body == 0 || body_tree != tree {
+                return Ok(Some(travelled + distance));
+            }
+            let step = distance + 1.0e-6;
+            travelled += step;
+            origin = std::array::from_fn(|i| origin[i] + direction[i] * step);
+            exclude = body;
+        }
+        Ok(None)
     }
     pub fn camera_state(&self, name: &str) -> Result<CameraState, String> {
         let index = self.named(ffi::mjtObj_mjOBJ_CAMERA as i32, name)?;

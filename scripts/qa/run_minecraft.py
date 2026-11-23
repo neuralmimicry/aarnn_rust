@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Bounded Minecraft QA lanes with retained evidence and explicit capability failures."""
 import argparse
 from datetime import datetime, timezone

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 // Native rigid-body factory for the opt-in physical embodiment route.
 // SI mechanics are generated once. No legacy scale/drive boosts are used.
 using System;
@@ -69,6 +73,8 @@ sealed class GraphJoint {
 sealed class GraphTarget {
   public string joint, kind;
   public double gain, gear, damping;
+  // MJCF joint reference: the constructed pose is the reference configuration.
+  public double qpos0;
   public double[] bias, force_range;
 }
 [Serializable]
@@ -357,7 +363,16 @@ sealed class NativeEmbodiment : IDisposable {
       bodies[j.parent].rotation *
       (EmbodimentBasis.Rotation(j.parent_quaternion_wxyz) * Vector3.forward) *
       (j.type == 3 ? -1 : 1);
-  double Position(GraphJoint j) {
+  Dictionary<string, double> references;
+  double Reference(string joint) {
+    if (references == null) {
+      references = new Dictionary<string, double>();
+      foreach (var t in graph.targets) references[t.joint] = t.qpos0;
+    }
+    return references.TryGetValue(joint, out double r) ? r : 0;
+  }
+  double Position(GraphJoint j) => RawPosition(j) + Reference(j.name);
+  double RawPosition(GraphJoint j) {
     var p = bodies[j.parent];
     var c = bodies[j.child];
     if (j.type == 2)

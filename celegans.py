@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 # GoPiGo Connectome
 # Written by Timothy Busbice, (c) 2014, in Python 2.7
 # The GoPiGo Connectome uses a Postsynaptic dictionary based on the C Elegans Connectome Model

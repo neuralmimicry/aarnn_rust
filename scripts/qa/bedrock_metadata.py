@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Enable Script API experiments in metadata produced by BDS for a fresh QA world.
 
 Preserve all other native fields byte-for-byte, including storage/game versions.

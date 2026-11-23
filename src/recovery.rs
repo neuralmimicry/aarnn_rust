@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Deterministic failover, rejoin and RPO/RTO evidence harness.
 //!
 //! The harness models the authority decisions around a durable shard. It does

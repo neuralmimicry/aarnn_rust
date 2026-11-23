@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Deterministic safety gate for automatic physical placement changes.
 //!
 //! PlacementPlanner answers “can this plan fit?” This module answers the

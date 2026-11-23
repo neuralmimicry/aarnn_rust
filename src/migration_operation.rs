@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Durable, fenced migration-operation state.
 //!
 //! A placement plan says where authority should run.  It does not prove that

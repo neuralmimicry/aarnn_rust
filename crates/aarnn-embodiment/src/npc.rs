@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Programmed NPC motor intents. These are not neural outputs, diagnostic
 //! efforts, learned skills, verified locomotion or a biological controller.
 //! Versioned source-clock patterns act only through the model's real motors.

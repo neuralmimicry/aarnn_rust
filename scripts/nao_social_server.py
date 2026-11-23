@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Local, opt-in NAO reference I/O proxy. No neural implementation or public listener."""
 from __future__ import annotations
 import hmac
@@ -65,7 +69,11 @@ class Body:
         self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.socket.settimeout(10)
         write_frame(self.socket, json.dumps(dict(sensory=CONTRACT['sensory'], output=CONTRACT['output'], dt_ms=1)).encode())
-        if json.loads(read_frame(self.socket)) != dict(expected_s=CONTRACT['sensory'], expected_o=CONTRACT['output']):
+        reply = json.loads(read_frame(self.socket))
+        # The brain may advertise its output encoding; this body decodes spikes only.
+        if reply.get('output_code', 'spikes') in (None, 'spikes'):
+            reply.pop('output_code', None)
+        if reply != dict(expected_s=CONTRACT['sensory'], expected_o=CONTRACT['output']):
             self.socket.close()
             raise SocialError('Rust snapshot does not expose the social profile')
 

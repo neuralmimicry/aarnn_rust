@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 #[cfg(feature = "core_affinity")]
 use std::sync::OnceLock;
 #[cfg(feature = "core_affinity")]

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 id = "SIM-NAO-INTERACTION-001"
 version = 1
 title = "NAO social reference: player input, autonomous encounters and neural output"

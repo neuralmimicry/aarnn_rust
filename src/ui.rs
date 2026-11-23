@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! # Real-time Neuromorphic Visualization and Control Interface
 //!
 //! This module implements the graphical user interface (GUI) using `eframe` (egui).
@@ -597,11 +601,14 @@ pub(crate) struct IpcUdsServer {
     recent_mismatches: u64,
     total_received: u64,
     dt_ms: f32,
+    /// Output event encoding advertised in size hints (`output_code`), e.g.
+    /// `pulse_density` when every output cell is graded.
+    output_code: Option<&'static str>,
 }
 
 #[cfg(all(feature = "ui", feature = "robot_io", unix))]
 enum IpcCommand {
-    SendSizeHint,
+    SendSizeHint(Option<&'static str>),
     SendOutputs(Vec<f32>),
 }
 
@@ -728,6 +735,7 @@ impl IpcUdsServer {
             recent_mismatches: 0,
             total_received: 0,
             dt_ms: default_dt_ms,
+            output_code: None,
         })
     }
     fn poll_next_event(&mut self) -> Option<IpcEvent> {
@@ -879,9 +887,19 @@ impl IpcUdsServer {
         }
         Ok(())
     }
+    fn size_hint(&self) -> String {
+        match self.output_code {
+            Some(code) => format!(
+                "{{\"expected_s\":{},\"expected_o\":{},\"output_code\":\"{}\"}}",
+                self.s, self.o, code
+            ),
+            None => format!("{{\"expected_s\":{},\"expected_o\":{}}}", self.s, self.o),
+        }
+    }
+
     fn send_size_hint_to_last_peer(&self) {
         if let Some(ref peer) = self.last_peer {
-            let hint = format!("{{\"expected_s\":{},\"expected_o\":{}}}", self.s, self.o);
+            let hint = self.size_hint();
             if let Err(e) = self.sock.send_to(hint.as_bytes(), peer) {
                 nm_err!(
                     "[IpcUdsServer] Failed to send size hint to peer {:?}: {}",
@@ -893,7 +911,7 @@ impl IpcUdsServer {
     }
     fn send_size_hint_to_addr(&self, addr: &std::os::unix::net::SocketAddr) {
         if let Some(path) = addr.as_pathname() {
-            let hint = format!("{{\"expected_s\":{},\"expected_o\":{}}}", self.s, self.o);
+            let hint = self.size_hint();
             if let Err(e) = self.sock.send_to(hint.as_bytes(), path) {
                 nm_err!(
                     "[IpcUdsServer] Failed to send size hint to addr {:?}: {}",
@@ -937,7 +955,10 @@ impl IpcUdsServer {
                 while !thread_stop.load(std::sync::atomic::Ordering::Acquire) {
                     while let Ok(command) = command_rx.try_recv() {
                         match command {
-                            IpcCommand::SendSizeHint => self.send_size_hint_to_last_peer(),
+                            IpcCommand::SendSizeHint(code) => {
+                                self.output_code = code;
+                                self.send_size_hint_to_last_peer();
+                            }
                             IpcCommand::SendOutputs(outputs) => {
                                 if let Err(error) = self.send_outputs(&outputs) {
                                     nm_err!("[IpcUdsServer] Output reply failed: {}", error);
@@ -988,8 +1009,12 @@ impl IpcUdsService {
             .is_ok()
     }
 
-    fn send_size_hint_to_last_peer(&self) -> bool {
-        self.commands.try_send(IpcCommand::SendSizeHint).is_ok()
+    /// `output_code` is the runner's output encoding (see
+    /// `Runner::output_code`); the embodiment selects its muscle decoder by it.
+    fn send_size_hint_to_last_peer(&self, output_code: Option<&'static str>) -> bool {
+        self.commands
+            .try_send(IpcCommand::SendSizeHint(output_code))
+            .is_ok()
     }
 }
 
@@ -1067,6 +1092,24 @@ mod ipc_service_tests {
             assert!(Instant::now() < deadline, "timed out waiting for IPC event");
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+
+    #[test]
+    fn size_hint_advertises_the_runner_output_code() {
+        let path = unique_socket("hint");
+        let mut server = IpcUdsServer::bind(&path, 48, 96, 4096, 16384).expect("bind server");
+        let plain: serde_json::Value = serde_json::from_str(&server.size_hint()).unwrap();
+        assert_eq!(
+            plain,
+            serde_json::json!({"expected_s": 48, "expected_o": 96})
+        );
+        server.output_code = Some("pulse_density");
+        let graded: serde_json::Value = serde_json::from_str(&server.size_hint()).unwrap();
+        assert_eq!(
+            graded,
+            serde_json::json!({"expected_s": 48, "expected_o": 96, "output_code": "pulse_density"})
+        );
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -1383,6 +1426,45 @@ fn managed_sensory_delivery_error_is_retryable(error: &str) -> bool {
 /// startup waits for the IPC producer, but an audio source selected on an
 /// already-paused brain must retain its existing fail-closed behavior.
 #[cfg(feature = "ui")]
+/// Bind the coordinator endpoint of a configured neuron-shard group for the
+/// IPC owner of `brain_id`; `(None, false)` when none is configured and
+/// `(None, true)` when one is configured but cannot be bound.
+#[cfg(all(feature = "robot_io", unix))]
+fn bind_body_shard_group(
+    ipc_bound: bool,
+    brain_id: &str,
+) -> (Option<(crate::neuron_shard::ShardGroupListener, usize)>, bool) {
+    if !ipc_bound || !crate::neuron_shard::coordinates_brain(brain_id) {
+        return (None, false);
+    }
+    let (Some(count), Some(addr)) = (
+        crate::neuron_shard::configured_shard_count(),
+        crate::neuron_shard::configured_addr(),
+    ) else {
+        return (None, false);
+    };
+    match crate::neuron_shard::ShardGroupListener::bind(&addr) {
+        Ok(listener) => {
+            nm_err!(
+                "[neuron-shard] brain {} coordinates a {}-shard group on {}",
+                brain_id,
+                count,
+                addr
+            );
+            (Some((listener, count)), false)
+        }
+        Err(error) => {
+            nm_err!(
+                "[neuron-shard] brain {} cannot bind the shard group on {}: {}",
+                brain_id,
+                addr,
+                error
+            );
+            (None, true)
+        }
+    }
+}
+
 fn ipc_managed_sensory_startup_error_is_retryable(error: &str) -> bool {
     let error = error.to_ascii_lowercase();
     error.contains("no published sensory i/o bridge")
@@ -1478,7 +1560,16 @@ pub(crate) fn launch_ui(
         .unwrap_or(false);
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(format!("Neuromorphic Network - {}", brain_id))
-        .with_inner_size(vec2(1100.0, 700.0));
+        .with_inner_size(
+            // NM_UI_WINDOW_SIZE=WxH (e.g. 1920x1080 for showcase capture).
+            std::env::var("NM_UI_WINDOW_SIZE")
+                .ok()
+                .and_then(|v| {
+                    let (w, h) = v.split_once('x')?;
+                    Some(vec2(w.trim().parse().ok()?, h.trim().parse().ok()?))
+                })
+                .unwrap_or(vec2(1100.0, 700.0)),
+        );
     if ui_hidden {
         viewport = viewport.with_visible(false);
     }
@@ -2657,6 +2748,142 @@ struct HierarchicalPlacementCard {
     source: String,
 }
 
+/// Recorded sensory stream for lock-step replay capture (see
+/// `App::replay_capture_tick`). Input: the JSONL of a trace or probe input
+/// (header line, then `{"time_s", "sensors"}` rows).
+#[cfg(feature = "ui_screenshot")]
+struct ReplayCapture {
+    rows: Vec<(f64, Vec<f64>)>,
+    cursor: usize,
+    phase: Vec<f64>,
+    frame: u64,
+    every: u64,
+    max_frames: u64,
+    dir: std::path::PathBuf,
+    index: u64,
+    awaiting: bool,
+    warmup: u32,
+    pass_through: Option<bool>,
+    /// Displayed activity per neuron (spikes accumulated over every 1 ms
+    /// sub-step of the captured window, with a short visual decay).
+    act_s: Vec<f32>,
+    act_h: Vec<Vec<f32>>,
+    act_o: Vec<f32>,
+    /// Cell names (network `connectome_labels`) for the auto probes.
+    labels_h: Vec<String>,
+    labels_o: Vec<String>,
+    cum_h: Vec<Vec<f32>>,
+    cum_o: Vec<f32>,
+    /// Membrane statistics (sum, sum of squares, samples) per cell for
+    /// choosing the oscilloscope probes: the most variable cells show the
+    /// circuit's rhythm; tonic cells would draw flat lines.
+    v_stats_h: Vec<Vec<(f64, f64)>>,
+    v_stats_o: Vec<(f64, f64)>,
+    v_samples: f64,
+    probes_added: bool,
+    /// Probes are picked at 1.5 s, then re-picked once at `reselect_at`
+    /// frames (a quarter of the run, at most 6 s) when slower rhythms such
+    /// as a humanoid gait have started.
+    probes_final: bool,
+    reselect_at: u64,
+    /// The replayed network's 3D topology has been handed to the renderer.
+    /// The idle sim thread publishes topology only while it steps a growing
+    /// network, so without this the anatomical stages (4-6) stay locked and
+    /// the view falls back to the synthetic layered graph.
+    topology_published: bool,
+}
+
+#[cfg(feature = "ui_screenshot")]
+impl ReplayCapture {
+    fn from_env() -> Option<Self> {
+        let input = std::env::var("NM_UI_REPLAY_INPUT").ok()?;
+        let dir = std::path::PathBuf::from(
+            std::env::var("NM_UI_REPLAY_CAPTURE_DIR").unwrap_or_else(|_| "ui_replay_frames".into()),
+        );
+        let text = std::fs::read_to_string(&input).ok()?;
+        let mut rows = Vec::new();
+        for line in text.lines().skip(1) {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let (Some(t), Some(sensors)) = (v["time_s"].as_f64(), v["sensors"].as_array()) else {
+                continue;
+            };
+            if sensors.is_empty() {
+                continue;
+            }
+            rows.push((t * 1000.0, sensors.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect()));
+        }
+        if rows.is_empty() {
+            nm_err!("[ui.replay] no sensory rows in {}", input);
+            return None;
+        }
+        let _ = std::fs::create_dir_all(&dir);
+        let env_u64 = |key: &str, default: u64| {
+            std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+        };
+        let end_ms = rows.last().map(|r| r.0).unwrap_or(0.0);
+        let (labels_h, labels_o) = std::env::var("NM_UI_REPLAY_NETWORK")
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .map(|v| {
+                let names = |key: &str| -> Vec<String> {
+                    v["connectome_labels"][key]
+                        .as_array()
+                        .map(|a| a.iter().map(|x| x.as_str().unwrap_or("").to_string()).collect())
+                        .unwrap_or_default()
+                };
+                (names("hidden_nodes"), names("output_nodes"))
+            })
+            .unwrap_or_default();
+        nm_log!("[ui.replay] {} sensory rows ({:.1} s) from {}", rows.len(), end_ms / 1000.0, input);
+        Some(Self {
+            rows,
+            cursor: 0,
+            phase: Vec::new(),
+            frame: 0,
+            every: env_u64("NM_UI_REPLAY_EVERY", 10).max(1),
+            max_frames: env_u64("NM_UI_REPLAY_MAX_FRAMES", u64::MAX),
+            dir,
+            index: 0,
+            awaiting: false,
+            warmup: env_u64("NM_UI_REPLAY_WARMUP_FRAMES", 60) as u32,
+            pass_through: None,
+            act_s: Vec::new(),
+            act_h: Vec::new(),
+            act_o: Vec::new(),
+            labels_h,
+            labels_o,
+            cum_h: Vec::new(),
+            cum_o: Vec::new(),
+            v_stats_h: Vec::new(),
+            v_stats_o: Vec::new(),
+            v_samples: 0.0,
+            probes_added: false,
+            probes_final: false,
+            topology_published: false,
+            reselect_at: {
+                let every = env_u64("NM_UI_REPLAY_EVERY", 10).max(1);
+                ((end_ms / (2.0 * every as f64)) as u64 / 4).clamp(75, 300)
+            },
+        })
+    }
+
+    fn values_at(&mut self, t_ms: f64) -> Vec<f64> {
+        while self.cursor + 1 < self.rows.len() && self.rows[self.cursor + 1].0 <= t_ms {
+            self.cursor += 1;
+        }
+        self.rows[self.cursor].1.clone()
+    }
+
+    fn exhausted(&self) -> bool {
+        let end = self.rows.last().map(|r| r.0).unwrap_or(0.0);
+        (self.frame * 2) as f64 > end
+    }
+}
+
+
 #[cfg(feature = "ui")]
 /// Top‑level UI state and cached drawing buffers.
 ///
@@ -2786,6 +3013,14 @@ struct App {
     camera_zoom: f32,
     camera_yaw_degrees: f32,
     camera_pitch_degrees: f32,
+    /// Rotation of the projected network about the view axis. -90 with yaw
+    /// 90 lays a body's rostro-caudal axis horizontally (head left, dorsal
+    /// up), which fills a wide panel with a long body.
+    camera_roll_degrees: f32,
+    /// Vertical exaggeration of the projected network (NM_UI_CAMERA_STRETCH,
+    /// default 1): long thin bodies (a worm is ~15x longer than deep) need
+    /// it to show their dorsoventral and left/right structure on screen.
+    camera_stretch: f32,
     cam_pan: egui::Vec2,
     // Edge highlight options/state
     show_highlights: bool,
@@ -2972,6 +3207,11 @@ struct App {
     ui_capture_readiness_started_at: Option<Instant>,
     #[cfg(feature = "ui_screenshot")]
     ui_capture_readiness_reported: bool,
+    /// Lock-step replay capture (NM_UI_REPLAY_INPUT): steps the loaded
+    /// network through a recorded sensory stream and saves one screenshot
+    /// every NM_UI_REPLAY_EVERY 2 ms frames, for robot/network videos.
+    #[cfg(feature = "ui_screenshot")]
+    replay_capture: Option<ReplayCapture>,
     // Pop-out window state
     show_neuron_detail: bool,
     selected_neuron_pick: Option<ContextPick>,
@@ -4445,6 +4685,11 @@ impl App {
         #[cfg(all(feature = "robot_io", unix))]
         let sim_ipc_managed_network =
             (distributed_node.is_some() && ipc_bound_early).then(|| brain_id.clone());
+        // Neuron-shard group driving this body (`NM_BODY_SHARDS`): this IPC
+        // owner is shard 0 and coordinates the follower nodes.
+        #[cfg(all(feature = "robot_io", unix))]
+        let (sim_body_shards, sim_body_shards_failed) =
+            bind_body_shard_group(ipc_bound_early, &brain_id);
         let sim_throttle = sim_throttle_ms.clone();
         let sim_idle_sleep_ms = std::env::var("NM_SIM_IDLE_SLEEP_MS")
             .ok()
@@ -4755,9 +5000,31 @@ impl App {
                 let mut ipc_input_sequence = 0u64;
                 #[cfg(all(feature = "robot_io", unix))]
                 let mut ipc_managed_input_failed = false;
+                #[cfg(all(feature = "robot_io", unix))]
+                let mut body_shard_failed = sim_body_shards_failed;
                 loop {
+                    #[cfg(all(feature = "robot_io", unix))]
+                    let mut shard_group_stale = false;
                     // 1. Process all pending control messages
                     while let Ok(msg) = sim_rx.try_recv() {
+                        // A neuron-shard group holds a copy of this state;
+                        // re-form it after any change to it.
+                        #[cfg(all(feature = "robot_io", unix))]
+                        if matches!(
+                            msg,
+                            SimControl::ApplyConfig(..)
+                                | SimControl::SetModel(..)
+                                | SimControl::SetLearning(..)
+                                | SimControl::Reset
+                                | SimControl::ResizeSensory(..)
+                                | SimControl::ResizeOutput(..)
+                                | SimControl::ImportNetwork(..)
+                                | SimControl::ImportNetworkWithReply(..)
+                                | SimControl::SetFeedback(..)
+                                | SimControl::SetStdpEta(..)
+                        ) {
+                            shard_group_stale = sim_body_shards.is_some();
+                        }
                         match msg {
                             SimControl::SetPlaying(p) => {
                                 sim_playing.store(p, Ordering::SeqCst);
@@ -4860,6 +5127,13 @@ impl App {
                                 return;
                             }
                             _ => {}
+                        }
+                    }
+                    #[cfg(all(feature = "robot_io", unix))]
+                    if shard_group_stale {
+                        let mut r = sim_write_spin!(sim_runner);
+                        if r.neuron_shard.take().is_some() {
+                            nm_err!("[neuron-shard] runner changed; re-forming the shard group");
                         }
                     }
 
@@ -5070,7 +5344,41 @@ impl App {
                                     }
                                     let encoded_nonzero_after =
                                         spk.iter().filter(|&&v| v != 0).count();
-                                    if let Some(network_id) = sim_ipc_managed_network.as_ref() {
+                                    if body_shard_failed {
+                                        // No reply: the body must not run on a
+                                        // partial network.
+                                        continue;
+                                    }
+                                    if let Some((listener, count)) = sim_body_shards.as_ref() {
+                                        let mut r = sim_runner.blocking_write();
+                                        if r.neuron_shard.is_none() {
+                                            let started = std::time::Instant::now();
+                                            match listener.attach(
+                                                &mut r,
+                                                *count,
+                                                crate::neuron_shard::configured_timeout(),
+                                            ) {
+                                                Ok(()) => nm_err!(
+                                                    "[neuron-shard] body driven by {} neuron shards (group formed in {:.3}s)",
+                                                    count,
+                                                    started.elapsed().as_secs_f64()
+                                                ),
+                                                Err(error) => {
+                                                    nm_err!(
+                                                        "[neuron-shard] cannot form the {}-shard group: {}; refusing body frames",
+                                                        count,
+                                                        error
+                                                    );
+                                                    body_shard_failed = true;
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if let Some(network_id) = sim_ipc_managed_network
+                                        .as_ref()
+                                        .filter(|_| sim_body_shards.is_none())
+                                    {
                                         if ipc_managed_input_failed {
                                             // Do not acknowledge or advance a robot frame after
                                             // its managed sensory session has failed. Webots may
@@ -5162,8 +5470,11 @@ impl App {
                                         sim_runner.blocking_write().resize_sensory(new_s);
                                         sim_runner.blocking_write().resize_output(new_o);
                                         sim_provider.set_num_sensory_neurons(new_s);
+                                        // Re-form a neuron-shard group on the next frame.
+                                        sim_runner.blocking_write().neuron_shard = None;
                                     }
-                                    srv.send_size_hint_to_last_peer();
+                                    let output_code = sim_runner.blocking_read().output_code();
+                                    srv.send_size_hint_to_last_peer(output_code);
                                     if let Ok(mut stats) = sim_ipc_stats.try_write() {
                                         stats.connected = true;
                                         stats.last_peer = peer;
@@ -5363,7 +5674,19 @@ impl App {
                                     }
                                 }
                                 #[cfg(all(feature = "robot_io", unix))]
-                                if let Some(ref srv) = sim_ipc_service {
+                                if let Some(error) = r.neuron_shard_error() {
+                                    if !body_shard_failed {
+                                        nm_err!(
+                                            "[neuron-shard] {}; refusing body frames",
+                                            error
+                                        );
+                                    }
+                                    body_shard_failed = true;
+                                }
+                                #[cfg(all(feature = "robot_io", unix))]
+                                if let Some(srv) =
+                                    sim_ipc_service.as_ref().filter(|_| !body_shard_failed)
+                                {
                                     let mut out = vec![0.0f32; srv.o];
                                     let io_cfg = r.net.spike_io.clone();
                                     let io_profile =
@@ -6199,10 +6522,30 @@ impl App {
             raster_outputs: std::collections::VecDeque::new(),
             last_input_activity_rendered_step: None,
             last_activity_rendered_step: None,
-            camera_zoom: 1.0,
-            camera_yaw_degrees: 0.0,
-            camera_pitch_degrees: 0.0,
-            cam_pan: egui::vec2(0.0, 0.0),
+            // NM_UI_CAMERA_ZOOM / NM_UI_CAMERA_PAN=x,y: start-up view for
+            // unattended capture (interactive sessions keep 1.0 / origin).
+            camera_zoom: std::env::var("NM_UI_CAMERA_ZOOM")
+                .ok()
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .filter(|z| z.is_finite() && *z > 0.0)
+                .unwrap_or(1.0),
+            // NM_UI_CAMERA_YAW_DEG / _PITCH_DEG / _ROLL_DEG: start-up
+            // orientation for unattended capture (default: top view).
+            camera_yaw_degrees: env_degrees("NM_UI_CAMERA_YAW_DEG"),
+            camera_pitch_degrees: env_degrees("NM_UI_CAMERA_PITCH_DEG"),
+            camera_roll_degrees: env_degrees("NM_UI_CAMERA_ROLL_DEG"),
+            camera_stretch: std::env::var("NM_UI_CAMERA_STRETCH")
+                .ok()
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .filter(|z| z.is_finite() && *z > 0.0)
+                .unwrap_or(1.0),
+            cam_pan: std::env::var("NM_UI_CAMERA_PAN")
+                .ok()
+                .and_then(|v| {
+                    let (x, y) = v.split_once(',')?;
+                    Some(egui::vec2(x.trim().parse().ok()?, y.trim().parse().ok()?))
+                })
+                .unwrap_or(egui::vec2(0.0, 0.0)),
             show_highlights: true,
             max_highlight_lines: 8,
             last_sensory_spikes: vec![0; n_s],
@@ -6365,6 +6708,8 @@ impl App {
             ui_capture_readiness_started_at: None,
             #[cfg(feature = "ui_screenshot")]
             ui_capture_readiness_reported: false,
+            #[cfg(feature = "ui_screenshot")]
+            replay_capture: ReplayCapture::from_env(),
             show_neuron_detail: false,
             selected_neuron_pick: None,
             detail_camera_zoom: 1.0,
@@ -10403,6 +10748,346 @@ impl App {
         true
     }
 
+    /// Showcase overlay during replay capture: every neuron at its on-screen
+    /// position as a glow sized and brightened by its activity (spikes, or
+    /// graded release), so the network's stimulation is visible in video.
+    #[cfg(feature = "ui_screenshot")]
+    fn paint_replay_activity_overlay(&self, ctx: &egui::Context) {
+        let Some(rp) = self.replay_capture.as_ref() else {
+            return;
+        };
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("replay_activity_overlay"),
+        ));
+        let glow = |p: egui::Pos2, a: f32, rgb: (u8, u8, u8)| {
+            let a = a.clamp(0.0, 1.0);
+            let (r, g, b) = rgb;
+            painter.circle_filled(p, 2.5, egui::Color32::from_rgba_unmultiplied(r, g, b, 90));
+            if a > 0.03 {
+                painter.circle_filled(
+                    p,
+                    3.0 + 9.0 * a,
+                    egui::Color32::from_rgba_unmultiplied(r, g, b, (40.0 + 120.0 * a) as u8),
+                );
+                painter.circle_filled(
+                    p,
+                    2.0 + 4.0 * a,
+                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, (60.0 + 180.0 * a) as u8),
+                );
+            }
+        };
+        // The layout may group hidden cells into other columns than the
+        // runner's layers: match both in their flattened order.
+        for (p, a) in self.sensory_positions.iter().zip(rp.act_s.iter()) {
+            glow(*p, *a, (90, 170, 255));
+        }
+        for (p, a) in self.hidden_positions.iter().flatten().zip(rp.act_h.iter().flatten()) {
+            glow(*p, *a, (255, 160, 60));
+        }
+        for (p, a) in self.output_positions.iter().zip(rp.act_o.iter()) {
+            glow(*p, *a, (110, 255, 140));
+        }
+    }
+
+    /// One UI frame of lock-step replay capture. Returns false when done.
+    #[cfg(feature = "ui_screenshot")]
+    fn replay_capture_tick(&mut self, ctx: &egui::Context, rp: &mut ReplayCapture) -> bool {
+        ctx.request_repaint();
+        if rp.awaiting {
+            let image = ctx.input(|input| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                    _ => None,
+                })
+            });
+            if let Some(image) = image {
+                let mut rgba = Vec::with_capacity(image.pixels.len() * 4);
+                for pixel in &image.pixels {
+                    rgba.extend_from_slice(&pixel.to_array());
+                }
+                let path = rp.dir.join(format!("frame_{:06}.png", rp.index));
+                if let Err(error) = image::save_buffer(
+                    &path,
+                    &rgba,
+                    image.size[0] as u32,
+                    image.size[1] as u32,
+                    image::ColorType::Rgba8,
+                ) {
+                    nm_err!("[ui.replay] frame save failed for {}: {}", path.display(), error);
+                }
+                rp.index += 1;
+                rp.awaiting = false;
+            }
+            return true;
+        }
+        #[cfg(feature = "growth3d")]
+        if !rp.topology_published {
+            let published = match (self.runner.try_read(), self.ui_snapshot.try_write()) {
+                (Ok(r), Ok(mut snap)) => {
+                    snap.topo_sensory = r.topo.sensory_nodes.clone();
+                    snap.topo_hidden = r.topo.layers.clone();
+                    snap.topo_output = r.topo.output_nodes.clone();
+                    snap.topo_early = r.topo.early_cells.clone();
+                    true
+                }
+                _ => false,
+            };
+            if published {
+                rp.topology_published = true;
+                self.request_edge_cache_refresh();
+            }
+        }
+        if rp.warmup > 0 {
+            rp.warmup -= 1;
+            return true;
+        }
+        if rp.frame >= rp.max_frames || rp.exhausted() {
+            let _ = std::fs::write(rp.dir.join("DONE"), format!("{}\n", rp.index));
+            nm_log!("[ui.replay] captured {} frames to {}", rp.index, rp.dir.display());
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return false;
+        }
+        let runner = self.runner.clone();
+        {
+            let Ok(mut r) = runner.try_write() else {
+                return true;
+            };
+            if rp.pass_through.is_none() {
+                rp.pass_through = Some(matches!(
+                    r.net.spike_io.input_strategy,
+                    SpikeInputEncodingStrategy::Threshold
+                ));
+            }
+            let n_s = r.net.num_sensory_neurons;
+            fn tally(out: &crate::runner::StepOut, cnt_h: &mut Vec<Vec<f32>>, cnt_o: &mut Vec<f32>) {
+                cnt_h.resize(out.spk_h.len(), Vec::new());
+                for (li, sp) in out.spk_h.iter().enumerate() {
+                    cnt_h[li].resize(sp.len(), 0.0);
+                    for (j, x) in sp.iter().enumerate() {
+                        if *x != 0 {
+                            cnt_h[li][j] += 1.0;
+                        }
+                    }
+                }
+                cnt_o.resize(out.spk_o.len(), 0.0);
+                for (k, x) in out.spk_o.iter().enumerate() {
+                    if *x != 0 {
+                        cnt_o[k] += 1.0;
+                    }
+                }
+            }
+            let mut cnt_s = vec![0.0f32; n_s];
+            let mut cnt_h: Vec<Vec<f32>> = Vec::new();
+            let mut cnt_o: Vec<f32> = Vec::new();
+            let mut input_frames: Vec<(u64, Vec<u32>)> = Vec::with_capacity(rp.every as usize);
+            for _ in 0..rp.every {
+                let t_ms = (rp.frame * 2) as f64;
+                let values = rp.values_at(t_ms);
+                if rp.phase.len() != n_s {
+                    rp.phase = vec![0.0; n_s];
+                }
+                // Embodiment client encoder (as celegans_depth_probe): a
+                // deterministic phase accumulator, input on the first 1 ms
+                // sub-step of each 2 ms frame.
+                let mut frame = vec![0i8; n_s];
+                for i in 0..n_s {
+                    rp.phase[i] += values.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                    if rp.phase[i] >= 1.0 {
+                        rp.phase[i] -= 1.0;
+                        frame[i] = 1;
+                    }
+                }
+                if rp.pass_through != Some(true) {
+                    let silent = frame.iter().all(|x| *x == 0);
+                    let floor = if silent { 0.08 } else { 0.01 };
+                    for x in frame.iter_mut() {
+                        if *x == 0 && rand::random::<f64>() < floor {
+                            *x = 1;
+                        }
+                    }
+                }
+                let zero = vec![0i8; n_s];
+                let out = r.step_sync(1.0, Some(&frame));
+                tally(&out, &mut cnt_h, &mut cnt_o);
+                self.update_probes_from_standalone(&r);
+                for (i, x) in frame.iter().enumerate() {
+                    if *x != 0 && i < cnt_s.len() {
+                        cnt_s[i] += 1.0;
+                    }
+                }
+                input_frames.push((
+                    r.t as u64,
+                    frame.iter().enumerate().filter(|(_, x)| **x != 0).map(|(i, _)| i as u32).collect(),
+                ));
+                let out = r.step_sync(1.0, Some(&zero));
+                tally(&out, &mut cnt_h, &mut cnt_o);
+                self.update_probes_from_standalone(&r);
+                if !rp.probes_final {
+                    rp.v_stats_h.resize(r.v_h.len(), Vec::new());
+                    for (l, v) in r.v_h.iter().enumerate() {
+                        rp.v_stats_h[l].resize(v.len(), (0.0, 0.0));
+                        for (j, x) in v.iter().enumerate() {
+                            rp.v_stats_h[l][j].0 += *x;
+                            rp.v_stats_h[l][j].1 += *x * *x;
+                        }
+                    }
+                    rp.v_stats_o.resize(r.v_o.len(), (0.0, 0.0));
+                    for (k, x) in r.v_o.iter().enumerate() {
+                        rp.v_stats_o[k].0 += *x;
+                        rp.v_stats_o[k].1 += *x * *x;
+                    }
+                    rp.v_samples += 1.0;
+                }
+                rp.frame += 1;
+            }
+            // Window activity: any spike in the window lights the cell,
+            // more spikes brighter; graded cells show their release.
+            let lit = |prev: f32, n: f32, graded: f32| -> f32 {
+                let spike = if n > 0.0 { (0.55 + 0.15 * n).min(1.0) } else { 0.0 };
+                (prev * 0.72).max(spike).max(graded.clamp(0.0, 1.0))
+            };
+            rp.act_s.resize(cnt_s.len(), 0.0);
+            for (a, n) in rp.act_s.iter_mut().zip(cnt_s.iter()) {
+                *a = lit(*a, *n, 0.0);
+            }
+            rp.act_h.resize(cnt_h.len(), Vec::new());
+            for (li, layer) in cnt_h.iter().enumerate() {
+                let graded = r.graded_release_h(li);
+                rp.act_h[li].resize(layer.len(), 0.0);
+                for (j, n) in layer.iter().enumerate() {
+                    let g = graded.get(j).copied().flatten().unwrap_or(0.0) as f32;
+                    rp.act_h[li][j] = lit(rp.act_h[li][j], *n, g);
+                }
+            }
+            let graded_o = r.graded_activation_o();
+            rp.act_o.resize(cnt_o.len(), 0.0);
+            for (k, n) in cnt_o.iter().enumerate() {
+                let g = graded_o.get(k).copied().flatten().unwrap_or(0.0) as f32;
+                rp.act_o[k] = lit(rp.act_o[k], *n, g);
+            }
+            rp.cum_h.resize(rp.act_h.len(), Vec::new());
+            for (li, layer) in rp.act_h.iter().enumerate() {
+                rp.cum_h[li].resize(layer.len(), 0.0);
+                for (j, a) in layer.iter().enumerate() {
+                    rp.cum_h[li][j] += *a;
+                }
+            }
+            rp.cum_o.resize(rp.act_o.len(), 0.0);
+            for (k, a) in rp.act_o.iter().enumerate() {
+                rp.cum_o[k] += *a;
+            }
+            let probe_dt = r.lif.dt.max(0.001) as f32;
+            drop(r);
+            // After 1.5 s, put the most variable cells on the oscilloscope
+            // (membrane potential, sampled every 1 ms sub-step); re-pick once
+            // at `reselect_at`, keeping the traces of cells still chosen.
+            let first = !rp.probes_added && rp.index >= 75 && self.probes.is_empty();
+            let second = rp.probes_added && !rp.probes_final && rp.index >= rp.reselect_at;
+            if first || second {
+                rp.probes_added = true;
+                rp.probes_final = second || rp.reselect_at <= 75;
+                let n = rp.v_samples.max(1.0);
+                let var = |(s, q): (f64, f64)| (q / n - (s / n) * (s / n)).max(0.0) as f32;
+                let mut hs: Vec<(f32, usize, usize)> = Vec::new();
+                for (li, layer) in rp.v_stats_h.iter().enumerate() {
+                    for (j, st) in layer.iter().enumerate() {
+                        let v = var(*st);
+                        if v > 1e-3 {
+                            hs.push((v, li, j));
+                        }
+                    }
+                }
+                hs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+                let mut os: Vec<(f32, usize)> = rp
+                    .v_stats_o
+                    .iter()
+                    .enumerate()
+                    .map(|(k, st)| (var(*st), k))
+                    .filter(|(v, _)| *v > 1e-3)
+                    .collect();
+                os.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+                let mut offset = 0usize;
+                let flat: Vec<usize> = rp
+                    .v_stats_h
+                    .iter()
+                    .map(|l| {
+                        let o = offset;
+                        offset += l.len();
+                        o
+                    })
+                    .collect();
+                let mut desired: Vec<(ProbeTarget, String, egui::Color32)> = Vec::new();
+                let hidden_colors = [(255u8, 190u8, 80u8), (255, 120, 90), (240, 225, 100)];
+                for (n, (_, li, j)) in hs.iter().take(3).enumerate() {
+                    let label = rp.labels_h.get(flat[*li] + j).filter(|x| !x.is_empty()).cloned()
+                        .unwrap_or_else(|| format!("H{}:{}", li + 1, j));
+                    let (r_, g_, b_) = hidden_colors[n];
+                    desired.push((ProbeTarget::Hidden(*li, *j), format!("{} Vm", label), egui::Color32::from_rgb(r_, g_, b_)));
+                }
+                let output_colors = [(160u8, 240u8, 120u8), (90u8, 220u8, 210u8)];
+                for (n, (_, k)) in os.iter().take(2).enumerate() {
+                    let label = rp.labels_o.get(*k).filter(|x| !x.is_empty() && !x.chars().all(|c| c.is_ascii_digit()))
+                        .cloned().unwrap_or_else(|| format!("O{}", k));
+                    let (r_, g_, b_) = output_colors[n];
+                    desired.push((ProbeTarget::Output(*k), format!("{} Vm", label), egui::Color32::from_rgb(r_, g_, b_)));
+                }
+                // New buffers start empty (NaN), not at 0 mV, so the
+                // auto-scaled lanes fit the real trace from the first sample.
+                let cap = ((self.scope_time_ms / probe_dt).ceil() as usize).clamp(100, 20000);
+                let mut old = std::mem::take(&mut self.probes);
+                for (target, name, color) in desired {
+                    let mut pr = match old.iter().position(|p| p.target == target) {
+                        Some(i) => old.remove(i),
+                        None => {
+                            let id = self.next_probe_id;
+                            self.next_probe_id += 1;
+                            let mut pr = Probe::new(id, String::new(), color, target, ProbeKind::Membrane, 10_000);
+                            pr.data = vec![f32::NAN; cap];
+                            pr.capacity = cap;
+                            pr.write_idx = 0;
+                            pr
+                        }
+                    };
+                    pr.name = name;
+                    pr.color = color;
+                    self.probes.push(pr);
+                }
+            }
+            if rp.index % 100 == 0 {
+                let lit_h: usize = rp.act_h.iter().flatten().filter(|a| **a > 0.08).count();
+                let lit_o: usize = rp.act_o.iter().filter(|a| **a > 0.08).count();
+                let raster_spikes: usize = self.raster_inputs.iter().map(|c| c.len()).sum();
+                for pr in &self.probes {
+                    let finite: Vec<f32> = pr.data.iter().copied().filter(|v| v.is_finite()).collect();
+                    let lo = finite.iter().copied().fold(f32::INFINITY, f32::min);
+                    let hi = finite.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                    nm_log!("[ui.replay]   probe {}: {} samples, {:.2}..{:.2}", pr.name, finite.len(), lo, hi);
+                }
+                nm_log!(
+                    "[ui.replay] frame {} t={} ms: lit hidden {} output {}; input raster {} cols {} spikes; probes {}",
+                    rp.index, rp.frame * 2, lit_h, lit_o, self.raster_inputs.len(), raster_spikes, self.probes.len()
+                );
+            }
+            self.append_input_raster_step_frames(input_frames);
+        }
+        if let Ok(r) = runner.try_read() {
+            self.sim_t_ms_bits.store(r.t_ms.to_bits(), Ordering::Release);
+            // Probes were sampled every sub-step above; keep sync from
+            // adding a duplicate sample.
+            let paused = self.scope_paused;
+            self.scope_paused = true;
+            self.sync_activity_from_runner(&r);
+            self.scope_paused = paused;
+        }
+        self.sensory_activity = rp.act_s.clone();
+        self.hidden_activity = rp.act_h.clone();
+        self.output_activity = rp.act_o.clone();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        rp.awaiting = true;
+        true
+    }
+
     fn sync_activity_from_runner(&mut self, runner: &Runner) {
         let decay = 0.90f32;
         if !matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
@@ -10466,6 +11151,16 @@ impl App {
                         self.previous_hidden_spikes[li][j] = 0;
                     }
                 }
+                // Graded (non-spiking) cells never spike: show their
+                // transmitter release (0..1) so analogue circuits are visible.
+                for (j, release) in runner.graded_release_h(li).into_iter().enumerate() {
+                    if let (Some(release), true) = (release, j < self.hidden_activity[li].len()) {
+                        let r = release.clamp(0.0, 1.0) as f32;
+                        if r > self.hidden_activity[li][j] {
+                            self.hidden_activity[li][j] = r;
+                        }
+                    }
+                }
             }
         }
 
@@ -10476,6 +11171,14 @@ impl App {
         }
         for k in 0..runner.net.num_output_neurons {
             self.output_activity[k] *= decay;
+        }
+        for (k, act) in runner.graded_activation_o().into_iter().enumerate() {
+            if let (Some(act), true) = (act, k < self.output_activity.len()) {
+                let a = act.clamp(0.0, 1.0) as f32;
+                if a > self.output_activity[k] {
+                    self.output_activity[k] = a;
+                }
+            }
         }
         let current_step = runner.t as u64;
         let mut stepped_frames: Vec<(u64, Vec<i8>)> = runner
@@ -13034,6 +13737,14 @@ fn connection_projection_status(
 /// QA and workstation launch profiles. Invalid values retain the established
 /// automatic stage-five default.
 #[cfg(feature = "ui")]
+fn env_degrees(key: &str) -> f32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|d| d.is_finite())
+        .map_or(0.0, |d| d.clamp(-180.0, 180.0))
+}
+
 fn initial_visualization_stage(value: Option<&str>) -> u8 {
     value
         .and_then(|value| value.parse::<u8>().ok())
@@ -14778,13 +15489,19 @@ impl eframe::App for App {
             // Capture the rendered egui framebuffer after the graph cache has
             // had time to populate. This is opt-in and intended for UI
             // evidence; normal UI sessions never request or write a file.
+            if let Some(mut replay) = self.replay_capture.take() {
+                if self.replay_capture_tick(&ctx, &mut replay) {
+                    self.replay_capture = Some(replay);
+                }
+                self.paint_replay_activity_overlay(&ctx);
+            }
             let screenshot = ctx.input(|input| {
                 input.events.iter().find_map(|event| match event {
                     egui::Event::Screenshot { image, .. } => Some(image.clone()),
                     _ => None,
                 })
             });
-            if let Some(image) = screenshot {
+            if let Some(image) = screenshot.filter(|_| self.replay_capture.is_none()) {
                 if let Some(path) = self.ui_capture_path.take() {
                     let mut rgba = Vec::with_capacity(image.pixels.len() * 4);
                     for pixel in &image.pixels {
@@ -17012,7 +17729,15 @@ impl eframe::App for App {
         // competes with the sim thread's write lock.  The snapshot is populated by
         // the sim thread after every step and includes spikes, membrane potentials,
         // eligibility traces, and (every 100 steps) connection statistics.
-        if matches!(self.view_source, ViewSource::Standalone) {
+        #[cfg(feature = "ui_screenshot")]
+        let replay_active = self.replay_capture.is_some();
+        #[cfg(not(feature = "ui_screenshot"))]
+        let replay_active = false;
+        if replay_active {
+            // Lock-step replay capture steps the runner itself and owns the
+            // activity, rasters and probes; the idle sim thread's snapshot is
+            // stale and must not overwrite them.
+        } else if matches!(self.view_source, ViewSource::Standalone) {
             // Decay existing activity each frame; active neurons will be set to 1.0 below.
             let decay = 0.95f32;
             for v in &mut self.sensory_activity {
@@ -22582,11 +23307,13 @@ impl eframe::App for App {
                 #[cfg(feature = "growth3d")]
                 let (sp, cp) = (pitch.sin(), pitch.cos());
                 #[cfg(feature = "growth3d")]
+                let (sr, cr) = self.camera_roll_degrees.to_radians().sin_cos();
+                #[cfg(feature = "growth3d")]
                 let zoom = self.camera_zoom;
                 #[cfg(feature = "growth3d")]
                 let scale_x = panel_rect.width() * 0.3 * zoom;
                 #[cfg(feature = "growth3d")]
-                let scale_y = height * 0.45 * zoom;
+                let scale_y = height * 0.45 * zoom * self.camera_stretch;
                 #[cfg(feature = "growth3d")]
                 let cluster_topo_opt = if matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
                     self.cluster_topo_cache.as_ref()
@@ -22797,9 +23524,11 @@ impl eframe::App for App {
                             z3 = zz;
                             let yz = y3 * cp - z3 * sp;
                             y3 = yz;
+                            // Roll about the view axis before scaling.
+                            let (u, v) = (x3 * cr - (-y3) * sr, x3 * sr + (-y3) * cr);
                             egui::pos2(
-                                x_ref + x3 * scale_x + cam_pan.x,
-                                y_ref - y3 * scale_y + cam_pan.y,
+                                x_ref + u * scale_x + cam_pan.x,
+                                y_ref + v * scale_y + cam_pan.y,
                             )
                         };
                         let project =
@@ -23380,6 +24109,10 @@ impl eframe::App for App {
             #[cfg(not(feature = "growth3d"))]
             let _growth_enabled: bool = false;
             let scope_gain: f32 = self.scope_gain;
+            #[cfg(feature = "ui_screenshot")]
+            let scope_autoscale = self.replay_capture.is_some();
+            #[cfg(not(feature = "ui_screenshot"))]
+            let scope_autoscale = false;
             let scope_grid: bool = self.scope_grid;
             let scope_lanes: bool = self.scope_lanes;
             let raster_cols: usize = self.raster_cols;
@@ -23397,7 +24130,7 @@ impl eframe::App for App {
             #[cfg(feature = "growth3d")]
             let scale_x = panel_rect.width() * 0.3 * self.camera_zoom;
             #[cfg(feature = "growth3d")]
-            let scale_y = ((panel_rect.bottom() - 150.0).max(100.0) - (panel_rect.top() + 30.0)) * 0.45 * self.camera_zoom;
+            let scale_y = ((panel_rect.bottom() - 150.0).max(100.0) - (panel_rect.top() + 30.0)) * 0.45 * self.camera_zoom * self.camera_stretch;
 
             #[cfg(feature = "growth3d")]
             let anatomical_contract = if snapshot_topology_allowed && use_aarnn_layout {
@@ -23408,7 +24141,7 @@ impl eframe::App for App {
             #[cfg(feature = "growth3d")]
             let anatomical_frame = anatomical_contract.map(|contract| anatomy::Frame::new(
                 contract, egui::pos2(x_ref, y_ref) + self.cam_pan,
-                egui::vec2(scale_x, scale_y), yaw, pitch,
+                egui::vec2(scale_x, scale_y), yaw, pitch, self.camera_roll_degrees.to_radians(),
             ));
             #[cfg(feature = "growth3d")]
             if let (Some(contract), Some(frame)) = (anatomical_contract, anatomical_frame.as_ref()) {
@@ -23586,7 +24319,7 @@ impl eframe::App for App {
                     egui::Color32::LIGHT_RED
                 };
                 painter.text(
-                    egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 25.0),
+                    egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 58.0),
                     egui::Align2::LEFT_TOP,
                     format!(
                         "Matrix output path: {connected_outputs}/{} connected, {output_spikes} active",
@@ -23615,7 +24348,7 @@ impl eframe::App for App {
                         .count();
                     let pending_routes = connected_outputs.saturating_sub(committed_route_outputs);
                     painter.text(
-                        egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 40.0),
+                        egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 72.0),
                         egui::Align2::LEFT_TOP,
                         format!(
                             "Committed anatomy: {committed_route_outputs}/{}; pending: {pending_routes}",
@@ -24535,7 +25268,7 @@ impl eframe::App for App {
                 }
                 if drawn_count >= draw_cap || synapse_total > scan_cap {
                     painter.text(
-                        egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 26.0),
+                        egui::pos2(panel_rect.left() + 8.0, panel_rect.top() + 86.0),
                         egui::Align2::LEFT_TOP,
                         format!("(Display capped at {}/{} synapses; scan budget {})", draw_cap, synapse_total, scan_cap),
                         egui::FontId::proportional(12.0),
@@ -24671,7 +25404,12 @@ impl eframe::App for App {
             // Once a complete biological projection is available, showing them
             // would add a second synthetic topology over the biological one.
             if show_highlights && !biological_topology_authoritative {
-                let use_smoothed_cached_highlights = (self.playing || self.ga_running || runner_busy) && allow_cached_edges;
+                #[cfg(feature = "ui_screenshot")]
+                let replay_running = self.replay_capture.is_some();
+                #[cfg(not(feature = "ui_screenshot"))]
+                let replay_running = false;
+                let use_smoothed_cached_highlights =
+                    (self.playing || self.ga_running || runner_busy || replay_running) && allow_cached_edges;
                 if use_smoothed_cached_highlights {
                     let get_pos = |layer: i32, idx: usize| -> Option<egui::Pos2> {
                         if layer == -1 {
@@ -25765,7 +26503,7 @@ impl eframe::App for App {
                     // Always span the full width: map the full visible time window across
                     // all pixel columns.
                     let mut last: Option<egui::Pos2> = None;
-                    let yrange: (f32, f32) = match pr.kind {
+                    let mut yrange: (f32, f32) = match pr.kind {
                         ProbeKind::Spike => (-0.1, 1.1),
                         ProbeKind::Membrane => (-85.0, 40.0),
                         ProbeKind::Current => (-10.0, 10.0),
@@ -25773,6 +26511,31 @@ impl eframe::App for App {
                     };
                     let cap = pr.capacity.max(1);
                     let end = pr.write_idx % cap; // next write index (newest is end-1)
+                    if scope_autoscale && !matches!(pr.kind, ProbeKind::Spike) {
+                        // Showcase capture: fit each lane to its visible trace.
+                        let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+                        for b in 0..visible_samples.min(cap) {
+                            let ridx = (cap + end + cap - 1 - (b % cap)) % cap;
+                            if let Some(v) = pr.data.get(ridx).copied().filter(|v| v.is_finite()) {
+                                lo = lo.min(v * scope_gain);
+                                hi = hi.max(v * scope_gain);
+                            }
+                        }
+                        if lo.is_finite() {
+                            let span = (hi - lo).max(2.0);
+                            let mid = 0.5 * (hi + lo);
+                            yrange = (mid - 0.6 * span, mid + 0.6 * span);
+                        }
+                    }
+                    if scope_lanes {
+                        painter.text(
+                            lane_rect.left_top() + egui::vec2(4.0, 1.0),
+                            egui::Align2::LEFT_TOP,
+                            &pr.name,
+                            egui::FontId::proportional(10.0),
+                            pr.color,
+                        );
+                    }
                     for col in 0..px {
                         // Draw newest data at the RIGHT edge so time flows right -> left
                         let x = egui::lerp(

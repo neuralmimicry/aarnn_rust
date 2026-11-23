@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Bounded network transfer of immutable stable-executor checkpoints.
 //!
 //! A checkpoint transfer is a data-plane operation.  It verifies the complete

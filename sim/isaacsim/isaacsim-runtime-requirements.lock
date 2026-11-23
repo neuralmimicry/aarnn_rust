@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Isaac Sim runtime for sim/isaacsim/run_isaacsim.py (Python 3.12 venv at
+# target/isaacsim-venv; never the MuJoCo or USD-converter venv). Install order:
+#   python3.12 -m venv target/isaacsim-venv
+#   target/isaacsim-venv/bin/pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu130
+#   target/isaacsim-venv/bin/pip install "isaacsim[all,extscache]==6.2.0.0" --extra-index-url https://pypi.nvidia.com
+# Accepting the NVIDIA Omniverse EULA (OMNI_KIT_ACCEPT_EULA=YES) is required to run.
+torch==2.11.0+cu130
+isaacsim[all,extscache]==6.2.0.0

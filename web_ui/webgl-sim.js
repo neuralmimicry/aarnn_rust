@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 /* AARNN WebGL simulator. Rendering and profile adapters live in the browser;
  * neural execution remains behind the authenticated /api/aer/infer gateway. */
 (function () {
@@ -37,6 +41,8 @@
   var requestController = null;
   var robot = { x: 0, z: 0, heading: 0, phase: 0, actuators: [] };
   var aerSession = null;
+  // Brain output code (NmWorld.outputCode), fixed by the first reply of a connection.
+  var outputCode = null;
   var peripheralSessionId = null;
   var routeParams = new URLSearchParams(window.location.search || "");
   var routeNetwork = (routeParams.get("network_id") || "").trim();
@@ -115,13 +121,10 @@
   function sensors() {
     return window.NmWorld.sense(profile, habitat, robot, sensoryHistory);
   }
-  function applyOutputs(indices) {
-    var i;
-    for (i = 0; i < robot.actuators.length; i += 1) robot.actuators[i] *= 0.82;
-    (indices || []).forEach(function (index) {
-      var channel = Number(index);
-      if (Number.isInteger(channel) && channel >= 0 && channel < profile.output) robot.actuators[channel] = 1;
-    });
+  function applyOutputs(indices, code) {
+    // One reply is one sampled output frame, decoded by its output code
+    // (absent: spikes). The request declares dt_ms = 1.
+    window.NmWorld.decodeOutputs(profile, robot.actuators, indices, code, 1);
     var movement = window.NmWorld.motion(profile, robot.actuators);
     var mean = movement.drive;
     robot.heading += movement.turn * 0.08;
@@ -157,7 +160,7 @@
     if (socialMode) headers.Authorization = "Bearer " + bodyToken;
     fetch(socialMode ? "/api/body" : "/api/aer/infer", { method: "POST", credentials: "same-origin", signal: controller.signal, headers: headers, body: JSON.stringify(body) })
       .then(function (response) { return response.json().then(function (payload) { if (!response.ok) throw new Error(payload.error || "inference request failed"); return payload; }); })
-      .then(function (payload) { if (generation !== sessionGeneration) return; frame += 1; var indices = Array.isArray(payload.output_spike_indices) ? payload.output_spike_indices : []; applyOutputs(indices); setText(outputSpikeText, indices.length); if (payload.output_step_index != null) setText(stepText, payload.output_step_index); if (aerSession) aerSession.acknowledge(1); transport.textContent = "connected"; })
+      .then(function (payload) { if (generation !== sessionGeneration) return; var code = window.NmWorld.outputCode(payload.output_code); if (outputCode !== null && code !== outputCode) throw new Error("brain output_code changed within the connection"); outputCode = code; frame += 1; var indices = Array.isArray(payload.output_spike_indices) ? payload.output_spike_indices : []; applyOutputs(indices, code); setText(outputSpikeText, indices.length); if (payload.output_step_index != null) setText(stepText, payload.output_step_index); if (aerSession) aerSession.acknowledge(1); transport.textContent = "connected"; })
       .catch(function (error) { if (generation !== sessionGeneration) return; disconnect(); transport.className = "webgl-error"; transport.textContent = "error"; setMessage(error.message + " Rendering continues in preview mode.", "webgl-error"); })
       .then(function () { window.clearTimeout(deadline); if (requestController === controller) requestController = null; requestInFlight = false; });
   }
@@ -189,7 +192,7 @@
       bodySession = "";
     }
     var bubble = document.getElementById("nao-bubble"); if (bubble) bubble.hidden = true;
-    connected = false; sessionGeneration += 1;
+    connected = false; sessionGeneration += 1; outputCode = null;
     if (requestController) requestController.abort();
     robot.actuators.fill(0); if (worldRenderer) worldRenderer.bodyDirty = true;
     transport.textContent = "disconnected"; connectButton.textContent = "Connect with local consent";

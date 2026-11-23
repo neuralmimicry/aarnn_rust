@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Fenced commit boundary for the stable multi-shard reference executor.
 //!
 //! This adapter makes the whole-fabric checkpoint set the commit point for a

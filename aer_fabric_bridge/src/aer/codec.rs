@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 use crate::aer::event::{AerEvent, AerFlags};
 use crate::aer::packet::{
     AER_PACKET_MAGIC, AER_PACKET_VERSION, EVENT_WIRE_SIZE, HEADER_WIRE_SIZE, MAX_EVENTS_PER_PACKET,

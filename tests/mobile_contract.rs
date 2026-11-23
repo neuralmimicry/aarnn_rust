@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Host-side contract coverage for the cross-platform mobile track.
 //!
 //! These tests intentionally exercise only the platform-neutral seam.  They do

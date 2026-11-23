@@ -1,4 +1,7 @@
-// Copyright NeuralMimicry. All Rights Reserved.
+// SPDX-FileCopyrightText: NEURALMIMICRY LTD
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -96,8 +99,15 @@ public:
     // Called from actor Tick for buoyancy
     void ApplyBuoyancy();
 
+protected:
+    virtual void ResetGradedDecode() override { GradedChannels.Reset(); }
+
 private:
     float SampleSegmentLateralProximity(int32 SegIdx, bool bLeftSide) const;
+
+    // Graded (pulse-density) brain: per-channel linear decode of the body
+    // channels, fed to this body's own segment mixing.
+    NmOutputDecode::FGradedJoints GradedChannels = NmOutputDecode::FGradedJoints::Identity(NumBodyActuators);
 };
 
 // ---------------------------------------------------------------------------

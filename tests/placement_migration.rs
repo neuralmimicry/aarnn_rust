@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 //! Public-contract verification for deterministic placement and migration.
 //!
 //! These tests intentionally use the library boundary.  They prove the

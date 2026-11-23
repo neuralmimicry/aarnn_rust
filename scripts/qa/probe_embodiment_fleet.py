@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """Actual two-same-type + crow reference brains in one native contact world.
 
 Exercises strict identity/mapping handshakes and independent asynchronous

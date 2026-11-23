@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
 """
 Convert aarnn_rust JSON snapshot (Runner::export_network_json)
 to a TFLite MLP with Dense(linear) layers.

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "profile_id": "celegans",
-  "model_digest": "7687426ce736983704a1d9b1ae1d36dc57431ffebe9cab075a5ff319444632a6",
-  "io_digest": "07baf3479ae1d5d5cce4bbecde7b970f29ac6cfe96a0177748def6f310784c0c",
+  "model_digest": "bd9830fe7e7dff95673d8a9e859d0eb1cc685b861d0458a18b0c8819da056bf7",
+  "io_digest": "6e34cd92e33c31062202dadd3aff8095e0319c61db6a297c90fc686d56094361",
   "targets": [
     {
       "joint": "celegans_spine_02",
@@ -11,19 +11,20 @@
       "body": 2,
       "kind": "rotational",
       "actuator": 0,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_03",
@@ -32,19 +33,20 @@
       "body": 3,
       "kind": "rotational",
       "actuator": 1,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_04",
@@ -53,19 +55,20 @@
       "body": 4,
       "kind": "rotational",
       "actuator": 2,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_05",
@@ -74,19 +77,20 @@
       "body": 5,
       "kind": "rotational",
       "actuator": 3,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_06",
@@ -95,19 +99,20 @@
       "body": 6,
       "kind": "rotational",
       "actuator": 4,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_07",
@@ -116,19 +121,20 @@
       "body": 7,
       "kind": "rotational",
       "actuator": 5,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_08",
@@ -137,19 +143,20 @@
       "body": 8,
       "kind": "rotational",
       "actuator": 6,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_09",
@@ -158,19 +165,20 @@
       "body": 9,
       "kind": "rotational",
       "actuator": 7,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_10",
@@ -179,19 +187,20 @@
       "body": 10,
       "kind": "rotational",
       "actuator": 8,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_11",
@@ -200,19 +209,20 @@
       "body": 11,
       "kind": "rotational",
       "actuator": 9,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_12",
@@ -221,19 +231,20 @@
       "body": 12,
       "kind": "rotational",
       "actuator": 10,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_13",
@@ -242,19 +253,20 @@
       "body": 13,
       "kind": "rotational",
       "actuator": 11,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_14",
@@ -263,19 +275,20 @@
       "body": 14,
       "kind": "rotational",
       "actuator": 12,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_15",
@@ -284,19 +297,20 @@
       "body": 15,
       "kind": "rotational",
       "actuator": 13,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_16",
@@ -305,19 +319,20 @@
       "body": 16,
       "kind": "rotational",
       "actuator": 14,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_17",
@@ -326,19 +341,20 @@
       "body": 17,
       "kind": "rotational",
       "actuator": 15,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_18",
@@ -347,19 +363,20 @@
       "body": 18,
       "kind": "rotational",
       "actuator": 16,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_19",
@@ -368,19 +385,20 @@
       "body": 19,
       "kind": "rotational",
       "actuator": 17,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_20",
@@ -389,19 +407,20 @@
       "body": 20,
       "kind": "rotational",
       "actuator": 18,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_21",
@@ -410,19 +429,20 @@
       "body": 21,
       "kind": "rotational",
       "actuator": 19,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_22",
@@ -431,19 +451,20 @@
       "body": 22,
       "kind": "rotational",
       "actuator": 20,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_23",
@@ -452,19 +473,20 @@
       "body": 23,
       "kind": "rotational",
       "actuator": 21,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     },
     {
       "joint": "celegans_spine_24",
@@ -473,30 +495,31 @@
       "body": 24,
       "kind": "rotational",
       "actuator": 22,
-      "gain": 0.05,
+      "gain": 0.2,
       "bias": [
         0.0,
-        -0.05,
+        -0.2,
         -0.0015
       ],
       "gear": 1.0,
       "force_range": [
-        -0.006,
-        0.006
+        -0.03,
+        0.03
       ],
-      "damping": 0.02,
-      "driven": true
+      "damping": 0.002,
+      "driven": true,
+      "qpos0": 0.0
     }
   ],
   "constraints": [],
   "fixed_world_bodies": [],
   "composite_mass_kg": 0.16319999999999998,
-  "controller_transfer": "celegans-muscle-v2-sim-v1; uncalibrated sensory proxies and mechanics",
+  "controller_transfer": "celegans-muscle-v3-sim-v1; analytic stimulus fields, proprioception and resistive-force substrate; uncalibrated",
   "calibration": "ODE contact/constraint response not calibrated; all self-collision suppressed; mesh collisions use Webots dynamic convex policy; fixed-link masses merged exactly",
   "coordinates": "X-forward Y-left Z-up; SI",
   "scope": "native articulated source; runtime and learned task gates independent",
   "scene": {
-    "version": "native-habitats-v1",
+    "version": "celegans-habitat-v3",
     "habitat_id": "agar",
     "title": "Agar microhabitat",
     "half_extent_m": 0.65,
@@ -4106,8 +4129,253 @@
         "internal": false
       }
     ],
-    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
+    "scientific_status": "analytic stimulus fields (normalised [0,1]) derived from the habitat objects; qualitative agar-plate assays, not measured chemistry or temperature",
+    "stimuli": [
+      {
+        "field": "attractant_volatile",
+        "shape": "gaussian",
+        "center": [
+          0.273,
+          0.13
+        ],
+        "radii": [
+          0.20950000000000002,
+          0.17960000000000004
+        ],
+        "strength": 0.8,
+        "source": "bacterial_lawn_0"
+      },
+      {
+        "field": "attractant_soluble",
+        "shape": "ellipse",
+        "center": [
+          0.273,
+          0.13
+        ],
+        "radii": [
+          0.14950000000000002,
+          0.11960000000000003
+        ],
+        "edge": 0.03,
+        "strength": 0.85,
+        "source": "bacterial_lawn_0"
+      },
+      {
+        "field": "oxygen",
+        "shape": "ellipse",
+        "center": [
+          0.273,
+          0.13
+        ],
+        "radii": [
+          0.14950000000000002,
+          0.11960000000000003
+        ],
+        "edge": 0.03,
+        "strength": -0.35,
+        "source": "bacterial_lawn_0"
+      },
+      {
+        "field": "attractant_volatile",
+        "shape": "gaussian",
+        "center": [
+          -0.312,
+          -0.156
+        ],
+        "radii": [
+          0.164,
+          0.1432
+        ],
+        "strength": 0.6,
+        "source": "bacterial_lawn_1"
+      },
+      {
+        "field": "attractant_soluble",
+        "shape": "ellipse",
+        "center": [
+          -0.312,
+          -0.156
+        ],
+        "radii": [
+          0.10400000000000001,
+          0.08320000000000001
+        ],
+        "edge": 0.03,
+        "strength": 0.85,
+        "source": "bacterial_lawn_1"
+      },
+      {
+        "field": "oxygen",
+        "shape": "ellipse",
+        "center": [
+          -0.312,
+          -0.156
+        ],
+        "radii": [
+          0.10400000000000001,
+          0.08320000000000001
+        ],
+        "edge": 0.03,
+        "strength": -0.35,
+        "source": "bacterial_lawn_1"
+      },
+      {
+        "field": "attractant_volatile",
+        "shape": "gaussian",
+        "center": [
+          0.1625,
+          -0.42250000000000004
+        ],
+        "radii": [
+          0.14450000000000002,
+          0.1276
+        ],
+        "strength": 0.5,
+        "source": "bacterial_lawn_2"
+      },
+      {
+        "field": "attractant_soluble",
+        "shape": "ellipse",
+        "center": [
+          0.1625,
+          -0.42250000000000004
+        ],
+        "radii": [
+          0.0845,
+          0.06760000000000001
+        ],
+        "edge": 0.03,
+        "strength": 0.85,
+        "source": "bacterial_lawn_2"
+      },
+      {
+        "field": "oxygen",
+        "shape": "ellipse",
+        "center": [
+          0.1625,
+          -0.42250000000000004
+        ],
+        "radii": [
+          0.0845,
+          0.06760000000000001
+        ],
+        "edge": 0.03,
+        "strength": -0.35,
+        "source": "bacterial_lawn_2"
+      },
+      {
+        "field": "oxygen",
+        "shape": "constant",
+        "strength": 0.6,
+        "source": "ambient air (21 % O2 -> 0.6)"
+      },
+      {
+        "field": "attractant_soluble",
+        "shape": "gaussian",
+        "center": [
+          -0.06,
+          -0.3
+        ],
+        "radii": [
+          0.08,
+          0.08
+        ],
+        "strength": 0.6,
+        "source": "salt_spot"
+      },
+      {
+        "field": "repellent_soluble",
+        "shape": "ring",
+        "center": [
+          0.1625,
+          -0.42250000000000004
+        ],
+        "radius": 0.1295,
+        "width": 0.018,
+        "strength": 1.0,
+        "source": "copper_ring"
+      },
+      {
+        "field": "repellent_soluble",
+        "shape": "gaussian",
+        "center": [
+          -0.4,
+          0.07
+        ],
+        "radii": [
+          0.06,
+          0.06
+        ],
+        "strength": 1.0,
+        "source": "repellent_spot"
+      },
+      {
+        "field": "temperature",
+        "shape": "linear",
+        "offset": 0.5,
+        "gradient": [
+          0.4615384615384615,
+          0.0
+        ],
+        "source": "plate thermal gradient"
+      },
+      {
+        "field": "temperature",
+        "shape": "gaussian",
+        "center": [
+          -0.46799999999999997,
+          0.338
+        ],
+        "radii": [
+          0.1,
+          0.1
+        ],
+        "strength": 0.35,
+        "source": "warm_patch"
+      },
+      {
+        "field": "temperature",
+        "shape": "gaussian",
+        "center": [
+          0.45499999999999996,
+          -0.26
+        ],
+        "radii": [
+          0.1,
+          0.1
+        ],
+        "strength": -0.35,
+        "source": "cool_moist_refuge"
+      },
+      {
+        "field": "light",
+        "shape": "gaussian",
+        "center": [
+          0.4745,
+          0.4745
+        ],
+        "radii": [
+          0.13,
+          0.13
+        ],
+        "strength": 1.0,
+        "source": "light_beacon"
+      }
+    ],
+    "taps": {
+      "period_s": 15.0,
+      "first_s": 7.5,
+      "duration_s": 0.006,
+      "acceleration_mps2": 40.0,
+      "note": "plate tap: vertical whole-body acceleration pulse (touch-receptor tap response)"
+    },
+    "resistive_force": {
+      "tangential_N_s_per_m": 0.01,
+      "normal_N_s_per_m": 0.2,
+      "ratio": 20.0,
+      "note": "resistive force theory for a nematode on agar (Wallace 1968; Berri 2009); calibrated with a programmed travelling wave"
+    }
   },
-  "world_geometry_count": 133,
-  "digest": "9a9417b754f4fd457aaa68550537e1a09f101b11b8ede0a68417095688ddbf94"
+  "world_geometry_count": 171,
+  "digest": "38268329592749908ad200475379e9979acbe4781bd5ae77ff79561b49d3d23b"
 }

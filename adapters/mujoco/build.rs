@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: masterkiga
+// SPDX-License-Identifier: MIT
+//
+// Licensed under the MIT License. See LICENSE in the project root.
 fn main() {
     println!("cargo:rerun-if-env-changed=AARNN_MUJOCO_DIR");
     #[cfg(feature = "native")]
