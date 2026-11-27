@@ -195,7 +195,10 @@ jobs:
             local attempts="${1:-6}"
             local attempt=1
             while true; do
+              # Self-hosted runners run unattended-upgrades; wait for its
+              # dpkg lock instead of failing (ARM64 verify, 24 Nov 2026).
               if sudo apt-get \
+                -o DPkg::Lock::Timeout=900 \
                 -o Acquire::ForceIPv4=true \
                 -o Acquire::Retries=5 \
                 -o Acquire::http::Timeout=30 \
@@ -221,6 +224,7 @@ jobs:
                 -y \
                 --no-install-recommends \
                 --allow-downgrades \
+                -o DPkg::Lock::Timeout=900 \
                 -o Acquire::ForceIPv4=true \
                 -o Acquire::Retries=5 \
                 -o Acquire::http::Timeout=30 \
