@@ -1,0 +1,95 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
+#
+# Functional contract for the authored circuit explorer-synthetic-sensorimotor-v1
+# (crates/aarnn-explorer/src/author.rs::demo_circuit). Channels: A go cue,
+# B no-go cue, C memory cue, P probe, SL/SR heading sensors. Outputs: O_go,
+# O_mem, OL/OR (turning). Times in ms; frames are 2 ms. These are software
+# fixtures for an authored circuit, not claims about animal behaviour.
+schema_version = 1
+name = "synthetic-sensorimotor-v1"
+
+[splits]
+development = [1, 2, 3, 4, 5, 6]
+locked_validation = [101, 102, 103, 104, 105, 106, 107, 108]
+
+[[task]]
+id = "go"
+family = "discrimination"
+duration_ms = 120
+jitter_ms = 4
+stimulus = [{ channel = "A", start_ms = 40, end_ms = 42, value = 1.0, jitter = true }]
+measure = [
+  { name = "go_spikes", output = "O_go", start_ms = 30, end_ms = 90, stat = "spikes" },
+  { name = "go_latency_ms", output = "O_go", start_ms = 30, end_ms = 90, stat = "latency_ms", from_channel = "A", level = 0.25 },
+]
+criterion = [
+  { measure = "go_spikes", op = ">=", value = 1.0 },
+  { measure = "go_latency_ms", op = "reference-plus", value = 10.0, amount = 1.0 },
+]
+
+[[task]]
+id = "nogo"
+family = "discrimination"
+duration_ms = 120
+jitter_ms = 4
+stimulus = [
+  { channel = "A", start_ms = 40, end_ms = 42, value = 1.0, jitter = true },
+  { channel = "B", start_ms = 36, end_ms = 100, value = 1.0, jitter = true },
+]
+measure = [{ name = "go_spikes", output = "O_go", start_ms = 30, end_ms = 90, stat = "spikes" }]
+criterion = [{ measure = "go_spikes", op = "<=", value = 0.0 }]
+
+[[task]]
+id = "quiet"
+family = "quiescence"
+duration_ms = 200
+measure = [
+  { name = "go", output = "O_go", stat = "spikes" },
+  { name = "mem", output = "O_mem", stat = "spikes" },
+  { name = "turn_l", output = "OL", stat = "spikes" },
+  { name = "turn_r", output = "OR", stat = "spikes" },
+]
+criterion = [
+  { measure = "go", op = "<=", value = 0.0 },
+  { measure = "mem", op = "<=", value = 0.0 },
+  { measure = "turn_l", op = "<=", value = 0.0 },
+  { measure = "turn_r", op = "<=", value = 0.0 },
+]
+
+[[task]]
+id = "memory-hit"
+family = "memory"
+duration_ms = 300
+jitter_ms = 6
+stimulus = [
+  { channel = "C", start_ms = 20, end_ms = 22, value = 1.0 },
+  { channel = "P", start_ms = 220, end_ms = 222, value = 1.0, jitter = true },
+]
+measure = [{ name = "mem_spikes", output = "O_mem", start_ms = 210, end_ms = 260, stat = "spikes" }]
+criterion = [{ measure = "mem_spikes", op = ">=", value = 1.0 }]
+
+[[task]]
+id = "memory-miss"
+family = "memory"
+duration_ms = 300
+jitter_ms = 6
+stimulus = [{ channel = "P", start_ms = 220, end_ms = 222, value = 1.0, jitter = true }]
+measure = [{ name = "mem_spikes", output = "O_mem", start_ms = 210, end_ms = 260, stat = "spikes" }]
+criterion = [{ measure = "mem_spikes", op = "<=", value = 0.0 }]
+
+[[task]]
+id = "steer"
+family = "closed-loop"
+duration_ms = 1600
+plant = { kind = "heading", left_channel = "SL", right_channel = "SR", left_output = "OL", right_output = "OR", gain_deg = 2.0, initial_error_deg = [30.0, 80.0], tolerance_deg = 5.0 }
+measure = [
+  { name = "final_error_deg", output = "plant", stat = "plant_final" },
+  { name = "settle_ms", output = "plant", stat = "plant_settle_ms" },
+]
+criterion = [
+  { measure = "final_error_deg", op = "<=", value = 5.0 },
+  { measure = "settle_ms", op = "<=", value = 1400.0 },
+]

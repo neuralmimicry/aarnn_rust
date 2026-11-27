@@ -1,0 +1,398 @@
+{
+  "dataset": {
+    "coverage": "complete (authored circuit)",
+    "licence": "MIT (project-authored)",
+    "name": "explorer-synthetic-sensorimotor-v1",
+    "specimen": "synthetic",
+    "version": "authored-1"
+  },
+  "dynamics": {
+    "assumption_version": "authored-exact-spiking-v1",
+    "cell_types": {
+      "Exc": {
+        "adaptive_threshold_enabled": false,
+        "dendritic_active_enabled": false,
+        "graded_enabled": false,
+        "homeostasis_gain": 0.0,
+        "nmda_ratio": 0.0,
+        "stp_enabled": false,
+        "tonic_current": 0.0
+      },
+      "Inh": {
+        "adaptive_threshold_enabled": false,
+        "dendritic_active_enabled": false,
+        "graded_enabled": false,
+        "homeostasis_gain": 0.0,
+        "izh_preset": "FS",
+        "nmda_ratio": 0.0,
+        "stp_enabled": false,
+        "tonic_current": 0.0
+      },
+      "Loop": {
+        "adaptive_threshold_enabled": false,
+        "dendritic_active_enabled": false,
+        "graded_enabled": false,
+        "homeostasis_gain": 0.0,
+        "izh_preset": "FS",
+        "nmda_ratio": 0.0,
+        "stp_enabled": false,
+        "tonic_current": 0.0
+      }
+    },
+    "weight_conversion": "explicit-weight"
+  },
+  "edges": [
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "G1a",
+      "pre": "A",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "G2a",
+      "pre": "G1a",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "O_go",
+      "pre": "G2a",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "G1b",
+      "pre": "A",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "G2b",
+      "pre": "G1b",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "O_go",
+      "pre": "G2b",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "I",
+      "pre": "B",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "O_go",
+      "pre": "I",
+      "weight": -16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "G2a",
+      "pre": "I",
+      "weight": -16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "G2b",
+      "pre": "I",
+      "weight": -16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "M1",
+      "pre": "C",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "M2",
+      "pre": "M1",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "M3",
+      "pre": "M2",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "M1",
+      "pre": "M3",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "Q",
+      "pre": "M3",
+      "weight": 1.5
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "Q",
+      "pre": "P",
+      "weight": 2.5
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "O_mem",
+      "pre": "Q",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "TL",
+      "pre": "SL",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "OL",
+      "pre": "TL",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "TL2",
+      "pre": "SL",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "OL",
+      "pre": "TL2",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "TR",
+      "pre": "SR",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "OR",
+      "pre": "TR",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "TR2",
+      "pre": "SR",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "OR",
+      "pre": "TR2",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "D1",
+      "pre": "A",
+      "weight": 16.0
+    },
+    {
+      "class": "chemical",
+      "delay_ticks": 1,
+      "post": "D2",
+      "pre": "D1",
+      "weight": 16.0
+    }
+  ],
+  "neurons": [
+    {
+      "id": "A",
+      "region": "sensory",
+      "role": "sensory",
+      "type": ""
+    },
+    {
+      "id": "B",
+      "region": "sensory",
+      "role": "sensory",
+      "type": ""
+    },
+    {
+      "id": "C",
+      "region": "sensory",
+      "role": "sensory",
+      "type": ""
+    },
+    {
+      "id": "P",
+      "region": "sensory",
+      "role": "sensory",
+      "type": ""
+    },
+    {
+      "id": "SL",
+      "region": "sensory",
+      "role": "sensory",
+      "type": ""
+    },
+    {
+      "id": "SR",
+      "region": "sensory",
+      "role": "sensory",
+      "type": ""
+    },
+    {
+      "id": "G1a",
+      "region": "go",
+      "role": "hidden",
+      "type": "Exc"
+    },
+    {
+      "id": "G2a",
+      "region": "go",
+      "role": "hidden",
+      "type": "Exc"
+    },
+    {
+      "id": "G1b",
+      "region": "go",
+      "role": "hidden",
+      "type": "Exc"
+    },
+    {
+      "id": "G2b",
+      "region": "go",
+      "role": "hidden",
+      "type": "Exc"
+    },
+    {
+      "id": "I",
+      "region": "nogo",
+      "role": "hidden",
+      "type": "Inh"
+    },
+    {
+      "id": "M1",
+      "region": "memory",
+      "role": "hidden",
+      "type": "Loop"
+    },
+    {
+      "id": "M2",
+      "region": "memory",
+      "role": "hidden",
+      "type": "Loop"
+    },
+    {
+      "id": "M3",
+      "region": "memory",
+      "role": "hidden",
+      "type": "Loop"
+    },
+    {
+      "id": "Q",
+      "region": "memory",
+      "role": "hidden",
+      "type": "Exc"
+    },
+    {
+      "id": "TL",
+      "region": "steer",
+      "role": "hidden",
+      "type": "Exc"
+    },
+    {
+      "id": "TL2",
+      "region": "steer",
+      "role": "hidden",
+      "type": "Exc"
+    },
+    {
+      "id": "TR",
+      "region": "steer",
+      "role": "hidden",
+      "type": "Exc"
+    },
+    {
+      "id": "TR2",
+      "region": "steer",
+      "role": "hidden",
+      "type": "Exc"
+    },
+    {
+      "id": "D1",
+      "region": "deadend",
+      "role": "hidden",
+      "type": "Exc"
+    },
+    {
+      "id": "D2",
+      "region": "deadend",
+      "role": "hidden",
+      "type": "Exc"
+    },
+    {
+      "id": "Z",
+      "region": "isolated",
+      "role": "hidden",
+      "type": "Exc"
+    },
+    {
+      "id": "O_go",
+      "region": "motor",
+      "role": "output",
+      "type": "Exc"
+    },
+    {
+      "id": "O_mem",
+      "region": "motor",
+      "role": "output",
+      "type": "Exc"
+    },
+    {
+      "id": "OL",
+      "region": "motor",
+      "role": "output",
+      "type": "Exc"
+    },
+    {
+      "id": "OR",
+      "region": "motor",
+      "role": "output",
+      "type": "Exc"
+    }
+  ],
+  "schema": "aarnn-explorer-sparse-v1",
+  "units": {
+    "delay": "ticks",
+    "weight": "aarnn-native"
+  }
+}

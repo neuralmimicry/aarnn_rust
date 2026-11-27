@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
+id = "EX-EXPLORER-001"
+version = 1
+title = "Connectome explorer offline end-to-end demonstration"
+requirements = ["EXPLORER-IMPORT", "EXPLORER-TRACE", "EXPLORER-GNAT", "EXPLORER-LESION", "EXPLORER-TASK", "EXPLORER-RESILIENCE", "EXPLORER-OPTIMISE", "EXPLORER-EXPORT", "INV-007", "INV-008", "INV-012"]
+products = ["host"]
+mode = "isolated-reference-experiments"
+seed = 20261125
+logical_stop = "task duration per trial (120-1600 ms of 1 ms ticks)"
+oracle = "demo report: intact passes; a damaging lesion fails; a physically smaller candidate passes the locked split; the compact candidate fails the resilient profile's single-fault claim; the exported bundle reproduces its validation in a clean process"
+required_artifacts = ["demo-report.json", "export-compact/manifest.json", "export-compact/sha256sums.txt"]
+model_fixture_digest = "file:examples/explorer/models/synthetic_sensorimotor.sparse.json"
+config_fixture_digest = "file:configs/explorer/default.toml+configs/explorer/resilient.toml"
+input_fixture_digest = "file:examples/explorer/tasks/synthetic_sensorimotor.toml"
+target_triples = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+capabilities = ["cpu", "legacy-runner", "worker-processes"]
+device_requirement = "host-reference"
+resource_bounds = "1 worker process, 1 thread per worker, 4 GiB memory budget, 300 s wall per worker"
+latency_bounds = "not a real-time claim; wall time recorded per job"
+reference_profile = "aarnn-cpu-native (f64 reference)"
+expected_digest_procedure = "per-task mean measures of the exported candidate must equal its locked validation record (deterministic replay within the profile)"
+admission_loss_policy = "no post-admission loss; trace sequence continuity is verified on load"

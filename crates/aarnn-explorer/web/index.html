@@ -1,0 +1,63 @@
+<!-- SPDX-FileCopyrightText: masterkiga -->
+<!-- SPDX-License-Identifier: MIT -->
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="explorer-csrf" content="__CSRF__">
+<title>AARNN connectome explorer</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/ui/style.css">
+<script src="/ui/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to the current view</a>
+<header class="top">
+  <div class="brand">
+    <h1>AARNN connectome explorer</h1>
+    <p class="sub">Rust performs every analysis, experiment and verdict. This page only presents bounded views and submits jobs.</p>
+  </div>
+  <div class="field srcpick">
+    <label for="global-source">Source</label>
+    <select id="global-source"><option value="">Loading…</option></select>
+  </div>
+</header>
+<nav class="tabs-wrap" aria-label="Explorer views">
+  <div role="tablist" id="tabs" aria-label="Explorer views">
+    <button type="button" role="tab" id="tab-project" aria-controls="panel-project" data-view="project">Project</button>
+    <button type="button" role="tab" id="tab-connectome" aria-controls="panel-connectome" data-view="connectome">Connectome</button>
+    <button type="button" role="tab" id="tab-activity" aria-controls="panel-activity" data-view="activity">Activity</button>
+    <button type="button" role="tab" id="tab-gnats" aria-controls="panel-gnats" data-view="gnats">GNATs and motifs</button>
+    <button type="button" role="tab" id="tab-intervention" aria-controls="panel-intervention" data-view="intervention">Intervention</button>
+    <button type="button" role="tab" id="tab-comparison" aria-controls="panel-comparison" data-view="comparison">Comparison</button>
+    <button type="button" role="tab" id="tab-resilience" aria-controls="panel-resilience" data-view="resilience">Resilience</button>
+    <button type="button" role="tab" id="tab-optimisation" aria-controls="panel-optimisation" data-view="optimisation">Optimisation</button>
+    <button type="button" role="tab" id="tab-export" aria-controls="panel-export" data-view="export">Export and evidence</button>
+    <button type="button" role="tab" id="tab-status" aria-controls="panel-status" data-view="status">Resources and status</button>
+  </div>
+</nav>
+<section class="jobbar" aria-labelledby="jobs-heading">
+  <h2 id="jobs-heading" class="vh">Jobs</h2>
+  <p id="announce" class="announce" role="status" aria-live="polite"></p>
+  <ul id="job-list" class="joblist"></ul>
+</section>
+<main id="main" tabindex="-1">
+  <section role="tabpanel" id="panel-project" aria-labelledby="tab-project" tabindex="0" hidden><div class="view" id="v-project"></div></section>
+  <section role="tabpanel" id="panel-connectome" aria-labelledby="tab-connectome" tabindex="0" hidden><div class="view" id="v-connectome"></div></section>
+  <section role="tabpanel" id="panel-activity" aria-labelledby="tab-activity" tabindex="0" hidden><div class="view" id="v-activity"></div></section>
+  <section role="tabpanel" id="panel-gnats" aria-labelledby="tab-gnats" tabindex="0" hidden><div class="view" id="v-gnats"></div></section>
+  <section role="tabpanel" id="panel-intervention" aria-labelledby="tab-intervention" tabindex="0" hidden><div class="view" id="v-intervention"></div></section>
+  <section role="tabpanel" id="panel-comparison" aria-labelledby="tab-comparison" tabindex="0" hidden><div class="view" id="v-comparison"></div></section>
+  <section role="tabpanel" id="panel-resilience" aria-labelledby="tab-resilience" tabindex="0" hidden><div class="view" id="v-resilience"></div></section>
+  <section role="tabpanel" id="panel-optimisation" aria-labelledby="tab-optimisation" tabindex="0" hidden><div class="view" id="v-optimisation"></div></section>
+  <section role="tabpanel" id="panel-export" aria-labelledby="tab-export" tabindex="0" hidden><div class="view" id="v-export"></div></section>
+  <section role="tabpanel" id="panel-status" aria-labelledby="tab-status" tabindex="0" hidden><div class="view" id="v-status"></div></section>
+  <noscript><p class="error">This explorer needs JavaScript (served from this binary; no external code).</p></noscript>
+</main>
+<footer class="foot">
+  <p>Claim boundaries: behavioural preservation, reference agreement, resilience, biological validity and hardware benefit are separate claims, each judged on its own evidence. A succeeded job is not a passed validation. Display selections never act on a live brain: every experiment runs on an isolated copy.</p>
+</footer>
+</body>
+</html>
