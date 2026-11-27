@@ -8,7 +8,7 @@
   "exact_replica": "pending OEM variant and calibration",
   "controller_transfer": "untrained",
   "source": "scripts/embodiment_archetypes.py:build",
-  "source_digest": "a2f0a10b13d7e755b75aca98929838ce2987f528a83c351b97123c5f4089ad5f",
+  "source_digest": "24bcc91ee720267a171386c5cdfa4099bc85ee10cefdd8c397f62e895668ddf9",
   "policy_digest": "35a2dbc6477ae9308c4f5eae4d09ccffc2f7aadce2cb54ce29018d63e43b9e2f",
   "io": {
     "schema_version": 1,
@@ -3016,9 +3016,9 @@
     ],
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
-  "scene_sources_sha256": "a715a28f67ac75c9624deb144618f412dae8688b833c24e07b4ae9e8838d2884",
+  "scene_sources_sha256": "f0ad36be6e4a13ae9f1747ba14d4ad5085d43896fe8f18d87c6169e1caaf33a3",
   "anatomy_sources_sha256": "76e90c0ee8947775dbfb7ae187162c7c383557a5343383f64af84d2e625f2bd1",
-  "neural_sources_sha256": "491b1c8df3570eda7bb994493ecd7617ca21066362363aaaec542de36deab729",
+  "neural_sources_sha256": "c4d6f92f5b435c040ea1d350ff17af6aac8f2625487a3987aeb9775d7f9cbafe",
   "bodies": [
     {
       "name": "fixed_counter",
@@ -6746,5 +6746,5 @@
       "polycoef": "0.0 1.0 0.0 0.0 0.0"
     }
   ],
-  "digest": "ca7dc4908920fe6ca72f42df3aa981b92b29fbe19f883b4b8837a3bd3495c4d5"
+  "digest": "9cc0f82fe22400d9418605c0df8b16e015e9d21b47c6c65e460b2d5c38ec209f"
 }

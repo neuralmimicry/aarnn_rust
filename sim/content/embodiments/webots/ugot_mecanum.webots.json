@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "ugot_mecanum",
-  "model_digest": "c62f0638e3292a20851281ce40f03530b0fc8c62e845f0c71f9a57775c285490",
+  "model_digest": "4133fb0ccbcd618085972c7623363133b7243f680ee49f900122f5ba1dd62b48",
   "io_digest": "ce881cb857c332e8022959cf0401c51d36643bf7271a86279fc655d048a479de",
   "targets": [
     {
@@ -3858,5 +3858,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 110,
-  "digest": "19e4dc93914ec06d32199ef24b6def401c50b9e39996f7ca7d0496dfd4dde4ba"
+  "digest": "55148abe9190b7f0ca66773d78ce1a9d47fec7a01cbdae7f2efc0f16469998f0"
 }

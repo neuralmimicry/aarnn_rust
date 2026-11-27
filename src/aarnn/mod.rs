@@ -23,6 +23,8 @@
 
 /// Current-domain and state-update primitives for AARNN signal propagation.
 pub mod dynamics;
+/// Dopamine / serotonin / noradrenaline / acetylcholine modulation of synaptic transmission.
+pub mod neuromodulation;
 /// Synaptic resource updates, release modeling, and long-timescale plasticity constraints.
 pub mod plasticity;
 /// Morphology-aware conduction delay and attenuation utilities.

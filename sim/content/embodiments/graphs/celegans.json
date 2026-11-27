@@ -3,8 +3,8 @@
   "compiler": "embodiment-rigid-graph-v2",
   "digest_encoding": "embodiment-binary-v1",
   "profile_id": "celegans",
-  "model_digest": "bd9830fe7e7dff95673d8a9e859d0eb1cc685b861d0458a18b0c8819da056bf7",
-  "io_digest": "6e34cd92e33c31062202dadd3aff8095e0319c61db6a297c90fc686d56094361",
+  "model_digest": "dde6cefb2af5b6ed20809e7b8d702bee10e9af7c4c7d7d54f7fff7e17d32265e",
+  "io_digest": "b2d5061eb47ec0fd76e64112b0bd5ffa14a4c096985bf569082f99d396563324",
   "fidelity": "functional-surrogate",
   "variant_id": "tapered-cuticle-v3",
   "controller_transfer": "celegans-muscle-v3-sim-v1; analytic stimulus fields, proprioception and resistive-force substrate; uncalibrated",
@@ -111432,7 +111432,21 @@
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
-        "body": "segment_23"
+        "body": "segment_23",
+        "bodies": [
+          "segment_12",
+          "segment_13",
+          "segment_14",
+          "segment_15",
+          "segment_16",
+          "segment_17",
+          "segment_18",
+          "segment_19",
+          "segment_20",
+          "segment_21",
+          "segment_22",
+          "segment_23"
+        ]
       },
       {
         "name": "celegans_s_07_touch_rear",
@@ -111444,7 +111458,21 @@
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
-        "body": "segment_00"
+        "body": "segment_00",
+        "bodies": [
+          "segment_00",
+          "segment_01",
+          "segment_02",
+          "segment_03",
+          "segment_04",
+          "segment_05",
+          "segment_06",
+          "segment_07",
+          "segment_08",
+          "segment_09",
+          "segment_10",
+          "segment_11"
+        ]
       },
       {
         "name": "celegans_s_08_light_left",
@@ -112158,7 +112186,7 @@
       "neutral": "zero active effort; no twitch fallback",
       "calibration": "functional surrogate; twitch summation, head-to-tail rows; not measured muscle physiology"
     },
-    "digest": "6e34cd92e33c31062202dadd3aff8095e0319c61db6a297c90fc686d56094361"
+    "digest": "b2d5061eb47ec0fd76e64112b0bd5ffa14a4c096985bf569082f99d396563324"
   },
   "calibration": "native solver, collision/mesh convex approximation and compliant equality coupling require target calibration; no learned-task assertion",
   "world_geoms": [
@@ -122909,5 +122937,5 @@
     }
   ],
   "collision_filter_scope": "source masks aggregated per rigid cluster; joint-neighbour exclusions native; different instances retain external contact",
-  "digest": "59e3770658fd3eea051a0f8332c686164d92df60126d73bf0a2258d96441edce"
+  "digest": "68fabf63c392c75eaf650e8fed0079b91e0fbe04d3ab7c4ea62047f0fb3562db"
 }

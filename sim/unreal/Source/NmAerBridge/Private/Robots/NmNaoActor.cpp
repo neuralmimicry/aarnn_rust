@@ -210,26 +210,58 @@ void UNmNaoComponent::CollectSensors(TArray<float>& OutSensors)
     }
 
     const ANmNaoActor* NaoActor = Cast<ANmNaoActor>(Owner);
-    const float MaxSonar = NaoActor ? NaoActor->MaxSonarRangeCm : 255.f;
+    const float MaxSonar = NaoActor ? NaoActor->MaxSonarRangeCm : 80.f;
 
-    // --- Sonar [0..1]: sphere trace forward-left/right ---
+    // --- Sonar [0..1]: NAO V6 chest transducers (Webots V5 pose, torso frame
+    // x fwd / y left / z up: (4.77, +-4.16, 5.09) cm, axis 25.8 deg out and
+    // 13.6 deg down), a 60 deg cone of 91 rays (the record's cone_rays),
+    // nearest echo, 20-80 cm, rays striking a surface more than 22.5 deg from
+    // its normal are reflected away (the record's legacy-range contract).
     if (TorsoMesh)
     {
-        const FVector TorsoLoc = TorsoMesh->GetComponentLocation();
-        const FVector Fwd = TorsoMesh->GetForwardVector();
-        const FVector Right = TorsoMesh->GetRightVector();
-
-        auto SphereSonar = [&](const FVector& Dir) -> float
+        const FTransform Torso = TorsoMesh->GetComponentTransform();
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(NmNaoSonar), false, GetOwner());
+        auto ConeSonar = [&](float LeftSign) -> float
         {
-            FHitResult Hit;
-            const bool bHit = World->SweepSingleByChannel(
-                Hit, TorsoLoc, TorsoLoc + Dir * MaxSonar,
-                FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(3.f));
-            return bHit ? (1.f - (Hit.Distance / MaxSonar)) : 0.f;
+            // Unreal is left-handed: +Y is right, so MuJoCo +y (left) = -Y.
+            const FVector Mount = Torso.TransformPosition(FVector(4.77f, -4.16f * LeftSign, 5.09f));
+            const FVector Axis = FVector(0.8754f, -0.4226f * LeftSign, -0.2346f).GetSafeNormal();
+            const FVector Ref = FMath::Abs(Axis.Z) < 0.9f ? FVector::UpVector : FVector::ForwardVector;
+            const FVector U = FVector::CrossProduct(Ref, Axis).GetSafeNormal();
+            const FVector W = FVector::CrossProduct(Axis, U);
+            float Nearest = MaxSonar;
+            auto Cast = [&](const FVector& LocalDir)
+            {
+                const FVector Dir = Torso.TransformVectorNoScale(LocalDir);
+                FHitResult Hit;
+                if (World->LineTraceSingleByChannel(Hit, Mount, Mount + Dir * MaxSonar, ECC_Visibility, Params)
+                    && Hit.Distance < Nearest)
+                {
+                    const float Incidence = FMath::RadiansToDegrees(
+                        FMath::Acos(FMath::Clamp(FMath::Abs(FVector::DotProduct(-Dir, Hit.ImpactNormal)), 0.f, 1.f)));
+                    if (Incidence <= 22.5f)
+                    {
+                        Nearest = Hit.Distance;
+                    }
+                }
+            };
+            Cast(Axis);
+            for (int32 Ring = 1; Ring <= 5; ++Ring)
+            {
+                const float T = 0.52f * Ring / 5.f;
+                const int32 Per = 6 * Ring;
+                for (int32 J = 0; J < Per; ++J)
+                {
+                    const float Phi = 2.f * PI * (J + 0.5f * (Ring % 2)) / Per;
+                    Cast(FMath::Cos(T) * Axis + FMath::Sin(T) * (FMath::Cos(Phi) * U + FMath::Sin(Phi) * W));
+                }
+            }
+            Nearest = FMath::Max(Nearest, 20.f);
+            return 1.f - FMath::Clamp(Nearest / MaxSonar, 0.f, 1.f);
         };
 
-        OutSensors[0] = SphereSonar(Fwd + Right * 0.3f);   // front-left
-        OutSensors[1] = SphereSonar(Fwd - Right * 0.3f);   // front-right
+        OutSensors[0] = ConeSonar(1.f);    // Sonar/Left
+        OutSensors[1] = ConeSonar(-1.f);   // Sonar/Right
     }
 
     // --- Accelerometer [2..4] ---
@@ -279,7 +311,7 @@ void UNmNaoComponent::CollectSensors(TArray<float>& OutSensors)
         }
     }
 
-    // --- Bumpers [21..22] (foot hit proxies) ---
+    // --- Bumpers [21..22]: NAO V6 toe switches (either one per foot) ---
     OutSensors[21] = FootContacts[0] ? 1.f : 0.f;
     OutSensors[22] = FootContacts[1] ? 1.f : 0.f;
     FootContacts[0] = false;
@@ -712,8 +744,20 @@ void ANmNaoActor::BeginPlay()
 
 void ANmNaoActor::OnFootHit(UPrimitiveComponent* HitComp, AActor* /*OtherActor*/,
                              UPrimitiveComponent* /*OtherComp*/, FVector /*NormalImpulse*/,
-                             const FHitResult& /*Hit*/)
+                             const FHitResult& Hit)
 {
+    // A toe bumper switch, not any foot contact: the hit must lie in the
+    // front 2.4 cm of the 16 cm sole box and 6 mm or more above the sole
+    // (foot mesh centred on the box), so standing and stepping never press it.
+    if (!HitComp)
+    {
+        return;
+    }
+    const FVector Local = HitComp->GetComponentTransform().InverseTransformPosition(Hit.ImpactPoint);
+    if (Local.X < 5.6f || Local.Z < -0.6f)
+    {
+        return;
+    }
     if (FeetMeshes.Num() > 0 && FeetMeshes[0] == HitComp)
     {
         NaoComponent->FootContacts[0] = true;

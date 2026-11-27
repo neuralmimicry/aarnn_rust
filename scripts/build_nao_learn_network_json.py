@@ -67,7 +67,8 @@ def main():
     assert lt <= set(hidden), "learning-turn cells missing"
     fields = dict(
         aarnn_plasticity_enabled=bool(a.plastic), aarnn_graded_plasticity_enabled=True,
-        aarnn_plastic_cells=dict(enabled=True, hidden=[[h in lt for h in hidden]], outputs=[False] * len(outputs)),
+        aarnn_plastic_cells=dict(enabled=True, hidden=[[h in lt for h in hidden]], outputs=[False] * len(outputs),
+                                 newborns=True),
         aarnn_rate_homeostasis_tau_ms=a.homeo_tau_ms, aarnn_rate_homeostasis_gain=a.homeo_gain,
         aarnn_plasticity_eta=a.eta,
         aarnn_modulatory_cells=dict(enabled=bool(a.gated) and "LC" in hidden,
@@ -75,8 +76,7 @@ def main():
         aarnn_modulator_tau_ms=a.modulator_tau_ms, aarnn_modulator_ref_hz=a.modulator_ref_hz,
     )
     snap["net"].update(fields)
-    for t in [snap["net"].get("aarnn_bio") or {}] + [t.get("bio_params") or {} for t in snap["net"].get("neuron_types") or []]:
-        t["neuromodulation_enabled"] = False   # plain learning rate (no dopamine/serotonin gain)
+    # Neuromodulation stays enabled (25 Nov; no effect at depth 0, see aarnn_circuit.apply_learner).
     labels = snap["connectome_labels"]
     labels["learning"] = dict(plastic_cells=sorted(lt), groups=a.groups, plastic=bool(a.plastic), eta=a.eta,
                               rule="generic AARNN plasticity (matrix STDP + dendritic-bouton Hebbian/STDP/Oja mix)",

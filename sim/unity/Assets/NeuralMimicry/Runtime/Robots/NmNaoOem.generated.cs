@@ -12,9 +12,9 @@ namespace NeuralMimicry
     /// <summary>OEM NAO (Aldebaran H25 V6) link tree and actuator contract.</summary>
     internal static class NmNaoOem
     {
-        public const string ModelDigest = "28f3d75621a73b2c7968bafe2dcc0de2fc89dd706c2ee567d24aa004c9c08098";
-        public const string IoDigest = "bd85f639ac3991aec6019cf4b90c08cee78496c58f42bef3186b10313888f91d";
-        public const int SensorCount = 250;
+        public const string ModelDigest = "e3202da32f48c76a363de9cee2954547ca622621e97a56df214b4e9a2fdcb690";
+        public const string IoDigest = "553dcc886745e8682b81c9e9dad02afeacda4dcc6221c1558547c5708da5976d";
+        public const int SensorCount = 268;
         public const double TotalMassKg = 5.305389999999997;
         public const double TorsoMassKg = 1.0496;
         public static readonly double[] TorsoComM = { -0.005, 0.0, 0.025 };

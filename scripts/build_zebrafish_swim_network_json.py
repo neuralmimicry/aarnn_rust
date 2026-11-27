@@ -46,7 +46,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from aarnn_circuit import Circuit, add_hindbrain, drive_weight, graded, release_tonic, sensor_weight  # noqa: E402
+from aarnn_circuit import (Circuit, add_hindbrain, add_learned_anticipation, add_learned_foraging, add_touch_escape, add_turn_bouts,  # noqa: E402
+                           apply_learner, drive_weight, graded, release_tonic, sensor_weight)
 
 ROOT = Path(__file__).resolve().parents[1]
 SEGMENTS = 8
@@ -118,10 +119,57 @@ def build(args):
     ray = {s: next(n for n in sensors if n.endswith(f"_olfactory_{s}")) for s in "lr"}
     for s in "lr":
         c.sensor(ray[s], rs[s], ws(args.wall_rs))
+    learn = None
+    if args.learn_groups > 0:
+        # Learning by experience (aarnn_circuit.add_learned_anticipation): a
+        # near detector on each lateral-line ray teaches LT_side, which drives
+        # that side's RS past its switch-on level.
+        reach = 0.3
+        learn = add_learned_anticipation(c, GAIN, {s: [ray[s]] for s in "lr"}, lambda d: 1.0 - d / reach, False,
+                                         args.learn_teach_m, args.learn_near_m, args.learn_far_m, args.learn_groups,
+                                         {s: [(rs[s], args.learn_rs_mv)] for s in "lr"})
+        learn = dict(profile="zebrafish", encoding="inverse", reach_m=reach, channels={s: [ray[s]] for s in "lr"},
+                     teach_m=args.learn_teach_m, near_m=args.learn_near_m, far_m=args.learn_far_m,
+                     protocol_far_m=reach, protocol_near_m=0.12)
+    bouts = None
+    if args.explore:
+        # Spontaneous run-and-turn bouts (shared hindbrain, zebrafish-style).
+        bouts = add_turn_bouts(c, GAIN, hb, on_ms=args.explore_on_ms, off_ms=args.explore_off_ms)
+    forage = None
+    if args.forage:
+        # Learned foraging (needs-v1; aarnn_circuit.add_learned_foraging): feeding
+        # halts locomotion; the value of the food odour is learned from eating.
+        forage = add_learned_foraging(c, GAIN, mlr, bouts["on"] if bouts else None, hunger_below=args.forage_hunger,
+                                      halt=[rs["l"], rs["r"], artr["l"], artr["r"]], steer=args.forage_steer > 0)
+        if args.forage_steer > 0:
+            # Learned steering: exciting one side's tail bends the fish away
+            # from that side (RS_l turns right), so STEER_l (food odour stronger
+            # on the left) drives the right side, turning the fish left.
+            for i in range(SEGMENTS):
+                c.connect(forage["steer"]["l"], tail["r", i], w(args.forage_steer))
+                c.connect(forage["steer"]["r"], tail["l", i], w(args.forage_steer))
+        if learn is None:
+            learn = dict(profile="zebrafish")
+    if args.touch_escape:
+        # Innate touch escape (aarnn_circuit.add_touch_escape): a surface within
+        # ~3 cm of the snout (head rays >= touch_ref, the near field that the
+        # head's lateral line and trigeminal touch report) fires the Mauthner-
+        # like escape cell of that side; it bends the tail on its own side
+        # (a C-bend that turns the fish away) and silences the opposite turn
+        # and the learned steering.
+        front = next(n for n in sensors if n.endswith("_olfactory_front"))
+        esc = add_touch_escape(c, GAIN, hb, {"l": [ray["l"]], "r": [ray["r"]], "f": [front]}, s_ref=args.touch_ref,
+                               suppress=list(forage["steer"].values()) if forage else None,
+                               quiet=[forage["feed"]] if forage else None, touch_tau_ms=args.touch_tau)
+        for i in range(SEGMENTS):
+            for s in "lr":
+                c.connect(esc["esc"][s], tail[s, i], w(args.touch_motor))
     labels = {"design": "zebrafish spinal half-centre CPG with reticulospinal steering and ARTR exploration",
               "parameters": vars(args) | {"output": str(args.output)}}
     c.write(Path(args.output), Path(args.config_out) if args.config_out else None,
             synaptic_gain=GAIN, depth=args.depth, labels=labels)
+    if learn:
+        apply_learner(Path(args.output), Path(args.config_out) if args.config_out else None, GAIN, learn)
     return c
 
 
@@ -137,6 +185,13 @@ def main():
     ap.add_argument("--plateau", type=float, default=22.0)
     ap.add_argument("--drive", type=float, default=4.0, help="spinal drive at the tail segment (mV/ms)")
     ap.add_argument("--drive-gradient", type=float, default=0.1)
+    ap.add_argument("--explore", type=int, default=0, help="1: spontaneous run-and-turn bouts (shared hindbrain)")
+    ap.add_argument("--explore-on-ms", type=float, default=2000.0)
+    ap.add_argument("--explore-off-ms", type=float, default=12000.0)
+    ap.add_argument("--forage", type=int, default=0, help="1: learned foraging (needs-v1 channels; food-odour value learned from eating)")
+    ap.add_argument("--forage-hunger", type=float, default=0.5)
+    ap.add_argument("--forage-steer", type=float, default=0.0,
+                    help="learned steering toward the stronger odour: STEER -> opposite tail side (mV/ms); 0 = off")
     ap.add_argument("--mlr-release", type=float, default=0.5)
     ap.add_argument("--w-ea", type=float, default=10.0)
     ap.add_argument("--w-ae", type=float, default=9.0)
@@ -155,6 +210,17 @@ def main():
     ap.add_argument("--artr-tau-a", type=float, default=5000.0, help="ARTR adaptation tau (ms): ~10-20 s alternation")
     ap.add_argument("--artr-mutual", type=float, default=4.0)
     ap.add_argument("--artr-rs", type=float, default=1.0, help="ARTR -> RS, subthreshold: picks the side of a head-on turn")
+    ap.add_argument("--learn-groups", type=int, default=0, help="anticipation learning: range cells per side (0 = off)")
+    ap.add_argument("--learn-teach-m", type=float, default=0.20, help="innate near detector (teacher) distance (m)")
+    ap.add_argument("--learn-near-m", type=float, default=0.21)
+    ap.add_argument("--learn-far-m", type=float, default=0.25)
+    ap.add_argument("--learn-rs-mv", type=float, default=3.0, help="learned turn -> RS drive (mV/ms)")
+    ap.add_argument("--touch-escape", type=int, default=0,
+                    help="1: innate touch escape (turn away from a surface at the snout; off by default so the "
+                         "complexity ladder's 0.9 ray stimuli keep their characterised readouts)")
+    ap.add_argument("--touch-ref", type=float, default=0.9, help="head ray value that counts as touch (0.9 = 3 cm)")
+    ap.add_argument("--touch-motor", type=float, default=3.0, help="escape cell -> same-side tail motor pools (mV/ms)")
+    ap.add_argument("--touch-tau", type=float, default=400.0, help="touch cell decay (ms): how long the escape outlasts the contact")
     args = ap.parse_args()
     c = build(args)
     print(f"wrote {args.output}: {len(c.cells)} cells, {len(c.syn)} synapses, {len(c.sense)} sensory projections")

@@ -29,18 +29,34 @@ def prepare(profile, brain, network, host, port, output, config=None):
     # channel in the alignment. Compare ordered meaning, not just dimensions.
     neural_sensory = io.get('neural_sensory_names', sensory)
     neural_outputs = io.get('neural_output_names', [n.split('_', 3)[-1] for n in outputs] if profile=='celegans' else outputs)
-    if (labels['sensory_nodes'] != neural_sensory or labels['output_nodes'] != neural_outputs
-            or snapshot['net']['num_sensory_neurons'] != len(sensory) or snapshot['net']['num_output_neurons'] != len(outputs)):
+    # Optional sensor groups: a body may carry senses (e.g. hearing) that a
+    # preserved network was never built with. The network binds exactly its
+    # own named channels, in its order; only optional-group channels may be
+    # left out, so the core contract is never partially bound.
+    bound = sensory
+    if labels['sensory_nodes'] != neural_sensory:
+        index = {n: i for i, n in enumerate(neural_sensory)}
+        names = labels['sensory_nodes']
+        missing = [n for n in names if n not in index]
+        taken = {index[n] for n in names if n in index}
+        core_left_out = [sensory[i] for i, spec in enumerate(io['sensors']) if i not in taken and not spec.get('group')]
+        if missing or len(taken) != len(names) or core_left_out:
+            raise ValueError(f'{profile}: snapshot named sensory/output projection mismatch; snapshot will not be resized')
+        bound = [sensory[index[n]] for n in names]
+    if (labels['output_nodes'] != neural_outputs
+            or snapshot['net']['num_sensory_neurons'] != len(bound) or snapshot['net']['num_output_neurons'] != len(outputs)):
         raise ValueError(f'{profile}: snapshot named sensory/output projection mismatch; snapshot will not be resized')
     if record['controller_transfer'].startswith('blocked'):
         raise ValueError('Model transfer remains blocked')
     if config:
         cfg=json.loads(Path(config).read_text());cfg=cfg.get('net',cfg)
-        if cfg.get('num_sensory_neurons')!=len(sensory) or cfg.get('num_output_neurons')!=len(outputs):
+        if cfg.get('num_sensory_neurons')!=len(bound) or cfg.get('num_output_neurons')!=len(outputs):
             raise ValueError(f'{profile}: configuration disagrees with pinned snapshot/IO; no runtime resize permitted')
     binding = dict(brain_id=brain, brain_generation=1, model_digest=record['digest'], io_digest=io['digest'], host=host, port=port)
+    if bound != sensory:
+        binding['sensor_names'] = bound
     contract = {k: binding[k] for k in ('brain_id', 'brain_generation', 'model_digest', 'io_digest')}
-    contract.update(s_names=sensory, o_names=outputs, sensory_base=io['sensory_base'], output_base=io['output_base'])
+    contract.update(s_names=bound, o_names=outputs, sensory_base=io['sensory_base'], output_base=io['output_base'])
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     (output / (brain + '.contract.json')).write_text(json.dumps(contract, indent=2) + '\n')

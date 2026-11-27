@@ -8,6 +8,40 @@
 # Selects a native physics/reference or preserved legacy simulator route.
 # Implemented legacy projections may reuse the existing local simulation cluster.
 
+# --- Host memory guard -------------------------------------------------------
+# Run the whole launch inside a memory-capped systemd scope, so a runaway
+# network or node is OOM-killed inside the scope instead of taking the desktop
+# and the host down with it (24 Nov 2026: a 39.5 GB orchestrator crashed the
+# laptop). The processes also pace themselves against this cap: the runtime
+# reads its own cgroup limit (src/monitor.rs). Skipped when the caller already
+# runs under a memory limit (it would otherwise replace a tighter cap), when
+# systemd-run --user is unavailable, or with NM_MEMORY_GUARD=0.
+# NM_MEMORY_MAX: cap in systemd syntax (default 80% of physical memory).
+nm_memory_capped() {
+  local rel dir v
+  rel="$(awk -F'::' '/^0::/{print $2; exit}' /proc/self/cgroup 2>/dev/null)"
+  [ -n "$rel" ] || return 1
+  dir="/sys/fs/cgroup${rel}"
+  while [ -n "$dir" ] && [ "$dir" != "/sys/fs/cgroup" ]; do
+    for f in memory.max memory.high; do
+      v="$(cat "$dir/$f" 2>/dev/null)"
+      if [ -n "$v" ] && [ "$v" != "max" ]; then return 0; fi
+    done
+    dir="${dir%/*}"
+  done
+  return 1
+}
+if [ "${NM_MEMORY_GUARD:-1}" != "0" ] && [ -z "${NM_MEMORY_GUARD_ACTIVE:-}" ] \
+   && command -v systemd-run >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1 \
+   && ! nm_memory_capped; then
+  export NM_MEMORY_GUARD_ACTIVE=1
+  echo "$(basename "$0"): running under a ${NM_MEMORY_MAX:-80%} memory cap (systemd scope; NM_MEMORY_GUARD=0 disables)" >&2
+  exec systemd-run --user --scope --quiet --collect -p "MemoryMax=${NM_MEMORY_MAX:-80%}" -p MemorySwapMax=0 \
+    bash "$0" "$@"
+fi
+export NM_MEMORY_GUARD_ACTIVE=1
+# -----------------------------------------------------------------------------
+
 export NM_MORPHO_ASYNC="${NM_MORPHO_ASYNC:-1}"
 #
 # Usage:
@@ -177,6 +211,17 @@ robot_sensory() {
 
 robot_output() {
   robot_profile_field "$1" output
+}
+
+# Sensory channel count of one bound brain: the binding contract's named
+# channels when the managed MuJoCo path wrote one (optional sensor groups: a
+# network binds exactly its own channels), else the profile's core count.
+brain_sensory() {
+  local contract="${ENV_READY_DIR:-}/$1.contract.json"
+  if [ "${MUJOCO_MANAGED:-0}" -eq 1 ] && [ -f "$contract" ]; then
+    python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1]))["s_names"]))' "$contract" && return
+  fi
+  robot_sensory "$2"
 }
 
 robot_network_file() {
@@ -629,6 +674,14 @@ cleanup_distributed_runtime() {
       kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
     fi
   done
+  # run_webot.sh deletes its startup snapshot copies on exit, but the KILL
+  # above (1 s after TERM) usually lands first, leaving a full copy of every
+  # network in the log directory per run (2.7 GB for the FAFB connectome).
+  if [ -n "${CLUSTER_LOG_DIR:-}" ] && [ -d "$CLUSTER_LOG_DIR" ]; then
+    find "$CLUSTER_LOG_DIR" -maxdepth 2 -path "*/startup-snapshots.*" -name "*.snapshot.json" -type f \
+      -delete 2>/dev/null || true
+    find "$CLUSTER_LOG_DIR" -maxdepth 1 -type d -name "startup-snapshots.*" -empty -delete 2>/dev/null || true
+  fi
   BRIDGE_PIDS=()
   BRIDGE_PORTS=()
   CLUSTER_ORCHESTRATOR_PORT=""
@@ -798,7 +851,7 @@ start_tcp_servers() {
     local port=$(( TCP_BASE_PORT + i ))
     local sensory
     local output
-    sensory="$(robot_sensory "$brain_type")"
+    sensory="$(brain_sensory "${brain_id:-}" "$brain_type")"
     output="$(robot_output "$brain_type")"
     local net_file
     net_file="$(robot_network_file "$brain_type")"
@@ -998,6 +1051,11 @@ start_distributed_tcp_servers() {
   mkdir -p "$CLUSTER_LOG_DIR"
   mkdir -p "$ENV_READY_DIR"
   rm -f "$ARM_FILE"
+  # Global neuromodulator telemetry (DA / 5-HT / NA / ACh against stimuli and
+  # synapse energy), one jsonl per brain; plot with scripts/qa/plot_neuromod.py.
+  export NM_NEUROMOD_TRACE_DIR="${NM_NEUROMOD_TRACE_DIR:-$CLUSTER_LOG_DIR/neuromod}"
+  mkdir -p "$NM_NEUROMOD_TRACE_DIR"
+  echo "run_sim.sh: neuromodulator traces in $NM_NEUROMOD_TRACE_DIR" >&2
   local cluster_config_map=""
   local cluster_network_map=""
   local i brain_id brain_type path
@@ -1094,7 +1152,7 @@ start_distributed_tcp_servers() {
     rm -f "$ready_file"
     "$TCP_AER_BRIDGE_BIN" \
       --listen "$TCP_HOST:$port" --ipc "$ipc_path" \
-      --sensory "$(robot_sensory "$brain_type")" \
+      --sensory "$(brain_sensory "$brain_id" "$brain_type")" \
       --output "$(robot_output "$brain_type")" \
       --ready-file "$ready_file" \
       --arm-file "$ARM_FILE" \
@@ -1104,7 +1162,7 @@ start_distributed_tcp_servers() {
     BRIDGE_PORTS+=("$port")
     printf "  %-28s  %-22s  %s  %s  %s\n" \
       "$brain_id" "${TCP_HOST}:${port}" \
-      "sensory=$(robot_sensory "$brain_type")" "output=$(robot_output "$brain_type")" "${BRIDGE_PIDS[$i]}"
+      "sensory=$(brain_sensory "$brain_id" "$brain_type")" "output=$(robot_output "$brain_type")" "${BRIDGE_PIDS[$i]}"
   done
   wait_for_tcp_bridges_ready
   echo "run_sim.sh: distributed brain bridges ready on $TCP_HOST:$TCP_BASE_PORT – $((TCP_BASE_PORT + total - 1))"

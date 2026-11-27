@@ -301,6 +301,135 @@ fn aabb_overlap(a0: &Point3, a1: &Point3, b0: &Point3, b1: &Point3, pad: f32) ->
     !(ax1 < bx0 || bx1 < ax0 || ay1 < by0 || by1 < ay0 || az1 < bz0 || bz1 < az0)
 }
 
+/// Uniform-grid broad phase for `aabb_overlap(.., pad)` between synapse
+/// segments. `candidates` returns, in ascending index order, a superset of
+/// every segment whose padded box overlaps the query's padded box, so a loop
+/// over the candidates sees exactly the overlapping segments in the same order
+/// as a loop over all segments that skips non-overlapping ones. Segments whose
+/// box spans more than `MAX_CELLS` cells are kept in a list every query scans.
+struct SegmentBoxGrid {
+    cell: f32,
+    pad: f32,
+    cells: HashMap<(i32, i32, i32), Vec<u32>>,
+    large: Vec<u32>,
+}
+
+impl SegmentBoxGrid {
+    const MAX_CELLS: i64 = 64;
+
+    fn cell_range(&self, a0: &Point3, a1: &Point3) -> [(i32, i32); 3] {
+        let axis = |lo: f32, hi: f32| {
+            (
+                ((lo - self.pad) / self.cell).floor() as i32,
+                ((hi + self.pad) / self.cell).floor() as i32,
+            )
+        };
+        [
+            axis(a0.x.min(a1.x), a0.x.max(a1.x)),
+            axis(a0.y.min(a1.y), a0.y.max(a1.y)),
+            axis(a0.z.min(a1.z), a0.z.max(a1.z)),
+        ]
+    }
+
+    fn span(range: &[(i32, i32); 3]) -> i64 {
+        range
+            .iter()
+            .map(|(lo, hi)| (*hi as i64 - *lo as i64 + 1).max(1))
+            .product()
+    }
+
+    fn build(segments: &[(Point3, Point3)], cell: f32, pad: f32) -> Self {
+        let mut grid = Self {
+            cell: cell.max(1.0e-6),
+            pad,
+            cells: HashMap::new(),
+            large: Vec::new(),
+        };
+        for (index, (a0, a1)) in segments.iter().enumerate() {
+            let range = grid.cell_range(a0, a1);
+            if Self::span(&range) > Self::MAX_CELLS {
+                grid.large.push(index as u32);
+                continue;
+            }
+            for x in range[0].0..=range[0].1 {
+                for y in range[1].0..=range[1].1 {
+                    for z in range[2].0..=range[2].1 {
+                        grid.cells.entry((x, y, z)).or_default().push(index as u32);
+                    }
+                }
+            }
+        }
+        grid
+    }
+
+    /// `None` = the query box is too large for the grid: scan everything.
+    fn candidates(&self, a0: &Point3, a1: &Point3) -> Option<Vec<u32>> {
+        let range = self.cell_range(a0, a1);
+        if Self::span(&range) > Self::MAX_CELLS {
+            return None;
+        }
+        let mut out = self.large.clone();
+        for x in range[0].0..=range[0].1 {
+            for y in range[1].0..=range[1].1 {
+                for z in range[2].0..=range[2].1 {
+                    if let Some(items) = self.cells.get(&(x, y, z)) {
+                        out.extend_from_slice(items);
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        Some(out)
+    }
+}
+
+/// Uniform-grid neighbours of points closer than `radius` (cell = radius):
+/// ascending indices of all points in the 27 surrounding cells, a superset of
+/// those within `radius`, in the order a full ascending scan would meet them.
+struct PointGrid {
+    cell: f32,
+    cells: HashMap<(i32, i32, i32), Vec<u32>>,
+}
+
+impl PointGrid {
+    fn key(&self, p: &Point3) -> (i32, i32, i32) {
+        (
+            (p.x / self.cell).floor() as i32,
+            (p.y / self.cell).floor() as i32,
+            (p.z / self.cell).floor() as i32,
+        )
+    }
+
+    fn build(points: impl Iterator<Item = Point3>, radius: f32) -> Self {
+        let mut grid = Self {
+            cell: radius.max(1.0e-6),
+            cells: HashMap::new(),
+        };
+        for (index, p) in points.enumerate() {
+            let key = grid.key(&p);
+            grid.cells.entry(key).or_default().push(index as u32);
+        }
+        grid
+    }
+
+    fn neighbours(&self, p: &Point3) -> Vec<u32> {
+        let (kx, ky, kz) = self.key(p);
+        let mut out = Vec::new();
+        for x in kx - 1..=kx + 1 {
+            for y in ky - 1..=ky + 1 {
+                for z in kz - 1..=kz + 1 {
+                    if let Some(items) = self.cells.get(&(x, y, z)) {
+                        out.extend_from_slice(items);
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+}
+
 #[inline(always)]
 fn near_colinear_overlap(a0: Point3, a1: Point3, b0: Point3, b1: Point3) -> bool {
     let ux = a1.x - a0.x;
@@ -3217,14 +3346,27 @@ impl Morphology {
                 // Each worker reads an immutable base. Reading the vector via
                 // a raw pointer while par_iter_mut updates it was a data race.
                 let other_syns = m.synapses.clone();
+                // Broad phase: only segments whose padded boxes overlap can
+                // pass `aabb_overlap` below; visiting them in ascending order
+                // gives the same result as the full pairwise scan (which cost
+                // hours for ~700k synapses).
+                let segments: Vec<(Point3, Point3)> = other_syns
+                    .iter()
+                    .map(|syn| (syn.pre_site, syn.post_site))
+                    .collect();
+                let grid = SegmentBoxGrid::build(&segments, (eps * 4.0).max(1.0 / 64.0), eps);
                 m.synapses
                     .par_iter_mut()
                     .enumerate()
                     .for_each(|(i, syn_i)| {
                         let a0 = syn_i.pre_site;
                         let a1 = syn_i.post_site;
+                        let candidates: Vec<usize> = match grid.candidates(&a0, &a1) {
+                            Some(list) => list.into_iter().map(|j| j as usize).collect(),
+                            None => (0..n_syn).collect(),
+                        };
 
-                        for j in 0..n_syn {
+                        for j in candidates {
                             if i == j {
                                 continue;
                             }
@@ -3346,6 +3488,14 @@ impl Morphology {
                     #[cfg(feature = "parallel")]
                     if n_syn > 128 {
                         let other_syns = &m.synapses;
+                        // Neighbour grids (cell = eps_pt): only sites closer than
+                        // eps_pt contribute, so summing over the ascending grid
+                        // candidates adds the same terms in the same order as
+                        // the full pairwise scan.
+                        let pre_grid =
+                            PointGrid::build(other_syns.iter().map(|s| s.pre_site), eps_pt);
+                        let post_grid =
+                            PointGrid::build(other_syns.iter().map(|s| s.post_site), eps_pt);
                         let displacements: Vec<(Point3, Point3)> = m
                             .synapses
                             .par_iter()
@@ -3353,7 +3503,8 @@ impl Morphology {
                             .map(|(a, syn_a)| {
                                 let mut disp_pre = Point3::default();
                                 let mut disp_post = Point3::default();
-                                for b in 0..n_syn {
+                                for b in pre_grid.neighbours(&syn_a.pre_site) {
+                                    let b = b as usize;
                                     if a == b {
                                         continue;
                                     }
@@ -3371,6 +3522,13 @@ impl Morphology {
                                         disp_pre.y += (dy / d) * disp;
                                         disp_pre.z += (dz / d) * disp;
                                     }
+                                }
+                                for b in post_grid.neighbours(&syn_a.post_site) {
+                                    let b = b as usize;
+                                    if a == b {
+                                        continue;
+                                    }
+                                    let syn_b = &other_syns[b];
 
                                     // Post sites
                                     let dx = syn_a.post_site.x - syn_b.post_site.x;
@@ -8221,7 +8379,11 @@ impl Morphology {
             }
         }
 
-        // Apply planned migrations
+        // Apply planned migrations (none when migration is disabled: the
+        // contact that would have replaced a synapse is simply not made).
+        if !config.morpho_synapse_migration_enabled {
+            res.migrations.clear();
+        }
         for mig in &res.migrations {
             let si = mig.syn_idx;
             let old_pre_l = self.synapses[si].pre_layer;
@@ -8307,7 +8469,8 @@ impl Morphology {
 
         // Keep IO links alive during growth while remaining sparse:
         // each sensory/output keeps at least one connection when feasible.
-        if is_aarnn && config.growth_enabled {
+        // Designed circuits switch this off (`growth_io_floor_enabled`).
+        if is_aarnn && config.growth_enabled && config.growth_io_floor_enabled {
             let min_required_sensory = 1usize;
             let sensory_count = self.sensory_somas.len().min(config.num_sensory_neurons);
             let output_count = self.output_somas.len().min(config.num_output_neurons);
@@ -8581,6 +8744,90 @@ pub struct MigrationInfo {
 #[cfg(all(test, feature = "growth3d", feature = "morpho"))]
 mod tests {
     use super::*;
+
+    fn lcg(state: &mut u64) -> f32 {
+        *state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((*state >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
+    }
+
+    /// The broad-phase grids must return every index the full pairwise scan
+    /// would accept, in ascending order, so the loops over them in
+    /// `from_weights` give exactly the full-scan results.
+    #[test]
+    fn synapse_grids_cover_every_pair_the_full_scan_accepts() {
+        let mut state = 7u64;
+        let mut segments = Vec::new();
+        for k in 0..1500 {
+            let a = Point3 {
+                x: lcg(&mut state),
+                y: lcg(&mut state),
+                z: lcg(&mut state),
+            };
+            // mostly short segments, some long ones, some on cell boundaries
+            let len = if k % 50 == 0 { 1.2 } else { 0.02 };
+            let b = Point3 {
+                x: (a.x + len * lcg(&mut state)).clamp(-1.0, 1.0),
+                y: (a.y + len * lcg(&mut state)).clamp(-1.0, 1.0),
+                z: (a.z + len * lcg(&mut state)).clamp(-1.0, 1.0),
+            };
+            let a = if k % 97 == 0 {
+                Point3 {
+                    x: 0.0625,
+                    y: -0.125,
+                    z: 0.0,
+                }
+            } else {
+                a
+            };
+            segments.push((a, b));
+        }
+        for &eps in &[1.0e-4f32, 0.004, 0.03] {
+            let grid = SegmentBoxGrid::build(&segments, (eps * 4.0).max(1.0 / 64.0), eps);
+            for (i, (a0, a1)) in segments.iter().enumerate() {
+                let brute: Vec<u32> = (0..segments.len())
+                    .filter(|&j| {
+                        j != i && aabb_overlap(a0, a1, &segments[j].0, &segments[j].1, eps)
+                    })
+                    .map(|j| j as u32)
+                    .collect();
+                let Some(cands) = grid.candidates(a0, a1) else {
+                    continue;
+                };
+                assert!(
+                    cands.windows(2).all(|w| w[0] < w[1]),
+                    "ascending and unique"
+                );
+                for j in &brute {
+                    assert!(
+                        cands.binary_search(j).is_ok(),
+                        "segment {i}: missed {j} (eps {eps})"
+                    );
+                }
+            }
+        }
+        let points: Vec<Point3> = segments.iter().map(|s| s.0).collect();
+        for &radius in &[0.0001f32, 0.002, 0.05] {
+            let grid = PointGrid::build(points.iter().copied(), radius);
+            for (i, p) in points.iter().enumerate() {
+                let cands = grid.neighbours(p);
+                assert!(
+                    cands.windows(2).all(|w| w[0] < w[1]),
+                    "ascending and unique"
+                );
+                for (j, q) in points.iter().enumerate() {
+                    let d2 = (p.x - q.x).powi(2) + (p.y - q.y).powi(2) + (p.z - q.z).powi(2);
+                    if j != i && d2 < radius * radius {
+                        assert!(
+                            cands.binary_search(&(j as u32)).is_ok(),
+                            "point {i}: missed {j}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     #[cfg(feature = "parallel")]

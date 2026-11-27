@@ -183,9 +183,9 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "NmNao")
     TArray<TObjectPtr<UPhysicsConstraintComponent>> JointConstraints;
 
-    // Sonar max range in cm
+    // Sonar max range in cm (NAO V6: 20-80 cm; older NAOs 25-255 cm)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "NmNao")
-    float MaxSonarRangeCm = 255.f;
+    float MaxSonarRangeCm = 80.f;
 
 protected:
     virtual void BeginPlay() override;

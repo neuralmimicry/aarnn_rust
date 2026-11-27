@@ -8,8 +8,8 @@
 def Xform "Robot" (
     prepend apiSchemas = ["PhysicsArticulationRootAPI"]
     customData = {
-        string aarnnIODigest = "b5887b9ed5b667d74ca87bbbd1bb85cb7dd6b15d818ea57b36306b0b38a5566e"
-        string aarnnModelDigest = "db78019b6232305dd6f23dc6f90681bcd44e8db3a561d20a8738b09593376868"
+        string aarnnIODigest = "16bccb5135cf4959956b0d7644322a2002989016bbd2a405402009ea4aeda392"
+        string aarnnModelDigest = "8136d151a595ea4741d812efb49ba64ebd386abc6fc074cbab34c0493f94a968"
     }
 )
 {
@@ -18,11 +18,11 @@ def Xform "Robot" (
     )
     {
         point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (3.12e-7, 4.926e-7, 5.694e-7)
-        float physics:mass = 0.003
+        float3 physics:diagonalInertia = (1.976e-7, 3.1198e-7, 3.6062e-7)
+        float physics:mass = 0.0019
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0, 0.09)
+        double3 xformOp:translate = (0, 0, 0.1)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Sphere "thorax_collision" (
@@ -930,6 +930,58 @@ def Xform "Robot" (
         }
     }
 
+    def Xform "head" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (2.64984e-8, 2.54712e-8, 2.74872e-8)
+        float physics:mass = 0.0006
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (0.0225, 0, 0.1034)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Sphere "head_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.45, 0.27, 0.11)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.0105, 0.0109, 0.0101)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
+    def Xform "abdomen" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (2.297e-8, 4.9802e-8, 5.237e-8)
+        float physics:mass = 0.0005
+        quatf physics:principalAxes = (1, 0, 0, 0)
+        quatf xformOp:orient = (1, 0, 0, 0)
+        double3 xformOp:translate = (-0.027, 0, 0.09925)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
+
+        def Sphere "abdomen_collision" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.45, 0.27, 0.11)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.0199, 0.0113, 0.0101)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+    }
+
     def Xform "lf_coxa_link" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
@@ -939,7 +991,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.017499999999999998, 0.018, 0.09)
+        double3 xformOp:translate = (0.017499999999999998, 0.018, 0.1)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "lf_coxa_link_collision" (
@@ -967,7 +1019,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.017499999999999998, 0.0375, 0.0795)
+        double3 xformOp:translate = (0.017499999999999998, 0.0375, 0.08950000000000001)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "lf_femur_link_collision" (
@@ -995,7 +1047,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.017499999999999998, 0.056999999999999995, 0.069)
+        double3 xformOp:translate = (0.017499999999999998, 0.056999999999999995, 0.07900000000000001)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "lf_tibia_link_collision" (
@@ -1023,7 +1075,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.017499999999999998, 0.0765, 0.05850000000000001)
+        double3 xformOp:translate = (0.017499999999999998, 0.0765, 0.06850000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "lf_tarsus_link_collision" (
@@ -1051,7 +1103,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.018, 0.09)
+        double3 xformOp:translate = (0, 0.018, 0.1)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "lm_coxa_link_collision" (
@@ -1079,7 +1131,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.0375, 0.0795)
+        double3 xformOp:translate = (0, 0.0375, 0.08950000000000001)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "lm_femur_link_collision" (
@@ -1107,7 +1159,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.056999999999999995, 0.069)
+        double3 xformOp:translate = (0, 0.056999999999999995, 0.07900000000000001)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "lm_tibia_link_collision" (
@@ -1135,7 +1187,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.0765, 0.05850000000000001)
+        double3 xformOp:translate = (0, 0.0765, 0.06850000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "lm_tarsus_link_collision" (
@@ -1163,7 +1215,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.017499999999999998, 0.018, 0.09)
+        double3 xformOp:translate = (-0.017499999999999998, 0.018, 0.1)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "lr_coxa_link_collision" (
@@ -1191,7 +1243,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.017499999999999998, 0.0375, 0.0795)
+        double3 xformOp:translate = (-0.017499999999999998, 0.0375, 0.08950000000000001)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "lr_femur_link_collision" (
@@ -1219,7 +1271,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.017499999999999998, 0.056999999999999995, 0.069)
+        double3 xformOp:translate = (-0.017499999999999998, 0.056999999999999995, 0.07900000000000001)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "lr_tibia_link_collision" (
@@ -1247,7 +1299,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.017499999999999998, 0.0765, 0.05850000000000001)
+        double3 xformOp:translate = (-0.017499999999999998, 0.0765, 0.06850000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "lr_tarsus_link_collision" (
@@ -1275,7 +1327,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.017499999999999998, -0.018, 0.09)
+        double3 xformOp:translate = (0.017499999999999998, -0.018, 0.1)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "rf_coxa_link_collision" (
@@ -1303,7 +1355,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.017499999999999998, -0.0375, 0.0795)
+        double3 xformOp:translate = (0.017499999999999998, -0.0375, 0.08950000000000001)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "rf_femur_link_collision" (
@@ -1331,7 +1383,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.017499999999999998, -0.056999999999999995, 0.069)
+        double3 xformOp:translate = (0.017499999999999998, -0.056999999999999995, 0.07900000000000001)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "rf_tibia_link_collision" (
@@ -1359,7 +1411,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.017499999999999998, -0.0765, 0.05850000000000001)
+        double3 xformOp:translate = (0.017499999999999998, -0.0765, 0.06850000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "rf_tarsus_link_collision" (
@@ -1387,7 +1439,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.018, 0.09)
+        double3 xformOp:translate = (0, -0.018, 0.1)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "rm_coxa_link_collision" (
@@ -1415,7 +1467,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.0375, 0.0795)
+        double3 xformOp:translate = (0, -0.0375, 0.08950000000000001)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "rm_femur_link_collision" (
@@ -1443,7 +1495,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.056999999999999995, 0.069)
+        double3 xformOp:translate = (0, -0.056999999999999995, 0.07900000000000001)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "rm_tibia_link_collision" (
@@ -1471,7 +1523,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.0765, 0.05850000000000001)
+        double3 xformOp:translate = (0, -0.0765, 0.06850000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "rm_tarsus_link_collision" (
@@ -1499,7 +1551,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.017499999999999998, -0.018, 0.09)
+        double3 xformOp:translate = (-0.017499999999999998, -0.018, 0.1)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "rr_coxa_link_collision" (
@@ -1527,7 +1579,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.017499999999999998, -0.0375, 0.0795)
+        double3 xformOp:translate = (-0.017499999999999998, -0.0375, 0.08950000000000001)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "rr_femur_link_collision" (
@@ -1555,7 +1607,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.017499999999999998, -0.056999999999999995, 0.069)
+        double3 xformOp:translate = (-0.017499999999999998, -0.056999999999999995, 0.07900000000000001)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "rr_tibia_link_collision" (
@@ -1583,7 +1635,7 @@ def Xform "Robot" (
         float physics:mass = 0.0003
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.017499999999999998, -0.0765, 0.05850000000000001)
+        double3 xformOp:translate = (-0.017499999999999998, -0.0765, 0.06850000000000002)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "rr_tarsus_link_collision" (
@@ -1611,7 +1663,7 @@ def Xform "Robot" (
         float physics:mass = 0.00001
         quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.02, 0.102)
+        double3 xformOp:translate = (0, 0.02, 0.112)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "left_wing_hub"
@@ -1637,7 +1689,7 @@ def Xform "Robot" (
         float physics:mass = 0.00004
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.026000000000000002, 0.102)
+        double3 xformOp:translate = (0, 0.026000000000000002, 0.112)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Sphere "left_wing_membrane"
@@ -1694,7 +1746,7 @@ def Xform "Robot" (
         float physics:mass = 0.00001
         quatf physics:principalAxes = (0.70710677, -0.70710677, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.02, 0.102)
+        double3 xformOp:translate = (0, -0.02, 0.112)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Capsule "right_wing_hub"
@@ -1720,7 +1772,7 @@ def Xform "Robot" (
         float physics:mass = 0.00004
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.026000000000000002, 0.102)
+        double3 xformOp:translate = (0, -0.026000000000000002, 0.112)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Sphere "right_wing_membrane"
@@ -2390,6 +2442,22 @@ def Xform "Robot" (
         quatf physics:localRot1 = (0.70710677, 0, 0, 0.70710677)
         float physics:lowerLimit = -80.21409
         float physics:upperLimit = 80.21409
+    }
+
+    def PhysicsFixedJoint "fixed_head"
+    {
+        rel physics:body0 = </Robot/thorax>
+        rel physics:body1 = </Robot/head>
+        point3f physics:localPos0 = (0.0225, 0, 0.0034)
+        quatf physics:localRot0 = (1, 0, 0, 0)
+    }
+
+    def PhysicsFixedJoint "fixed_abdomen"
+    {
+        rel physics:body0 = </Robot/thorax>
+        rel physics:body1 = </Robot/abdomen>
+        point3f physics:localPos0 = (-0.027, 0, -0.00075)
+        quatf physics:localRot0 = (1, 0, 0, 0)
     }
 }
 

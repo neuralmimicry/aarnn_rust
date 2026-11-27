@@ -292,6 +292,35 @@ message NetworkActivityResponse {
   repeated SpikeIndices sensory_history = 10;
   bool sensory_stage_assigned = 11;
   uint32 sensory_target_layer = 12;
+  // Global neuromodulator state of this worker's runner (latest sample).
+  NeuromodState neuromod = 13;
+}
+
+// Global neuromodulator levels against external stimuli and synaptic energy
+// (src/aarnn/neuromodulation.rs NeuromodSample). Levels are 1.0 at the
+// default baseline; drives are 0..1.
+message NeuromodState {
+  double t_ms = 1;
+  uint32 depth = 2;
+  double dopamine = 3;
+  double serotonin = 4;
+  double noradrenaline = 5;
+  double acetylcholine = 6;
+  double stimuli = 7;
+  double synapse_drive = 8;
+  // Mean axon/dendrite ATP and synapse activity trace; present only with morphology.
+  optional double synapse_energy = 9;
+  optional double synapse_stimuli = 10;
+  double efficacy = 11;
+  double release_factor = 12;
+  double drive_reward = 13;
+  double drive_food = 14;
+  double drive_light = 15;
+  double drive_heat = 16;
+  double drive_noxious = 17;
+  double drive_energy = 18;
+  double drive_activity = 19;
+  double drive_novelty = 20;
 }
 message NetworkResources {
   uint64 num_neurons = 1;
@@ -378,6 +407,17 @@ message Resources {
   float telemetry_gpu_power_w = 45;
   float telemetry_gpu_mem_used_pct = 46;
   uint32 telemetry_recent_action_count = 47;
+  // Self-protection (monitor::ResourceSample): this process's own memory and
+  // the tighter of its cgroup limit and host memory.
+  uint64 process_rss_bytes = 48;
+  uint64 process_rss_peak_bytes = 49;
+  uint64 memory_limit_bytes = 50;      // min(cgroup limit, host total)
+  uint64 memory_headroom_bytes = 51;   // allocatable before that limit
+  uint32 pressure_level = 52;          // 0 normal, 1 warn, 2 critical
+  float psi_memory_some_avg10 = 53;
+  float load1 = 54;
+  uint32 threads = 55;
+  uint64 disk_free_bytes = 56;         // filesystem of the working directory
 }
 message HeartbeatRequest {
   string node_id = 1;

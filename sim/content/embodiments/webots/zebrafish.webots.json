@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "profile_id": "zebrafish",
-  "model_digest": "9b921c8f6a61ac4f44b4ed3f0618e87e83702d1ff56a8dfa6c74082e22b40826",
-  "io_digest": "faab8e4c02b41b5556d5cd6f146174546e8088a7a011c62dd7853aa1ec2fddf2",
+  "model_digest": "1d23962e56363291d32158c8f30a94a5045d1d440981d4d8a4909a94dc2fbd61",
+  "io_digest": "1a1e49f92263d1e56c272fa9260a4421ed5c28d02552220cf951eb7e70296f06",
   "targets": [
     {
       "joint": "tail_joint_0",
@@ -4676,5 +4676,5 @@
     }
   },
   "world_geometry_count": 146,
-  "digest": "667d208a91067987f0b90832c2ccbbc44e0bbd66cda7b022f4db9036b4291be4"
+  "digest": "dd7f8e8c0a99b3919d77cf6b06661312c5093c845ebcb7316ef42e65a12cba95"
 }

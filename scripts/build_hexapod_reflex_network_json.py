@@ -85,6 +85,19 @@ def build(args):
 
     def sensor(leg, part):
         return next(s for s in sensors if s.endswith(f"_{leg}_{part}"))
+    # The drives below were tuned on the v2 body (legacy proto ranges: coxa
+    # span 1.4 rad, femur 1.2 rad). An output's release maps over the body's
+    # actual joint range, so scale each drive by design span / actual span to
+    # keep the same joint angles on any body (Freenove v3: +-pi/2, ~2.2-2.6x
+    # wider; unscaled, the legs over-swung and the robot spun at -15 deg/s).
+    acts = {a["name"]: a for a in model["actuators"]}
+
+    def span(part):
+        name = next(o for o in outputs if o.endswith(f"_lf_{part}"))
+        lo, hi = acts[name]["control_range"]
+        return hi - lo
+    coxa_scale = args.coxa_span_ref / span("coxa")
+    femur_scale = args.femur_span_ref / span("femur")
     for i, leg in enumerate(LEGS):
         left = leg.startswith("l")
         x = {"f": 1.0, "m": 0.0, "r": -1.0}[leg[1]]
@@ -108,10 +121,10 @@ def build(args):
         # Motor: swing protracts + lifts; stance retracts + presses.
         sgn_pro = -1.0 if left else 1.0      # coxa activation change for protraction
         sgn_lift = 1.0 if left else -1.0     # femur activation change for lifting
-        c.connect(sw, joint(leg, "coxa"), w_graded(sgn_pro * args.motor))
-        c.connect(st, joint(leg, "coxa"), w_graded(-sgn_pro * args.motor))
-        c.connect(sw, joint(leg, "femur"), w_graded(sgn_lift * args.lift))
-        c.connect(st, joint(leg, "femur"), w_graded(-sgn_lift * args.press))
+        c.connect(sw, joint(leg, "coxa"), w_graded(sgn_pro * args.motor * coxa_scale))
+        c.connect(st, joint(leg, "coxa"), w_graded(-sgn_pro * args.motor * coxa_scale))
+        c.connect(sw, joint(leg, "femur"), w_graded(sgn_lift * args.lift * femur_scale))
+        c.connect(st, joint(leg, "femur"), w_graded(-sgn_lift * args.press * femur_scale))
     for a, b in NEIGHBOURS:
         c.connect(f"{a}_SW", f"{b}_SW", w_graded(-args.inter))
         c.connect(f"{b}_SW", f"{a}_SW", w_graded(-args.inter))
@@ -140,6 +153,8 @@ def main():
     ap.add_argument("--motor", type=float, default=6.0, help="coxa drive from swing/stance (mV/ms)")
     ap.add_argument("--lift", type=float, default=8.0, help="femur lift in swing (mV/ms)")
     ap.add_argument("--press", type=float, default=1.5, help="femur press in stance (mV/ms)")
+    ap.add_argument("--coxa-span-ref", type=float, default=1.4, help="coxa range (rad) the drives were tuned for (v2 body)")
+    ap.add_argument("--femur-span-ref", type=float, default=1.2, help="femur range (rad) the drives were tuned for (v2 body)")
     args = ap.parse_args()
     c = build(args)
     print(f"wrote {args.output}: {len(c.cells)} cells, {len(c.syn)} synapses, {len(c.sense)} sensory projections")

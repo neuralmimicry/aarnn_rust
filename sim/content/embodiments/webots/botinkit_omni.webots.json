@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "botinkit_omni",
-  "model_digest": "598ea111478ed4d10ee59986802a11c2d4c6b0b8eebe35625d04edf7dd7b6575",
+  "model_digest": "5ac6c0a84bf2b8729713bbfdb9fc6dd1ba8ed2ed0305deb77bf0e859e0403c6a",
   "io_digest": "f2a398e0578bbdee6dadae26b8337a000620e8b335ff9b0f51daa975524fad23",
   "targets": [
     {
@@ -2565,5 +2565,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 92,
-  "digest": "62deaefc9ccc84d42a0d709471747cbd4565f83daf8a123ea42b95f7509b1f79"
+  "digest": "bcc2093a9f32a8971eb5520991294e79297cb4a374d0a8f4a533e093217a43cf"
 }

@@ -51,6 +51,10 @@ def zebrafish(name: str, kind: str):
     A, commissural C) with ventral motor columns; lateral-line afferents in
     the posterior/anterior lateral-line ganglia, vestibular afferents in the
     statoacoustic ganglion, retinal ganglion cells in the eyes."""
+    if kind == "sensory":
+        hit = needs_sensor_rule(name, "fish")
+        if hit:
+            return hit
     seg_y = lambda i: 0.35 - i * (1.1 / 7.0)
     if kind == "hidden":
         if name == "MLR":
@@ -67,6 +71,28 @@ def zebrafish(name: str, kind: str):
             dx = {"E": 0.03, "A": 0.035, "C": 0.012}[role]
             dz = {"E": 0.0, "A": -0.008, "C": 0.008}[role]
             return (lr(side, dx), seg_y(i), dz), f"spinal_{i}"
+        # Learning by experience on the olfactory range channels
+        # (aarnn_circuit.add_learned_anticipation): distance-tuned cells CS
+        # in the dorsal pallium Dp (the olfactory-cortex homolog, sparse
+        # odour coding like Kenyon cells, and an adult neurogenic niche), the
+        # learned turn LT in Dm (the amygdala homolog, aversive learning), the
+        # near-reflex teacher relays TN in the olfactory bulb and the
+        # modulatory LC in the locus coeruleus (rhombomere 1).
+        hit = forage_rule(name, "fish")
+        if hit:
+            return hit
+        if name == "LC":
+            return (0.012, 0.56, 0.045), "locus_coeruleus"
+        m = re.match(r"LT_([lr])$", name)
+        if m:
+            return (lr(m[1], 0.015), 0.77, 0.05), "pallium_Dm"
+        m = re.match(r"TN_([lr])_(\d+)$", name)
+        if m:
+            return (lr(m[1], 0.035 + 0.006 * int(m[2])), 0.85, 0.0), "olfactory_bulb"
+        m = re.match(r"CS_([lr])_(\d+)$", name)
+        if m:
+            k = int(m[2])
+            return (lr(m[1], 0.035 + 0.003 * (k % 5)), 0.75 + 0.006 * (k // 5), 0.025 + 0.003 * (k % 3)), "pallium_Dp"
     if kind == "output":
         m = re.search(r"tail_([lr])(\d+)", name)
         if m:
@@ -100,6 +126,9 @@ def zebrafish(name: str, kind: str):
             return (-0.09, 0.46, 0.01), "posterior_lateral_line_ganglion"
         if "pressure" in name or "accel" in name or "gyro" in name:
             return (0.07 if name.endswith(("x", "depth")) else -0.07, 0.49, 0.0), "statoacoustic_ganglion"
+        m = re.search(r"hear_inner_ear_(left|right)_(\d+)Hz", name)
+        if m:   # saccular hearing afferents, also in the statoacoustic ganglion; tonotopic offset
+            return (lr(m[1], 0.075), 0.495, -0.004 if int(m[2]) < 200 else -0.008), "statoacoustic_ganglion"
     return None
 
 
@@ -126,6 +155,80 @@ def hexapod(name: str, kind: str):
             return (lr(side, 0.08), y + dy, -0.03), f"{ganglion}_ganglion_motor"
         if kind == "sensory":
             return (lr(side, HEX_JOINT[part]), y - 0.05, -0.05), f"{leg}{side}_leg_{part}_sensilla"
+    if kind == "hidden":
+        # Tripod CPG circuit (scripts/build_hexapod_cpg_network_json.py).
+        # Insect walking: rhythm and premotor interneurons in the thoracic
+        # ganglia, the descending command in the brain, steering through the
+        # lateral accessory lobe flip-flop and descending neurons of the
+        # suboesophageal zone; backward walking from the moonwalker
+        # descending neurons (MDN, Bidaye et al. 2014).
+        fixed = {"WALK": ((0.0, 0.92, 0.06), "central_complex_locomotor_command"),
+                 "MLR": ((0.0, 0.90, 0.05), "central_complex"),
+                 "P_sonar": ((0.0, 0.86, 0.02), "suboesophageal_auditory_neuropil"),
+                 "BOUT": ((0.012, 0.84, 0.0), "suboesophageal_zone"),
+                 "BOUT_A": ((-0.012, 0.84, 0.0), "suboesophageal_zone"),
+                 "BACK": ((0.0, 0.82, 0.03), "moonwalker_descending_neurons"),
+                 "BACK_I": ((0.006, 0.82, 0.03), "moonwalker_descending_neurons"),
+                 # learning by experience: mushroom-body output neuron (LT)
+                 # and its dopaminergic teaching neuron (LC, PPL1-like)
+                 "LT": ((0.03, 0.93, 0.02), "mushroom_body_output_neuron"),
+                 "LC": ((0.035, 0.94, 0.04), "mushroom_body_dopaminergic_neurons"),
+                 # learned foraging / recharging (aarnn_circuit.add_learned_foraging):
+                 # hunger in the pars intercerebralis (insulin / AKH cells),
+                 # feeding from gustatory input in the suboesophageal zone,
+                 # reward from the PAM dopaminergic cluster onto an appetitive
+                 # mushroom-body output neuron, run / turn trend cells in the LAL.
+                 "HUNGER": ((0.0, 0.97, 0.06), "pars_intercerebralis"),
+                 "SATED": ((0.006, 0.97, 0.06), "pars_intercerebralis"),
+                 "FEED": ((0.0, 0.84, -0.02), "suboesophageal_zone_gustatory"),
+                 "DA_R": ((-0.035, 0.94, 0.04), "mushroom_body_PAM_dopaminergic_neurons"),
+                 "V": ((-0.03, 0.93, 0.02), "mushroom_body_output_neuron_appetitive"),
+                 "V_SLOW": ((-0.03, 0.93, 0.0), "mushroom_body_output_neuron_appetitive"),
+                 "RISE": ((0.01, 0.90, 0.05), "lateral_accessory_lobe"),
+                 "FALL": ((-0.01, 0.90, 0.05), "lateral_accessory_lobe")}
+        if name in fixed:
+            return fixed[name]
+        m = re.match(r"CS_(\d+)$", name)
+        if m:   # distance-tuned sonar cells: mushroom-body calyx (Kenyon-cell-like)
+            k = int(m[1])
+            return (0.02 + 0.002 * (k % 5), 0.95 + 0.003 * (k // 5), 0.03), "mushroom_body_calyx"
+        m = re.match(r"RQ_([lr])_(\d+)$", name)
+        if m:   # cue relays: antennal-lobe projection neurons
+            return (lr(m[1], 0.025 + 0.003 * int(m[2])), 0.975, 0.03), "antennal_lobe"
+        m = re.match(r"CF_([lr])_(\d+)$", name)
+        if m:   # cue-band cells: Kenyon-cell-like, mushroom-body calyx
+            k = int(m[2])
+            return (lr(m[1], 0.012 + 0.002 * k), 0.958, 0.035), "mushroom_body_calyx"
+        m = re.match(r"BOUT_(A_)?(on|off)$", name)
+        if m:
+            return (0.02 if m[2] == "on" else -0.02, 0.88, 0.03 if m[1] else 0.04), "lateral_accessory_lobe"
+        m = re.match(r"ARTR(_A)?_([lr])$", name)
+        if m:   # LAL flip-flop (bilateral, alternating)
+            return (lr(m[2], 0.04 + (0.01 if m[1] else 0.0)), 0.88, 0.0), "lateral_accessory_lobe_flipflop"
+        m = re.match(r"RS_([lr])$", name)
+        if m:
+            return (lr(m[1], 0.03), 0.80, -0.01), "suboesophageal_descending_neurons"
+        m = re.match(r"([EAC])_gait_(sw|st)$", name)
+        if m:
+            return (0.02 if m[2] == "sw" else -0.02, 0.05, {"E": 0.0, "A": -0.008, "C": 0.008}[m[1]]), \
+                "mesothoracic_ganglion_CPG"
+        m = re.match(r"D(\d*)_([lr])_([01])$", name)
+        if m:   # lagged stride interneurons, one chain per side and phase
+            n = int(m[1] or 0)
+            return (lr(m[2], 0.03 + 0.006 * n), 0.02 - 0.012 * int(m[3]), 0.01), "thoracic_premotor_interneurons"
+        m = re.match(r"([XZ])_(?:([lr])_)?([01])$", name)
+        if m:   # turn (X) and reversal (Z) gates
+            x = lr(m[2], 0.015) if m[2] else 0.0
+            return (x, -0.03 - 0.01 * int(m[3]), 0.015 if m[1] == "X" else -0.015), "thoracic_premotor_interneurons"
+        m = re.match(r"R_hex_s_\d+_ultrasonic_(left|right)$", name)
+        if m:
+            return (lr(m[1], 0.06), 0.86, 0.0), "suboesophageal_auditory_neuropil"
+    if kind == "output":
+        m = re.match(r"hex_o_\d+_([lr])([fmr])_(coxa|femur|tibia)$", name)
+        if m:
+            y, ganglion = HEX_SEG[m[2]]
+            dy = {"coxa": 0.03, "femur": 0.0, "tibia": -0.03}[m[3]]
+            return (lr(m[1], 0.08), y + dy, -0.03), f"{ganglion}_ganglion_motor"
     if kind == "sensory":
         if "body_accel" in name or "body_gyro" in name:
             return (0.0, 0.0, 0.05), "mesothoracic_dorsal_sensilla"
@@ -134,6 +237,16 @@ def hexapod(name: str, kind: str):
         m = re.search(r"ultrasonic_(left|right)", name)
         if m:
             return (lr(m[1], 0.12), 0.8, 0.0), "head_tympanal_organ"
+        # Energy needs (optional group `needs`): reserve sensed internally,
+        # feeding / charging contact at the mouthparts, cue receivers on the
+        # antennae.
+        if name == "needs_energy":
+            return (0.0, 0.6, 0.04), "interoceptive_energy_sensors"
+        if name == "needs_consume":
+            return (0.0, 0.9, -0.04), "mouthpart_gustatory_sensilla"
+        m = re.match(r"needs_cue_(left|right)$", name)
+        if m:
+            return (lr(m[1], 0.06), 1.0, 0.05), "antenna"
     return None
 
 
@@ -174,6 +287,14 @@ def nao(name: str, kind: str):
             role, phase = m[1], m[2]
             return (0.025 if phase == "sw" else -0.025, 0.23, {"E": 0.0, "A": -0.008, "C": 0.008}[role]), \
                 "lumbar_CPG_L2"
+        m = re.match(r"YD_([AB])$", name)
+        if m:   # yaw-steering delay of the phase (lumbar CPG)
+            return (0.012 if m[1] == "A" else -0.012, 0.215, 0.004), "lumbar_CPG_delay"
+        if name == "FORCE_TURN":
+            return (0.0, 0.66, 0.03), "test_command"
+        m = re.match(r"Y_([lr])_([AB])$", name)
+        if m:   # yaw AND cells (turn command x lagged phase)
+            return (lr(m[1], 0.02), 0.245, 0.0 if m[2] == "A" else -0.004), "lumbar_gate"
         m = re.match(r"D_([LR])_([AB])$", name)
         if m:
             return (lr(m[1], 0.03), 0.22 - (0.01 if m[2] == "B" else 0.0), 0.006), "lumbar_CPG_delay"
@@ -185,6 +306,68 @@ def nao(name: str, kind: str):
         m = re.match(r"LT_([lr])$", name)
         if m:   # learned orienting turn: superior colliculus
             return (lr(m[1], 0.03), 0.78, 0.035), "superior_colliculus_orienting"
+        m = re.match(r"CN_(F|R)(L|R)_(\d+)$", name)
+        if m:   # cochlear nucleus, tonotopic (low bands ventral)
+            k = [250, 1000, 3000, 8000].index(int(m[3])) if int(m[3]) in (250, 1000, 3000, 8000) else 0
+            return (lr(m[2], 0.045 + (0.004 if m[1] == "R" else 0.0)), 0.705, -0.01 + 0.004 * k), "cochlear_nucleus"
+        m = re.match(r"ILD_([lr])_(\d+)$", name)
+        if m:   # lateral superior olive
+            return (lr(m[1], 0.025), 0.69, -0.02 + 0.002 * (int(m[2]) // 1000)), "superior_olive_lateral"
+        m = re.match(r"(ITD_([lr])_(Front|Rear)|SOC_(Front|Rear))$", name)
+        if m:   # medial superior olive (SOC relays on the midline)
+            side = m[2] or ""
+            return ((lr(side, 0.018) if side else 0.0), 0.69, -0.012 if (m[3] or m[4]) == "Front" else -0.016), \
+                "superior_olive_medial"
+        m = re.match(r"OR_([lr])$", name)
+        if m:   # deep superior colliculus: orienting
+            return (lr(m[1], 0.028), 0.78, 0.028), "superior_colliculus_deep"
+        m = re.match(r"R_touch_([LR])Foot/Bumper/(Left|Right)$", name)
+        if m:   # toe touch afferents enter the L5/S1 dorsal horn of their foot
+            outer = (m[1] == "L") == (m[2] == "Left")
+            return (lr(m[1], 0.034 + (0.006 if outer else 0.0)), 0.185, 0.03), "lumbosacral_L5_S1_dorsal_horn"
+        m = re.match(r"(?:R_fall_[xz](?:_back)?|FALL_(front|back))$", name)
+        if m:   # gravity (otolith) relay and lying detectors: vestibular nuclei
+            return ((0.0 if m[1] is None else lr("l" if m[1] == "front" else "r", 0.015)), 0.68, -0.025), \
+                "vestibular_nuclei"
+        m = re.match(r"(?:R_state_(\w+?)_(\d+)|B_(\w+?)_(\d+))$", name)
+        if m:   # body-state code: vestibular (acc) and proprioceptive (joint) bands, dorsal spinocerebellar
+            ch = m[1] or m[3]
+            k = int(m[2] or m[4])
+            vest = ch.startswith("acc")
+            return ({"accx": 0.012, "accy": 0.0}.get(ch, -0.012) if vest else lr("l", 0.02 + 0.004 * k),
+                    0.68 if vest else 0.60 - 0.01 * k, 0.05 if m[3] else 0.045), \
+                "vestibular_nuclei" if vest else "cerebellar_proprioceptive_relay"
+        if name in ("RM", "MOVING", "STUCK", "NO_TRIGGER"):   # righting mode, movement and stuck: reticular formation
+            return ({"RM": 0.0, "MOVING": 0.006, "STUCK": -0.006, "NO_TRIGGER": 0.012}[name], 0.665, 0.045), \
+                "pontine_reticular_formation"
+        if name in ("LYING", "R_lying_z") or name.startswith("R_prog_") or name in ("P_up", "P_ventral"):
+            # gravity (otolith) relays, lying and progress: vestibular nuclei; progress -> LC
+            x = {"LYING": 0.0, "R_lying_z": 0.004, "P_up": 0.008, "P_ventral": -0.008}.get(name, 0.012 if "_z_" in name else -0.012)
+            return (x, 0.685, 0.03 if name.startswith("P_") else 0.02), "vestibular_nuclei"
+        m = re.match(r"(?:(?:TR|BB)_(acc[xz])_(\d+)|PT_(acc[xz])_(\d+))$", name)
+        if m:   # band traces and progress transitions: vestibular nuclei
+            ch, k = (m[1], m[2]) if m[1] else (m[3], m[4])
+            return ((0.016 if ch == "accx" else -0.016), 0.685 - 0.002 * int(k), 0.055 if m[1] else 0.06), "vestibular_nuclei"
+        m = re.match(r"EXO_(A_)?(\d)_([ab])$", name)
+        if m:   # exploration oscillators: brainstem
+            return (0.01 * (int(m[2]) - 1), 0.655, (0.05 if m[3] == "a" else 0.054) + (0.003 if m[1] else 0.0)), \
+                "brainstem_exploration_oscillators"
+        m = re.match(r"(LR|LA|ST|SA|L)_(getup|rollm|roll)_(\d+)$", name)
+        if m:   # learned sequencing: cerebellar-like context -> movement cells
+            k = int(m[3]) + {"roll": 20, "rollm": 30}.get(m[2], 0)
+            return (lr("l" if k % 2 == 0 else "r", 0.012), 0.62 - 0.002 * k, {"L": 0.03, "LR": 0.036, "LA": 0.024, "ST": 0.042, "SA": 0.048}[m[1]]), \
+                "cerebellum_sequence_learning"
+        m = re.match(r"([TG])_(getup|rollm|roll)$", name)
+        if m:   # program trigger and its gate: pontine reticular formation
+            return ({"roll": 0.006, "rollm": -0.006}.get(m[2], 0.0), 0.67, 0.035 if m[1] == "T" else 0.04), "pontine_reticular_formation"
+        m = re.match(r"([KASXM])_(getup|rollm|roll)_(\d+)$", name)
+        if m:   # righting sequence (fixed action pattern), mesencephalic locomotor/righting region
+            k = int(m[3]) + {"roll": 20, "rollm": 30}.get(m[2], 0)
+            return (lr("l" if k % 2 == 0 else "r", 0.008), 0.715 - 0.002 * k, {"K": 0.03, "A": 0.024, "S": 0.036, "X": 0.042, "M": 0.018}[m[1]]), \
+                "midbrain_righting_sequence"
+        m = re.match(r"T_([lr])$", name)
+        if m:   # withdrawal integrator: deep dorsal horn (lamina V), spinoreticular
+            return (lr(m[1], 0.025), 0.195, 0.025), "lumbosacral_dorsal_horn_lamina_V"
         m = re.match(r"(R|P|N|R_near)_(?:Sonar/)?(?:sonar_)?(Left|Right|l|r)$", name)
         if m:
             nucleus = {"R": "cochlear_nucleus", "R_near": "cochlear_nucleus", "P": "inferior_colliculus",
@@ -206,6 +389,11 @@ def nao(name: str, kind: str):
         m = re.match(r"Sonar/(Left|Right)", name)
         if m:
             return (lr(m[1][0], 0.08), 0.74, 0.0), "spiral_ganglion"
+        m = re.match(r"Micro/(F|R)(L|R)/", name)
+        if m:   # cochlea / spiral ganglion of the ear on that side
+            return (lr(m[2], 0.075), 0.73 if m[1] == "R" else 0.745, -0.01), "spiral_ganglion"
+        if name.startswith("Micro/ITD"):
+            return (0.0, 0.70, -0.02), "spiral_ganglion"
         if name.startswith(("accelerometer", "gyro")):
             return (0.07 if name.endswith("x") else -0.07, 0.73, 0.0), "vestibular_ganglion"
         if "Fsr" in name or "Bumper" in name:
@@ -223,6 +411,116 @@ def nao(name: str, kind: str):
 # their soma side; designed cells at the neuropil of their functional
 # equivalent. Head y 0.72-0.88 (brain), thorax y 0.12-0.42 (ventral nerve
 # cord: T1/T2/T3 leg neuromeres ventral, neck/wing/haltere tectula dorsal).
+def needs_sensor_rule(name: str, anatomy: str):
+    """Energy-needs channels (optional group ``needs``): the reserve as an
+    interoceptive signal, intake through gustatory / vagal afferents, the cue
+    pair at the olfactory organs (antennae in insects)."""
+    if not name.startswith("needs_"):
+        return None
+    if anatomy == "fly":
+        n = FLY_NEUROPIL
+        if name == "needs_energy":
+            return n["SMP"][:2] + (n["SMP"][2] + 0.02,), "interoceptive_energy_sensors"
+        if name == "needs_consume":
+            return (0.0, n["GNG"][1] + 0.04, n["GNG"][2] - 0.02), "labellum_gustatory_sensilla"
+        m = re.match(r"needs_cue_(left|right)$", name)
+        if m:
+            return (lr(m[1], n["AL"][0] + 0.02), n["AL"][1] + 0.05, n["AL"][2]), "antenna"
+        return None
+    y0 = 0.66 if anatomy == "fish" else 0.70
+    if name == "needs_energy":
+        return (0.0, y0, -0.03), "hypothalamic_interoceptors"
+    if name == "needs_consume":
+        return (0.0, y0 - 0.07, -0.04), "nodose_ganglion_vagal" if anatomy != "fish" else "gustatory_vagal_afferents"
+    m = re.match(r"needs_cue_(left|right)$", name)
+    if m:
+        return (lr(m[1], 0.03), 0.92 if anatomy == "fish" else 0.90, 0.02), "olfactory_epithelium"
+    return None
+
+
+def forage_rule(name: str, anatomy: str):
+    """Learned foraging / recharging cells (aarnn_circuit.add_learned_foraging)
+    and spontaneous turn bouts, per anatomy ("fish", "fly", "vertebrate"):
+    hunger / satiety in the hypothalamus (pars intercerebralis in insects),
+    feeding from gustatory / vagal input, reward from the dopaminergic
+    cluster (posterior tuberculum in fish, PAM in insects, VTA in mammals) onto
+    a value cell in the ventral striatum (appetitive mushroom-body output
+    neuron in insects), cue-band cells in the olfactory bulb / antennal lobe
+    and the run / turn trend cells beside the locomotor command."""
+    if anatomy == "fly":
+        n = FLY_NEUROPIL
+        at = {"HUNGER": (n["SMP"], (0.0, 0.02, 0.01), "pars_intercerebralis"),
+              "SATED": (n["SMP"], (0.006, 0.02, 0.01), "pars_intercerebralis"),
+              "FEED": (n["GNG"], (0.0, 0.0, -0.01), "suboesophageal_zone_gustatory"),
+              "DA_R": (n["SMP"], (-0.005, 0.005, 0.005), "mushroom_body_PAM_dopaminergic_neurons"),
+              "V": (n["SMP"], (-0.01, 0.0, 0.0), "mushroom_body_output_neuron_appetitive"),
+              "V_SLOW": (n["SMP"], (-0.01, 0.0, -0.004), "mushroom_body_output_neuron_appetitive"),
+              "RISE": (n["LAL"], (0.0, 0.006, 0.004), "lateral_accessory_lobe"),
+              "FALL": (n["LAL"], (0.0, 0.006, -0.004), "lateral_accessory_lobe")}
+        cue, bout = (n["AL"], "antennal_lobe"), (n["LAL"], "lateral_accessory_lobe")
+    elif anatomy == "fish":
+        at = {"HUNGER": ((0.0, 0.66, -0.01), (0, 0, 0), "hypothalamus_arcuate"),
+              "SATED": ((0.006, 0.66, -0.01), (0, 0, 0), "hypothalamus_arcuate"),
+              "FEED": ((0.0, 0.62, -0.03), (0, 0, 0), "vagal_lobe_gustatory"),
+              "DA_R": ((0.008, 0.70, 0.0), (0, 0, 0), "posterior_tuberculum_dopaminergic"),
+              "V": ((0.0, 0.74, 0.03), (0, 0, 0), "subpallium_ventral_striatum"),
+              "V_SLOW": ((0.004, 0.74, 0.03), (0, 0, 0), "subpallium_ventral_striatum"),
+              "RISE": ((0.01, 0.60, 0.02), (0, 0, 0), "midbrain_tegmentum"),
+              "FALL": ((-0.01, 0.60, 0.02), (0, 0, 0), "midbrain_tegmentum")}
+        cue, bout = ((0.03, 0.87, 0.01), "olfactory_bulb_glomeruli"), ((0.012, 0.60, 0.0), "hindbrain_bout_generator")
+    else:
+        at = {"HUNGER": ((0.0, 0.70, -0.01), (0, 0, 0), "hypothalamus_arcuate"),
+              "SATED": ((0.006, 0.70, -0.01), (0, 0, 0), "hypothalamus_arcuate"),
+              "FEED": ((0.0, 0.64, -0.02), (0, 0, 0), "nucleus_of_the_solitary_tract"),
+              "DA_R": ((0.008, 0.69, 0.0), (0, 0, 0), "ventral_tegmental_area"),
+              "V": ((0.012, 0.80, 0.0), (0, 0, 0), "nucleus_accumbens"),
+              "V_SLOW": ((0.016, 0.80, 0.0), (0, 0, 0), "nucleus_accumbens"),
+              "RISE": ((0.015, 0.79, 0.01), (0, 0, 0), "striatum"),
+              "FALL": ((-0.015, 0.79, 0.01), (0, 0, 0), "striatum")}
+        cue, bout = ((0.03, 0.86, 0.02), "olfactory_bulb"), ((0.012, 0.71, 0.01), "midbrain_MLR_bout")
+    if name in at:
+        (x, y, z), (dx, dy, dz), region = at[name]
+        return (x + dx, y + dy, z + dz), region
+    # Learned steering (add_learned_foraging(steer=True)): side value cells
+    # beside V, steering cells beside the run / turn trend cells.
+    m = re.match(r"(V|STEER)_([lr])$", name)
+    if m:
+        (x, y, z), (dx, dy, dz), region = at["V" if m[1] == "V" else "RISE"]
+        return (lr(m[2], abs(x + dx) + 0.006), y + dy, z + dz + 0.004), region
+    m = re.match(r"CF_([lr])_(\d+)$", name)
+    if m:
+        (x, y, z), region = cue
+        return (lr(m[1], x + 0.003 * int(m[2])), y, z + 0.002 * int(m[2])), region
+    m = re.match(r"BOUT_(A_)?(on|off)$", name)
+    if m:
+        (x, y, z), region = bout
+        return (x if m[2] == "on" else -x, y, z + (0.004 if m[1] else 0.0)), region
+    # Innate touch escape (aarnn_circuit.add_touch_escape): the escape cells
+    # beside the reticulospinal / descending turn cells (Mauthner cells in
+    # rhombomere 4; insect escape descending neurons in the GNG; medullary
+    # reticular formation), the touch relays with the head's mechanosensory
+    # afferents (trigeminal ganglion; antennal mechanosensory centre AMMC).
+    if anatomy == "fly":
+        esc = ((0.02, 0.745, -0.045), "descending_neurons_escape_gng")
+        touch = (FLY_NEUROPIL["AMMC"], "ammc_antennal_touch")
+    elif anatomy == "fish":
+        esc, touch = ((0.02, 0.52, -0.02), "hindbrain_mauthner_r4"), ((0.06, 0.72, -0.03), "trigeminal_ganglion")
+    else:
+        esc, touch = ((0.02, 0.60, -0.02), "medullary_reticular_formation"), ((0.05, 0.75, -0.03), "trigeminal_ganglion")
+    m = re.match(r"ESC_(A_)?([lr])$", name)
+    if m:
+        (x, y, z), region = esc
+        return (lr(m[2], x + (0.006 if m[1] else 0.0)), y, z - (0.004 if m[1] else 0.0)), region
+    m = re.match(r"TOUCH_([lrf])$", name) or re.match(r"TCH_([lrf])_(\d+)$", name)
+    if m:
+        (x, y, z), region = touch
+        k = int(m[2]) + 1 if m.re.groups > 1 else 0
+        if m[1] == "f":
+            return (0.0, y + 0.004, z + 0.002 * k), region
+        return (lr(m[1], x + 0.002 * k), y, z + 0.002 * k), region
+    return None
+
+
 FLY_NEUROPIL = {
     # brain (x lateral offset, y, z)
     "AL": (0.03, 0.85, -0.01), "SAD": (0.04, 0.82, -0.03), "AMMC": (0.06, 0.81, -0.02),
@@ -261,6 +559,10 @@ def drosophila(name: str, kind: str):
     brain, wing steering premotor cells in the wing tectulum, haltere
     interneurons in the haltere tectulum, antennal wind/gravity relays in
     the AMMC, looming relays in the lobula)."""
+    if kind == "sensory":
+        hit = needs_sensor_rule(name, "fly")
+        if hit:
+            return hit
     if name.isdigit():
         row = _banc_table().get(name)
         if row is None:
@@ -312,6 +614,30 @@ def drosophila(name: str, kind: str):
     if name.startswith("R_dros_s_22_prox"):
         x, y, z = FLY_NEUROPIL["LO"]
         return (x, y, z + 0.01), "lobula_looming"
+    # Learning by experience (aarnn_circuit.add_learned_anticipation), as on
+    # the hexapod: distance-tuned Kenyon-cell-like CS in the calyx (the adult
+    # neurogenic niche of the insect brain), the learned turn LT as a
+    # mushroom-body output neuron in the SMP, its PPL1-like dopaminergic
+    # teacher LC, and the near-reflex relays TN with the lobula looming cells.
+    hit = forage_rule(name, "fly")
+    if hit:
+        return hit
+    if name == "LC":
+        x, y, z = FLY_NEUROPIL["SMP"]
+        return (x + 0.005, y + 0.005, z + 0.005), "mushroom_body_dopaminergic_neurons"
+    m = re.match(r"LT_([lr])$", name)
+    if m:
+        x, y, z = FLY_NEUROPIL["SMP"]
+        return (lr(m[1], x), y, z), "mushroom_body_output_neuron"
+    m = re.match(r"TN_([lr])_(\d+)$", name)
+    if m:
+        x, y, z = FLY_NEUROPIL["LO"]
+        return (lr(m[1], x), y, z + 0.003 * int(m[2])), "lobula_looming"
+    m = re.match(r"CS_([lr])_(\d+)$", name)
+    if m:
+        k = int(m[2])
+        x, y, z = FLY_NEUROPIL["MB_CA"]
+        return (lr(m[1], x + 0.003 * (k % 5)), y + 0.004 * (k // 5), z + 0.002 * (k % 3)), "mushroom_body_calyx"
     return None
 
 
@@ -349,10 +675,34 @@ def _vertebrate_core(name: str):
         x = 0.03 * (1 if i % 2 == 0 else -1) * (1 + i // 2 * 0.2)
         return ((x, 0.76, 0.04) if m[1] == "P" else (x * 1.4, 0.80, 0.02)), \
             ("superior_colliculus" if m[1] == "P" else "lateral_geniculate_relay")
+    # Learning by experience (aarnn_circuit.add_learned_anticipation) on the
+    # range rays that stand in for vision, as on the NAO: the noradrenergic
+    # LC, the learned orienting turn LT in the deep superior colliculus, the
+    # distance-tuned CS map in its superficial layers and the near-reflex
+    # (looming) teacher relays TN beside the innate proximity cells.
+    hit = forage_rule(name, "vertebrate")
+    if hit:
+        return hit
+    if name == "LC":
+        return (0.006, 0.675, 0.02), "locus_coeruleus"
+    m = re.match(r"LT_([lr])$", name)
+    if m:
+        return (lr(m[1], 0.03), 0.78, 0.035), "superior_colliculus_orienting"
+    m = re.match(r"TN_([lr])_(\d+)$", name)
+    if m:
+        return (lr(m[1], 0.025 + 0.004 * int(m[2])), 0.755, 0.05), "superior_colliculus_looming"
+    m = re.match(r"CS_([lr])_(\d+)$", name)
+    if m:
+        k = int(m[2])
+        return (lr(m[1], 0.04 + 0.0015 * (k % 5)), 0.765 - 0.002 * (k // 5), 0.045 + 0.002 * (k % 3)), \
+            "superior_colliculus_distance_map"
     return None
 
 
 def _distance_eye(name: str):
+    hit = needs_sensor_rule(name, "vertebrate")
+    if hit:
+        return hit
     m = re.match(r"proximity_(\d+)$", name)
     if m:
         i = int(m[1])

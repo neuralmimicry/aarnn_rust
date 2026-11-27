@@ -9,7 +9,7 @@ def Xform "Robot" (
     prepend apiSchemas = ["PhysicsArticulationRootAPI"]
     customData = {
         string aarnnIODigest = "61666f3b50e5417bd6e6300c741ba96b9ec5e05392479051d36c8784685847b8"
-        string aarnnModelDigest = "aef5438935f081ceaa3e7780eed84887b5fa641285dbabb7a744315c763bf6a3"
+        string aarnnModelDigest = "1f2e4b4fb78caf763a8dd45846c1dcc38a9aacd26348b0ba1802c16b1a597c88"
     }
 )
 {

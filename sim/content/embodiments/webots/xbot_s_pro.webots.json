@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "xbot_s_pro",
-  "model_digest": "cbad7abeb8bc7bee5fad7afedacd46d069bbd0b2b815706a8150db7413dc1d67",
+  "model_digest": "970f19c417286f8041ff602c11cab3252f5c35064f14cb25aaa96f78ed335444",
   "io_digest": "7dacb487ee1c1ea6583b98c3a4400dcecf855d9a3250d2a8bee38629020e1fdb",
   "targets": [
     {
@@ -2892,5 +2892,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 92,
-  "digest": "a842d8374ba2d67586ce9ad0ec690c4f06528b6c8b668c24abe359c2b1b3175f"
+  "digest": "633effdf6cb5fb00b8c0a6631ca6ab014b18c34ae2005a26b9f67bdfbce9727f"
 }

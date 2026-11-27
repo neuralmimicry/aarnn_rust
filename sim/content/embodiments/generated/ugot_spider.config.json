@@ -1,5 +1,5 @@
 {
-  "num_sensory_neurons": 27,
+  "num_sensory_neurons": 31,
   "num_output_neurons": 16,
   "num_hidden_layers": 2,
   "num_hidden_per_layer_initial": 32,

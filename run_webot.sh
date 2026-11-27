@@ -5,6 +5,40 @@
 # Licensed under the MIT License. See LICENSE in the project root.
 set -euo pipefail
 
+# --- Host memory guard -------------------------------------------------------
+# Run the whole launch inside a memory-capped systemd scope, so a runaway
+# network or node is OOM-killed inside the scope instead of taking the desktop
+# and the host down with it (24 Nov 2026: a 39.5 GB orchestrator crashed the
+# laptop). The processes also pace themselves against this cap: the runtime
+# reads its own cgroup limit (src/monitor.rs). Skipped when the caller already
+# runs under a memory limit (it would otherwise replace a tighter cap), when
+# systemd-run --user is unavailable, or with NM_MEMORY_GUARD=0.
+# NM_MEMORY_MAX: cap in systemd syntax (default 80% of physical memory).
+nm_memory_capped() {
+  local rel dir v
+  rel="$(awk -F'::' '/^0::/{print $2; exit}' /proc/self/cgroup 2>/dev/null)"
+  [ -n "$rel" ] || return 1
+  dir="/sys/fs/cgroup${rel}"
+  while [ -n "$dir" ] && [ "$dir" != "/sys/fs/cgroup" ]; do
+    for f in memory.max memory.high; do
+      v="$(cat "$dir/$f" 2>/dev/null)"
+      if [ -n "$v" ] && [ "$v" != "max" ]; then return 0; fi
+    done
+    dir="${dir%/*}"
+  done
+  return 1
+}
+if [ "${NM_MEMORY_GUARD:-1}" != "0" ] && [ -z "${NM_MEMORY_GUARD_ACTIVE:-}" ] \
+   && command -v systemd-run >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1 \
+   && ! nm_memory_capped; then
+  export NM_MEMORY_GUARD_ACTIVE=1
+  echo "$(basename "$0"): running under a ${NM_MEMORY_MAX:-80%} memory cap (systemd scope; NM_MEMORY_GUARD=0 disables)" >&2
+  exec systemd-run --user --scope --quiet --collect -p "MemoryMax=${NM_MEMORY_MAX:-80%}" -p MemorySwapMax=0 \
+    bash "$0" "$@"
+fi
+export NM_MEMORY_GUARD_ACTIVE=1
+# -----------------------------------------------------------------------------
+
 # Profile-based native expansion uses the shared dispatcher before legacy GPU,
 # network generation or remote lifecycle code can run.
 _aarnn_dispatch_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -333,7 +367,10 @@ ORCHESTRATOR_PORT="${NM_ORCHESTRATOR_PORT:-}"
 NODE_COUNT="${NM_CLUSTER_NODES:-1}"
 NODE_UI_HIDDEN="${NM_NODE_UI_HIDDEN:-0}"
 SINGLE_ORCHESTRATOR_UI="${NM_SINGLE_ORCHESTRATOR_UI:-0}"
-DISTRIBUTE_STARTUP_SNAPSHOT="${NM_DISTRIBUTE_STARTUP_SNAPSHOT:-1}"
+# auto: the runtime holds startup snapshots up to 256 MiB in the orchestrator
+# and lets local nodes preload larger ones from their file (a 2.7 GB snapshot
+# held by the orchestrator blocked placement and exhausted memory).
+DISTRIBUTE_STARTUP_SNAPSHOT="${NM_DISTRIBUTE_STARTUP_SNAPSHOT:-auto}"
 DISTRIBUTED_AUTOSTART="${NM_DISTRIBUTED_AUTOSTART:-1}"
 PRELOAD_NODE_NETWORK="${NM_PRELOAD_NODE_NETWORK:-1}"
 REMOTE_COMPUTE="${NM_REMOTE_COMPUTE:-0}"
@@ -703,7 +740,7 @@ fi
 SKIP_CONTROLLER_BUILD="$(normalize_bool SKIP_CONTROLLER_BUILD "$SKIP_CONTROLLER_BUILD")" || exit 1
 NODE_UI_HIDDEN="$(normalize_bool NODE_UI_HIDDEN "$NODE_UI_HIDDEN")" || exit 1
 SINGLE_ORCHESTRATOR_UI="$(normalize_bool SINGLE_ORCHESTRATOR_UI "$SINGLE_ORCHESTRATOR_UI")" || exit 1
-DISTRIBUTE_STARTUP_SNAPSHOT="$(normalize_bool NM_DISTRIBUTE_STARTUP_SNAPSHOT "$DISTRIBUTE_STARTUP_SNAPSHOT")" || exit 1
+DISTRIBUTE_STARTUP_SNAPSHOT="$(normalize_bool_auto NM_DISTRIBUTE_STARTUP_SNAPSHOT "$DISTRIBUTE_STARTUP_SNAPSHOT")" || exit 1
 DISTRIBUTED_AUTOSTART="$(normalize_bool NM_DISTRIBUTED_AUTOSTART "$DISTRIBUTED_AUTOSTART")" || exit 1
 REMOTE_COMPUTE="$(normalize_bool REMOTE_COMPUTE "$REMOTE_COMPUTE")" || exit 1
 REMOTE_QUIET="$(normalize_bool REMOTE_QUIET "$REMOTE_QUIET")" || exit 1
@@ -3056,7 +3093,7 @@ start_remote_cluster_runtime() {
 
     local orch_cmd=(
         env
-        "NM_DISTRIBUTE_STARTUP_SNAPSHOT=$DISTRIBUTE_STARTUP_SNAPSHOT"
+        "NM_DISTRIBUTE_STARTUP_SNAPSHOT=${DISTRIBUTE_STARTUP_SNAPSHOT/auto/1}"
         "NM_DISTRIBUTED_AUTOSTART=$DISTRIBUTED_AUTOSTART"
         "NM_ORCHESTRATOR_NETWORK_SPECS=$orch_specs_json"
         "NM_REALTIME_IPC=$REALTIME_IPC"

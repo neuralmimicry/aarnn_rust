@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering}
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 #[cfg(feature = "sysinfo")]
-use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+use sysinfo::System;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 #[cfg(feature = "sysinfo")]
@@ -418,12 +418,24 @@ fn ga_core_history_path() -> PathBuf {
     PathBuf::from("ga_core_affinity.json")
 }
 
+/// Memory the GA may use: the tighter of the process's cgroup limit (e.g. a
+/// `systemd-run -p MemoryMax=` scope) and host RAM, in MB.
+#[cfg(feature = "sysinfo")]
+fn ga_effective_total_mb() -> u64 {
+    crate::monitor::resource_sample()
+        .limit_bytes
+        .map(|b| b / (1024 * 1024))
+        .unwrap_or_else(|| {
+            let mut sys = System::new();
+            sys.refresh_memory();
+            ga_sys_mb_from_raw(sys.total_memory() as u64)
+        })
+}
+
 fn ga_default_mem_free_min_mb() -> u64 {
     #[cfg(feature = "sysinfo")]
     {
-        let mut sys = System::new();
-        sys.refresh_memory();
-        let total_mb = ga_sys_mb_from_raw(sys.total_memory() as u64);
+        let total_mb = ga_effective_total_mb();
         let ten_percent = ((total_mb as f32) * 0.1).ceil() as u64;
         return ten_percent.max(DEFAULT_GA_MEM_FREE_MIN_MB);
     }
@@ -436,9 +448,7 @@ fn ga_default_mem_free_min_mb() -> u64 {
 fn ga_default_mem_rss_warn_mb() -> u64 {
     #[cfg(feature = "sysinfo")]
     {
-        let mut sys = System::new();
-        sys.refresh_memory();
-        let total_mb = ga_sys_mb_from_raw(sys.total_memory() as u64);
+        let total_mb = ga_effective_total_mb();
         let warn_mb = ((total_mb as f32) * 0.60).ceil() as u64;
         return warn_mb.max(8192);
     }
@@ -451,9 +461,7 @@ fn ga_default_mem_rss_warn_mb() -> u64 {
 fn ga_default_mem_rss_abort_mb() -> u64 {
     #[cfg(feature = "sysinfo")]
     {
-        let mut sys = System::new();
-        sys.refresh_memory();
-        let total_mb = ga_sys_mb_from_raw(sys.total_memory() as u64);
+        let total_mb = ga_effective_total_mb();
         let abort_mb = ((total_mb as f32) * 0.75).ceil() as u64;
         let warn_mb = ga_default_mem_rss_warn_mb();
         return abort_mb.max(warn_mb + 512).max(12_288);
@@ -467,9 +475,7 @@ fn ga_default_mem_rss_abort_mb() -> u64 {
 fn ga_default_mem_rss_growth_warn_mb() -> u64 {
     #[cfg(feature = "sysinfo")]
     {
-        let mut sys = System::new();
-        sys.refresh_memory();
-        let total_mb = ga_sys_mb_from_raw(sys.total_memory() as u64);
+        let total_mb = ga_effective_total_mb();
         let warn_mb = ((total_mb as f32) * 0.2).ceil() as u64;
         return warn_mb.max(2048);
     }
@@ -482,9 +488,7 @@ fn ga_default_mem_rss_growth_warn_mb() -> u64 {
 fn ga_default_mem_rss_growth_abort_mb() -> u64 {
     #[cfg(feature = "sysinfo")]
     {
-        let mut sys = System::new();
-        sys.refresh_memory();
-        let total_mb = ga_sys_mb_from_raw(sys.total_memory() as u64);
+        let total_mb = ga_effective_total_mb();
         let abort_mb = ((total_mb as f32) * 0.35).ceil() as u64;
         let warn_mb = ga_default_mem_rss_growth_warn_mb();
         return abort_mb.max(warn_mb + 512).max(4096);
@@ -499,9 +503,7 @@ fn ga_sanitize_heuristics(h: &mut GAHeuristics) -> bool {
     let mut changed = false;
     #[cfg(feature = "sysinfo")]
     {
-        let mut sys = System::new();
-        sys.refresh_memory();
-        let total_mb = ga_sys_mb_from_raw(sys.total_memory() as u64);
+        let total_mb = ga_effective_total_mb();
         if total_mb > 0 {
             let min_free = ((total_mb as f32) * 0.05).ceil() as u64;
             let max_free = ((total_mb as f32) * 0.35).ceil() as u64;
@@ -714,22 +716,16 @@ fn ga_reset_mem_tracker() {
     guard.baseline_rss_mb = None;
     guard.last_rss_mb = None;
     guard.max_rss_mb = None;
-    #[cfg(feature = "sysinfo")]
+    // sysinfo reports bytes: the earlier `/ 1024` stored KiB as MB, so the
+    // growth baseline was ~1000x too large and growth never registered. The
+    // shared resource sample reads VmRSS directly.
+    if let Some(rss_mb) = crate::monitor::resource_sample()
+        .rss_bytes
+        .map(|b| b / (1024 * 1024))
     {
-        if let Ok(pid) = sysinfo::get_current_pid() {
-            let mut sys = System::new();
-            sys.refresh_processes_specifics(
-                ProcessesToUpdate::Some(&[pid]),
-                true,
-                ProcessRefreshKind::nothing().with_memory(),
-            );
-            if let Some(proc) = sys.process(pid) {
-                let rss_mb = (proc.memory() / 1024) as u64;
-                guard.baseline_rss_mb = Some(rss_mb);
-                guard.last_rss_mb = Some(rss_mb);
-                guard.max_rss_mb = Some(rss_mb);
-            }
-        }
+        guard.baseline_rss_mb = Some(rss_mb);
+        guard.last_rss_mb = Some(rss_mb);
+        guard.max_rss_mb = Some(rss_mb);
     }
     ga_clear_rss_critical();
     ga_clear_mem_growth_critical();

@@ -3,8 +3,8 @@
   "compiler": "embodiment-rigid-graph-v2",
   "digest_encoding": "embodiment-binary-v1",
   "profile_id": "nao",
-  "model_digest": "28f3d75621a73b2c7968bafe2dcc0de2fc89dd706c2ee567d24aa004c9c08098",
-  "io_digest": "bd85f639ac3991aec6019cf4b90c08cee78496c58f42bef3186b10313888f91d",
+  "model_digest": "e3202da32f48c76a363de9cee2954547ca622621e97a56df214b4e9a2fdcb690",
+  "io_digest": "553dcc886745e8682b81c9e9dad02afeacda4dcc6221c1558547c5708da5976d",
   "fidelity": "functional-surrogate",
   "variant_id": "original-v1",
   "controller_transfer": "legacy-native-projections-v1; native MuJoCo engineering adapter; calibration unvalidated",
@@ -6349,36 +6349,36 @@
   ],
   "cameras": [
     {
-      "name": "CameraBottom",
-      "owner": 1,
+      "name": "CameraTop",
+      "owner": 3,
       "position": [
-        0.0488,
+        0.05871,
         0.0,
-        0.1496
+        0.06364
       ],
       "quaternion_wxyz": [
-        -0.5,
-        -0.5,
-        0.5,
-        0.5
+        0.5052083651718219,
+        0.49473680655517743,
+        -0.49473680655517743,
+        -0.505208365171822
       ],
-      "fovy_deg": 60.73352628386726
+      "fovy_deg": 43.7
     },
     {
-      "name": "CameraTop",
-      "owner": 1,
+      "name": "CameraBottom",
+      "owner": 3,
       "position": [
-        0.0539,
+        0.05071,
         0.0,
-        0.1944
+        0.01774
       ],
       "quaternion_wxyz": [
-        -0.5,
-        -0.5,
-        0.5,
-        0.5
+        0.6400718784443513,
+        0.3005128789664754,
+        -0.3005128789664754,
+        -0.6400718784443514
       ],
-      "fovy_deg": 60.73352628386726
+      "fovy_deg": 43.7
     }
   ],
   "meshes": [
@@ -27958,7 +27958,7 @@
       {
         "name": "CameraBottom.on.r00c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -27980,7 +27980,7 @@
       {
         "name": "CameraBottom.off.r00c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28002,7 +28002,7 @@
       {
         "name": "CameraBottom.on.r00c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28024,7 +28024,7 @@
       {
         "name": "CameraBottom.off.r00c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28046,7 +28046,7 @@
       {
         "name": "CameraBottom.on.r00c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28068,7 +28068,7 @@
       {
         "name": "CameraBottom.off.r00c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28090,7 +28090,7 @@
       {
         "name": "CameraBottom.on.r00c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28112,7 +28112,7 @@
       {
         "name": "CameraBottom.off.r00c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28134,7 +28134,7 @@
       {
         "name": "CameraBottom.on.r00c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28156,7 +28156,7 @@
       {
         "name": "CameraBottom.off.r00c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28178,7 +28178,7 @@
       {
         "name": "CameraBottom.on.r00c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28200,7 +28200,7 @@
       {
         "name": "CameraBottom.off.r00c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28222,7 +28222,7 @@
       {
         "name": "CameraBottom.on.r00c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28244,7 +28244,7 @@
       {
         "name": "CameraBottom.off.r00c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28266,7 +28266,7 @@
       {
         "name": "CameraBottom.on.r00c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28288,7 +28288,7 @@
       {
         "name": "CameraBottom.off.r00c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28310,7 +28310,7 @@
       {
         "name": "CameraBottom.on.r01c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28332,7 +28332,7 @@
       {
         "name": "CameraBottom.off.r01c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28354,7 +28354,7 @@
       {
         "name": "CameraBottom.on.r01c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28376,7 +28376,7 @@
       {
         "name": "CameraBottom.off.r01c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28398,7 +28398,7 @@
       {
         "name": "CameraBottom.on.r01c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28420,7 +28420,7 @@
       {
         "name": "CameraBottom.off.r01c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28442,7 +28442,7 @@
       {
         "name": "CameraBottom.on.r01c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28464,7 +28464,7 @@
       {
         "name": "CameraBottom.off.r01c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28486,7 +28486,7 @@
       {
         "name": "CameraBottom.on.r01c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28508,7 +28508,7 @@
       {
         "name": "CameraBottom.off.r01c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28530,7 +28530,7 @@
       {
         "name": "CameraBottom.on.r01c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28552,7 +28552,7 @@
       {
         "name": "CameraBottom.off.r01c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28574,7 +28574,7 @@
       {
         "name": "CameraBottom.on.r01c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28596,7 +28596,7 @@
       {
         "name": "CameraBottom.off.r01c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28618,7 +28618,7 @@
       {
         "name": "CameraBottom.on.r01c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28640,7 +28640,7 @@
       {
         "name": "CameraBottom.off.r01c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28662,7 +28662,7 @@
       {
         "name": "CameraBottom.on.r02c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28684,7 +28684,7 @@
       {
         "name": "CameraBottom.off.r02c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28706,7 +28706,7 @@
       {
         "name": "CameraBottom.on.r02c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28728,7 +28728,7 @@
       {
         "name": "CameraBottom.off.r02c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28750,7 +28750,7 @@
       {
         "name": "CameraBottom.on.r02c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28772,7 +28772,7 @@
       {
         "name": "CameraBottom.off.r02c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28794,7 +28794,7 @@
       {
         "name": "CameraBottom.on.r02c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28816,7 +28816,7 @@
       {
         "name": "CameraBottom.off.r02c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28838,7 +28838,7 @@
       {
         "name": "CameraBottom.on.r02c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28860,7 +28860,7 @@
       {
         "name": "CameraBottom.off.r02c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28882,7 +28882,7 @@
       {
         "name": "CameraBottom.on.r02c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28904,7 +28904,7 @@
       {
         "name": "CameraBottom.off.r02c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28926,7 +28926,7 @@
       {
         "name": "CameraBottom.on.r02c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28948,7 +28948,7 @@
       {
         "name": "CameraBottom.off.r02c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28970,7 +28970,7 @@
       {
         "name": "CameraBottom.on.r02c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -28992,7 +28992,7 @@
       {
         "name": "CameraBottom.off.r02c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29014,7 +29014,7 @@
       {
         "name": "CameraBottom.on.r03c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29036,7 +29036,7 @@
       {
         "name": "CameraBottom.off.r03c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29058,7 +29058,7 @@
       {
         "name": "CameraBottom.on.r03c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29080,7 +29080,7 @@
       {
         "name": "CameraBottom.off.r03c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29102,7 +29102,7 @@
       {
         "name": "CameraBottom.on.r03c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29124,7 +29124,7 @@
       {
         "name": "CameraBottom.off.r03c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29146,7 +29146,7 @@
       {
         "name": "CameraBottom.on.r03c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29168,7 +29168,7 @@
       {
         "name": "CameraBottom.off.r03c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29190,7 +29190,7 @@
       {
         "name": "CameraBottom.on.r03c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29212,7 +29212,7 @@
       {
         "name": "CameraBottom.off.r03c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29234,7 +29234,7 @@
       {
         "name": "CameraBottom.on.r03c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29256,7 +29256,7 @@
       {
         "name": "CameraBottom.off.r03c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29278,7 +29278,7 @@
       {
         "name": "CameraBottom.on.r03c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29300,7 +29300,7 @@
       {
         "name": "CameraBottom.off.r03c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29322,7 +29322,7 @@
       {
         "name": "CameraBottom.on.r03c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29344,7 +29344,7 @@
       {
         "name": "CameraBottom.off.r03c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29366,7 +29366,7 @@
       {
         "name": "CameraBottom.on.r04c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29388,7 +29388,7 @@
       {
         "name": "CameraBottom.off.r04c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29410,7 +29410,7 @@
       {
         "name": "CameraBottom.on.r04c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29432,7 +29432,7 @@
       {
         "name": "CameraBottom.off.r04c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29454,7 +29454,7 @@
       {
         "name": "CameraBottom.on.r04c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29476,7 +29476,7 @@
       {
         "name": "CameraBottom.off.r04c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29498,7 +29498,7 @@
       {
         "name": "CameraBottom.on.r04c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29520,7 +29520,7 @@
       {
         "name": "CameraBottom.off.r04c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29542,7 +29542,7 @@
       {
         "name": "CameraBottom.on.r04c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29564,7 +29564,7 @@
       {
         "name": "CameraBottom.off.r04c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29586,7 +29586,7 @@
       {
         "name": "CameraBottom.on.r04c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29608,7 +29608,7 @@
       {
         "name": "CameraBottom.off.r04c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29630,7 +29630,7 @@
       {
         "name": "CameraBottom.on.r04c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29652,7 +29652,7 @@
       {
         "name": "CameraBottom.off.r04c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29674,7 +29674,7 @@
       {
         "name": "CameraBottom.on.r04c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29696,7 +29696,7 @@
       {
         "name": "CameraBottom.off.r04c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29718,7 +29718,7 @@
       {
         "name": "CameraBottom.on.r05c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29740,7 +29740,7 @@
       {
         "name": "CameraBottom.off.r05c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29762,7 +29762,7 @@
       {
         "name": "CameraBottom.on.r05c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29784,7 +29784,7 @@
       {
         "name": "CameraBottom.off.r05c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29806,7 +29806,7 @@
       {
         "name": "CameraBottom.on.r05c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29828,7 +29828,7 @@
       {
         "name": "CameraBottom.off.r05c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29850,7 +29850,7 @@
       {
         "name": "CameraBottom.on.r05c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29872,7 +29872,7 @@
       {
         "name": "CameraBottom.off.r05c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29894,7 +29894,7 @@
       {
         "name": "CameraBottom.on.r05c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29916,7 +29916,7 @@
       {
         "name": "CameraBottom.off.r05c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29938,7 +29938,7 @@
       {
         "name": "CameraBottom.on.r05c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29960,7 +29960,7 @@
       {
         "name": "CameraBottom.off.r05c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -29982,7 +29982,7 @@
       {
         "name": "CameraBottom.on.r05c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30004,7 +30004,7 @@
       {
         "name": "CameraBottom.off.r05c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30026,7 +30026,7 @@
       {
         "name": "CameraBottom.on.r05c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30048,7 +30048,7 @@
       {
         "name": "CameraBottom.off.r05c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30070,7 +30070,7 @@
       {
         "name": "CameraTop.on.r00c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30092,7 +30092,7 @@
       {
         "name": "CameraTop.off.r00c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30114,7 +30114,7 @@
       {
         "name": "CameraTop.on.r00c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30136,7 +30136,7 @@
       {
         "name": "CameraTop.off.r00c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30158,7 +30158,7 @@
       {
         "name": "CameraTop.on.r00c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30180,7 +30180,7 @@
       {
         "name": "CameraTop.off.r00c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30202,7 +30202,7 @@
       {
         "name": "CameraTop.on.r00c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30224,7 +30224,7 @@
       {
         "name": "CameraTop.off.r00c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30246,7 +30246,7 @@
       {
         "name": "CameraTop.on.r00c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30268,7 +30268,7 @@
       {
         "name": "CameraTop.off.r00c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30290,7 +30290,7 @@
       {
         "name": "CameraTop.on.r00c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30312,7 +30312,7 @@
       {
         "name": "CameraTop.off.r00c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30334,7 +30334,7 @@
       {
         "name": "CameraTop.on.r00c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30356,7 +30356,7 @@
       {
         "name": "CameraTop.off.r00c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30378,7 +30378,7 @@
       {
         "name": "CameraTop.on.r00c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30400,7 +30400,7 @@
       {
         "name": "CameraTop.off.r00c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30422,7 +30422,7 @@
       {
         "name": "CameraTop.on.r01c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30444,7 +30444,7 @@
       {
         "name": "CameraTop.off.r01c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30466,7 +30466,7 @@
       {
         "name": "CameraTop.on.r01c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30488,7 +30488,7 @@
       {
         "name": "CameraTop.off.r01c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30510,7 +30510,7 @@
       {
         "name": "CameraTop.on.r01c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30532,7 +30532,7 @@
       {
         "name": "CameraTop.off.r01c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30554,7 +30554,7 @@
       {
         "name": "CameraTop.on.r01c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30576,7 +30576,7 @@
       {
         "name": "CameraTop.off.r01c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30598,7 +30598,7 @@
       {
         "name": "CameraTop.on.r01c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30620,7 +30620,7 @@
       {
         "name": "CameraTop.off.r01c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30642,7 +30642,7 @@
       {
         "name": "CameraTop.on.r01c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30664,7 +30664,7 @@
       {
         "name": "CameraTop.off.r01c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30686,7 +30686,7 @@
       {
         "name": "CameraTop.on.r01c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30708,7 +30708,7 @@
       {
         "name": "CameraTop.off.r01c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30730,7 +30730,7 @@
       {
         "name": "CameraTop.on.r01c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30752,7 +30752,7 @@
       {
         "name": "CameraTop.off.r01c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30774,7 +30774,7 @@
       {
         "name": "CameraTop.on.r02c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30796,7 +30796,7 @@
       {
         "name": "CameraTop.off.r02c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30818,7 +30818,7 @@
       {
         "name": "CameraTop.on.r02c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30840,7 +30840,7 @@
       {
         "name": "CameraTop.off.r02c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30862,7 +30862,7 @@
       {
         "name": "CameraTop.on.r02c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30884,7 +30884,7 @@
       {
         "name": "CameraTop.off.r02c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30906,7 +30906,7 @@
       {
         "name": "CameraTop.on.r02c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30928,7 +30928,7 @@
       {
         "name": "CameraTop.off.r02c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30950,7 +30950,7 @@
       {
         "name": "CameraTop.on.r02c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30972,7 +30972,7 @@
       {
         "name": "CameraTop.off.r02c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -30994,7 +30994,7 @@
       {
         "name": "CameraTop.on.r02c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31016,7 +31016,7 @@
       {
         "name": "CameraTop.off.r02c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31038,7 +31038,7 @@
       {
         "name": "CameraTop.on.r02c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31060,7 +31060,7 @@
       {
         "name": "CameraTop.off.r02c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31082,7 +31082,7 @@
       {
         "name": "CameraTop.on.r02c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31104,7 +31104,7 @@
       {
         "name": "CameraTop.off.r02c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31126,7 +31126,7 @@
       {
         "name": "CameraTop.on.r03c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31148,7 +31148,7 @@
       {
         "name": "CameraTop.off.r03c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31170,7 +31170,7 @@
       {
         "name": "CameraTop.on.r03c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31192,7 +31192,7 @@
       {
         "name": "CameraTop.off.r03c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31214,7 +31214,7 @@
       {
         "name": "CameraTop.on.r03c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31236,7 +31236,7 @@
       {
         "name": "CameraTop.off.r03c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31258,7 +31258,7 @@
       {
         "name": "CameraTop.on.r03c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31280,7 +31280,7 @@
       {
         "name": "CameraTop.off.r03c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31302,7 +31302,7 @@
       {
         "name": "CameraTop.on.r03c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31324,7 +31324,7 @@
       {
         "name": "CameraTop.off.r03c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31346,7 +31346,7 @@
       {
         "name": "CameraTop.on.r03c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31368,7 +31368,7 @@
       {
         "name": "CameraTop.off.r03c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31390,7 +31390,7 @@
       {
         "name": "CameraTop.on.r03c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31412,7 +31412,7 @@
       {
         "name": "CameraTop.off.r03c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31434,7 +31434,7 @@
       {
         "name": "CameraTop.on.r03c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31456,7 +31456,7 @@
       {
         "name": "CameraTop.off.r03c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31478,7 +31478,7 @@
       {
         "name": "CameraTop.on.r04c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31500,7 +31500,7 @@
       {
         "name": "CameraTop.off.r04c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31522,7 +31522,7 @@
       {
         "name": "CameraTop.on.r04c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31544,7 +31544,7 @@
       {
         "name": "CameraTop.off.r04c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31566,7 +31566,7 @@
       {
         "name": "CameraTop.on.r04c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31588,7 +31588,7 @@
       {
         "name": "CameraTop.off.r04c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31610,7 +31610,7 @@
       {
         "name": "CameraTop.on.r04c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31632,7 +31632,7 @@
       {
         "name": "CameraTop.off.r04c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31654,7 +31654,7 @@
       {
         "name": "CameraTop.on.r04c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31676,7 +31676,7 @@
       {
         "name": "CameraTop.off.r04c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31698,7 +31698,7 @@
       {
         "name": "CameraTop.on.r04c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31720,7 +31720,7 @@
       {
         "name": "CameraTop.off.r04c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31742,7 +31742,7 @@
       {
         "name": "CameraTop.on.r04c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31764,7 +31764,7 @@
       {
         "name": "CameraTop.off.r04c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31786,7 +31786,7 @@
       {
         "name": "CameraTop.on.r04c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31808,7 +31808,7 @@
       {
         "name": "CameraTop.off.r04c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31830,7 +31830,7 @@
       {
         "name": "CameraTop.on.r05c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31852,7 +31852,7 @@
       {
         "name": "CameraTop.off.r05c00",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31874,7 +31874,7 @@
       {
         "name": "CameraTop.on.r05c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31896,7 +31896,7 @@
       {
         "name": "CameraTop.off.r05c01",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31918,7 +31918,7 @@
       {
         "name": "CameraTop.on.r05c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31940,7 +31940,7 @@
       {
         "name": "CameraTop.off.r05c02",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31962,7 +31962,7 @@
       {
         "name": "CameraTop.on.r05c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -31984,7 +31984,7 @@
       {
         "name": "CameraTop.off.r05c03",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -32006,7 +32006,7 @@
       {
         "name": "CameraTop.on.r05c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -32028,7 +32028,7 @@
       {
         "name": "CameraTop.off.r05c04",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -32050,7 +32050,7 @@
       {
         "name": "CameraTop.on.r05c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -32072,7 +32072,7 @@
       {
         "name": "CameraTop.off.r05c05",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -32094,7 +32094,7 @@
       {
         "name": "CameraTop.on.r05c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -32116,7 +32116,7 @@
       {
         "name": "CameraTop.off.r05c06",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -32138,7 +32138,7 @@
       {
         "name": "CameraTop.on.r05c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -32160,7 +32160,7 @@
       {
         "name": "CameraTop.off.r05c07",
         "kind": "legacy-camera",
-        "body": "torso",
+        "body": "HeadPitch_link",
         "units": "normalised",
         "range": [
           0,
@@ -32269,10 +32269,17 @@
         "rate_hz": 500,
         "missing": "fault-disarm",
         "axis": 0,
-        "direction": [
-          0,
-          1,
-          0
+        "region_m": [
+          [
+            0.0826,
+            0.0025,
+            -0.041
+          ],
+          [
+            0.13,
+            0.07,
+            -0.012
+          ]
         ]
       },
       {
@@ -32287,10 +32294,17 @@
         "rate_hz": 500,
         "missing": "fault-disarm",
         "axis": 0,
-        "direction": [
-          0,
-          -1,
-          0
+        "region_m": [
+          [
+            0.0826,
+            -0.07,
+            -0.041
+          ],
+          [
+            0.13,
+            0.0025,
+            -0.012
+          ]
         ]
       },
       {
@@ -32591,10 +32605,17 @@
         "rate_hz": 500,
         "missing": "fault-disarm",
         "axis": 0,
-        "direction": [
-          0,
-          1,
-          0
+        "region_m": [
+          [
+            0.0826,
+            -0.0025,
+            -0.041
+          ],
+          [
+            0.13,
+            0.07,
+            -0.012
+          ]
         ]
       },
       {
@@ -32609,10 +32630,17 @@
         "rate_hz": 500,
         "missing": "fault-disarm",
         "axis": 0,
-        "direction": [
-          0,
-          -1,
-          0
+        "region_m": [
+          [
+            0.0826,
+            -0.07,
+            -0.041
+          ],
+          [
+            0.13,
+            -0.0025,
+            -0.012
+          ]
         ]
       },
       {
@@ -32861,16 +32889,476 @@
         "rate_hz": 500,
         "missing": "fault-disarm",
         "position_m": [
-          0.05,
-          0,
-          0.1
+          0.0477,
+          0.0416,
+          0.0509
         ],
         "direction": [
-          0.9393727128473789,
-          0.34289780745545134,
-          0
+          0.875421,
+          0.42261,
+          -0.234606
         ],
-        "angle_rad": 2.55
+        "angle_rad": 0.8,
+        "rays": [
+          [
+            0.875421,
+            0.42261,
+            -0.234606
+          ],
+          [
+            0.842572,
+            0.506584,
+            -0.182881
+          ],
+          [
+            0.892624,
+            0.430915,
+            -0.132423
+          ],
+          [
+            0.920742,
+            0.344657,
+            -0.182881
+          ],
+          [
+            0.898809,
+            0.334068,
+            -0.283796
+          ],
+          [
+            0.848757,
+            0.409738,
+            -0.334254
+          ],
+          [
+            0.820639,
+            0.495996,
+            -0.283796
+          ],
+          [
+            0.766776,
+            0.599468,
+            -0.229549
+          ],
+          [
+            0.800618,
+            0.585084,
+            -0.129179
+          ],
+          [
+            0.849448,
+            0.524725,
+            -0.055703
+          ],
+          [
+            0.900181,
+            0.434563,
+            -0.028809
+          ],
+          [
+            0.939223,
+            0.338757,
+            -0.055703
+          ],
+          [
+            0.956114,
+            0.262979,
+            -0.129179
+          ],
+          [
+            0.946328,
+            0.227533,
+            -0.229549
+          ],
+          [
+            0.912485,
+            0.241917,
+            -0.329919
+          ],
+          [
+            0.863656,
+            0.302277,
+            -0.403395
+          ],
+          [
+            0.812923,
+            0.392439,
+            -0.430289
+          ],
+          [
+            0.77388,
+            0.488244,
+            -0.403395
+          ],
+          [
+            0.756989,
+            0.564022,
+            -0.329919
+          ],
+          [
+            0.712996,
+            0.67988,
+            -0.171464
+          ],
+          [
+            0.750012,
+            0.657262,
+            -0.074082
+          ],
+          [
+            0.797057,
+            0.60388,
+            0.005305
+          ],
+          [
+            0.848456,
+            0.526174,
+            0.057121
+          ],
+          [
+            0.89801,
+            0.433515,
+            0.075116
+          ],
+          [
+            0.939742,
+            0.33708,
+            0.057121
+          ],
+          [
+            0.968617,
+            0.2485,
+            0.005305
+          ],
+          [
+            0.981154,
+            0.17846,
+            -0.074082
+          ],
+          [
+            0.975841,
+            0.135406,
+            -0.171464
+          ],
+          [
+            0.953317,
+            0.124533,
+            -0.275095
+          ],
+          [
+            0.916301,
+            0.147152,
+            -0.372477
+          ],
+          [
+            0.869256,
+            0.200533,
+            -0.451864
+          ],
+          [
+            0.817857,
+            0.27824,
+            -0.50368
+          ],
+          [
+            0.768303,
+            0.370899,
+            -0.521675
+          ],
+          [
+            0.726571,
+            0.467334,
+            -0.50368
+          ],
+          [
+            0.697696,
+            0.555913,
+            -0.451864
+          ],
+          [
+            0.685159,
+            0.625954,
+            -0.372477
+          ],
+          [
+            0.690472,
+            0.669007,
+            -0.275095
+          ],
+          [
+            0.625076,
+            0.750485,
+            -0.214597
+          ],
+          [
+            0.65316,
+            0.748752,
+            -0.112926
+          ],
+          [
+            0.691302,
+            0.722337,
+            -0.018184
+          ],
+          [
+            0.736903,
+            0.67304,
+            0.063173
+          ],
+          [
+            0.786856,
+            0.60422,
+            0.125601
+          ],
+          [
+            0.837757,
+            0.520567,
+            0.164844
+          ],
+          [
+            0.886136,
+            0.427782,
+            0.17823
+          ],
+          [
+            0.928696,
+            0.332189,
+            0.164844
+          ],
+          [
+            0.962538,
+            0.240301,
+            0.125601
+          ],
+          [
+            0.985355,
+            0.158381,
+            0.063173
+          ],
+          [
+            0.995592,
+            0.092012,
+            -0.018184
+          ],
+          [
+            0.992551,
+            0.045716,
+            -0.112926
+          ],
+          [
+            0.97644,
+            0.022648,
+            -0.214597
+          ],
+          [
+            0.948357,
+            0.024381,
+            -0.316268
+          ],
+          [
+            0.910214,
+            0.050796,
+            -0.41101
+          ],
+          [
+            0.864613,
+            0.100093,
+            -0.492367
+          ],
+          [
+            0.81466,
+            0.168913,
+            -0.554795
+          ],
+          [
+            0.76376,
+            0.252566,
+            -0.594038
+          ],
+          [
+            0.715381,
+            0.345351,
+            -0.607423
+          ],
+          [
+            0.67282,
+            0.440944,
+            -0.594038
+          ],
+          [
+            0.638978,
+            0.532832,
+            -0.554795
+          ],
+          [
+            0.616161,
+            0.614752,
+            -0.492367
+          ],
+          [
+            0.605925,
+            0.681121,
+            -0.41101
+          ],
+          [
+            0.608965,
+            0.727417,
+            -0.316268
+          ],
+          [
+            0.555848,
+            0.817063,
+            -0.153107
+          ],
+          [
+            0.586704,
+            0.807976,
+            -0.054336
+          ],
+          [
+            0.625121,
+            0.779606,
+            0.037911
+          ],
+          [
+            0.66942,
+            0.733193,
+            0.119603
+          ],
+          [
+            0.717666,
+            0.670763,
+            0.18717
+          ],
+          [
+            0.767748,
+            0.595047,
+            0.237658
+          ],
+          [
+            0.817479,
+            0.509354,
+            0.268862
+          ],
+          [
+            0.864685,
+            0.417427,
+            0.279417
+          ],
+          [
+            0.907303,
+            0.323286,
+            0.268862
+          ],
+          [
+            0.943471,
+            0.231044,
+            0.237658
+          ],
+          [
+            0.971607,
+            0.144734,
+            0.18717
+          ],
+          [
+            0.990482,
+            0.068126,
+            0.119603
+          ],
+          [
+            0.999271,
+            0.00457,
+            0.037911
+          ],
+          [
+            0.99759,
+            -0.043158,
+            -0.054336
+          ],
+          [
+            0.985512,
+            -0.07297,
+            -0.153107
+          ],
+          [
+            0.963565,
+            -0.083565,
+            -0.254084
+          ],
+          [
+            0.932709,
+            -0.074479,
+            -0.352855
+          ],
+          [
+            0.894292,
+            -0.046109,
+            -0.445102
+          ],
+          [
+            0.849993,
+            0.000305,
+            -0.526794
+          ],
+          [
+            0.801748,
+            0.062734,
+            -0.594361
+          ],
+          [
+            0.751665,
+            0.13845,
+            -0.644849
+          ],
+          [
+            0.701934,
+            0.224144,
+            -0.676053
+          ],
+          [
+            0.654728,
+            0.31607,
+            -0.686608
+          ],
+          [
+            0.61211,
+            0.410212,
+            -0.676053
+          ],
+          [
+            0.575943,
+            0.502453,
+            -0.644849
+          ],
+          [
+            0.547807,
+            0.588764,
+            -0.594361
+          ],
+          [
+            0.528932,
+            0.665372,
+            -0.526794
+          ],
+          [
+            0.520143,
+            0.728928,
+            -0.445102
+          ],
+          [
+            0.521824,
+            0.776655,
+            -0.352855
+          ],
+          [
+            0.533902,
+            0.806468,
+            -0.254084
+          ]
+        ],
+        "incidence_max_rad": 0.392699,
+        "min_m": 0.2,
+        "period_s": 0.02
       },
       {
         "name": "Sonar/Right",
@@ -32884,16 +33372,476 @@
         "rate_hz": 500,
         "missing": "fault-disarm",
         "position_m": [
-          0.05,
-          0,
-          0.1
+          0.0477,
+          -0.0416,
+          0.0509
         ],
         "direction": [
-          0.9393727128473789,
-          -0.34289780745545134,
-          0
+          0.875421,
+          -0.42261,
+          -0.234606
         ],
-        "angle_rad": 2.55
+        "angle_rad": 0.8,
+        "rays": [
+          [
+            0.875421,
+            -0.42261,
+            -0.234606
+          ],
+          [
+            0.842572,
+            -0.506584,
+            -0.182881
+          ],
+          [
+            0.892624,
+            -0.430915,
+            -0.132423
+          ],
+          [
+            0.920742,
+            -0.344657,
+            -0.182881
+          ],
+          [
+            0.898809,
+            -0.334068,
+            -0.283796
+          ],
+          [
+            0.848757,
+            -0.409738,
+            -0.334254
+          ],
+          [
+            0.820639,
+            -0.495996,
+            -0.283796
+          ],
+          [
+            0.766776,
+            -0.599468,
+            -0.229549
+          ],
+          [
+            0.800618,
+            -0.585084,
+            -0.129179
+          ],
+          [
+            0.849448,
+            -0.524725,
+            -0.055703
+          ],
+          [
+            0.900181,
+            -0.434563,
+            -0.028809
+          ],
+          [
+            0.939223,
+            -0.338757,
+            -0.055703
+          ],
+          [
+            0.956114,
+            -0.262979,
+            -0.129179
+          ],
+          [
+            0.946328,
+            -0.227533,
+            -0.229549
+          ],
+          [
+            0.912485,
+            -0.241917,
+            -0.329919
+          ],
+          [
+            0.863656,
+            -0.302277,
+            -0.403395
+          ],
+          [
+            0.812923,
+            -0.392439,
+            -0.430289
+          ],
+          [
+            0.77388,
+            -0.488244,
+            -0.403395
+          ],
+          [
+            0.756989,
+            -0.564022,
+            -0.329919
+          ],
+          [
+            0.712996,
+            -0.67988,
+            -0.171464
+          ],
+          [
+            0.750012,
+            -0.657262,
+            -0.074082
+          ],
+          [
+            0.797057,
+            -0.60388,
+            0.005305
+          ],
+          [
+            0.848456,
+            -0.526174,
+            0.057121
+          ],
+          [
+            0.89801,
+            -0.433515,
+            0.075116
+          ],
+          [
+            0.939742,
+            -0.33708,
+            0.057121
+          ],
+          [
+            0.968617,
+            -0.2485,
+            0.005305
+          ],
+          [
+            0.981154,
+            -0.17846,
+            -0.074082
+          ],
+          [
+            0.975841,
+            -0.135406,
+            -0.171464
+          ],
+          [
+            0.953317,
+            -0.124533,
+            -0.275095
+          ],
+          [
+            0.916301,
+            -0.147152,
+            -0.372477
+          ],
+          [
+            0.869256,
+            -0.200533,
+            -0.451864
+          ],
+          [
+            0.817857,
+            -0.27824,
+            -0.50368
+          ],
+          [
+            0.768303,
+            -0.370899,
+            -0.521675
+          ],
+          [
+            0.726571,
+            -0.467334,
+            -0.50368
+          ],
+          [
+            0.697696,
+            -0.555913,
+            -0.451864
+          ],
+          [
+            0.685159,
+            -0.625954,
+            -0.372477
+          ],
+          [
+            0.690472,
+            -0.669007,
+            -0.275095
+          ],
+          [
+            0.625076,
+            -0.750485,
+            -0.214597
+          ],
+          [
+            0.65316,
+            -0.748752,
+            -0.112926
+          ],
+          [
+            0.691302,
+            -0.722337,
+            -0.018184
+          ],
+          [
+            0.736903,
+            -0.67304,
+            0.063173
+          ],
+          [
+            0.786856,
+            -0.60422,
+            0.125601
+          ],
+          [
+            0.837757,
+            -0.520567,
+            0.164844
+          ],
+          [
+            0.886136,
+            -0.427782,
+            0.17823
+          ],
+          [
+            0.928696,
+            -0.332189,
+            0.164844
+          ],
+          [
+            0.962538,
+            -0.240301,
+            0.125601
+          ],
+          [
+            0.985355,
+            -0.158381,
+            0.063173
+          ],
+          [
+            0.995592,
+            -0.092012,
+            -0.018184
+          ],
+          [
+            0.992551,
+            -0.045716,
+            -0.112926
+          ],
+          [
+            0.97644,
+            -0.022648,
+            -0.214597
+          ],
+          [
+            0.948357,
+            -0.024381,
+            -0.316268
+          ],
+          [
+            0.910214,
+            -0.050796,
+            -0.41101
+          ],
+          [
+            0.864613,
+            -0.100093,
+            -0.492367
+          ],
+          [
+            0.81466,
+            -0.168913,
+            -0.554795
+          ],
+          [
+            0.76376,
+            -0.252566,
+            -0.594038
+          ],
+          [
+            0.715381,
+            -0.345351,
+            -0.607423
+          ],
+          [
+            0.67282,
+            -0.440944,
+            -0.594038
+          ],
+          [
+            0.638978,
+            -0.532832,
+            -0.554795
+          ],
+          [
+            0.616161,
+            -0.614752,
+            -0.492367
+          ],
+          [
+            0.605925,
+            -0.681121,
+            -0.41101
+          ],
+          [
+            0.608965,
+            -0.727417,
+            -0.316268
+          ],
+          [
+            0.555848,
+            -0.817063,
+            -0.153107
+          ],
+          [
+            0.586704,
+            -0.807976,
+            -0.054336
+          ],
+          [
+            0.625121,
+            -0.779606,
+            0.037911
+          ],
+          [
+            0.66942,
+            -0.733193,
+            0.119603
+          ],
+          [
+            0.717666,
+            -0.670763,
+            0.18717
+          ],
+          [
+            0.767748,
+            -0.595047,
+            0.237658
+          ],
+          [
+            0.817479,
+            -0.509354,
+            0.268862
+          ],
+          [
+            0.864685,
+            -0.417427,
+            0.279417
+          ],
+          [
+            0.907303,
+            -0.323286,
+            0.268862
+          ],
+          [
+            0.943471,
+            -0.231044,
+            0.237658
+          ],
+          [
+            0.971607,
+            -0.144734,
+            0.18717
+          ],
+          [
+            0.990482,
+            -0.068126,
+            0.119603
+          ],
+          [
+            0.999271,
+            -0.00457,
+            0.037911
+          ],
+          [
+            0.99759,
+            0.043158,
+            -0.054336
+          ],
+          [
+            0.985512,
+            0.07297,
+            -0.153107
+          ],
+          [
+            0.963565,
+            0.083565,
+            -0.254084
+          ],
+          [
+            0.932709,
+            0.074479,
+            -0.352855
+          ],
+          [
+            0.894292,
+            0.046109,
+            -0.445102
+          ],
+          [
+            0.849993,
+            -0.000305,
+            -0.526794
+          ],
+          [
+            0.801748,
+            -0.062734,
+            -0.594361
+          ],
+          [
+            0.751665,
+            -0.13845,
+            -0.644849
+          ],
+          [
+            0.701934,
+            -0.224144,
+            -0.676053
+          ],
+          [
+            0.654728,
+            -0.31607,
+            -0.686608
+          ],
+          [
+            0.61211,
+            -0.410212,
+            -0.676053
+          ],
+          [
+            0.575943,
+            -0.502453,
+            -0.644849
+          ],
+          [
+            0.547807,
+            -0.588764,
+            -0.594361
+          ],
+          [
+            0.528932,
+            -0.665372,
+            -0.526794
+          ],
+          [
+            0.520143,
+            -0.728928,
+            -0.445102
+          ],
+          [
+            0.521824,
+            -0.776655,
+            -0.352855
+          ],
+          [
+            0.533902,
+            -0.806468,
+            -0.254084
+          ]
+        ],
+        "incidence_max_rad": 0.392699,
+        "min_m": 0.2,
+        "period_s": 0.02
       },
       {
         "name": "accelerometer.x",
@@ -32978,6 +33926,492 @@
         "missing": "fault-disarm",
         "axis": 2,
         "mode": "native-z-up"
+      },
+      {
+        "name": "Micro/FL/250Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          0.0206,
+          0.0309,
+          0.0986
+        ],
+        "direction": [
+          0.384585,
+          0.576877,
+          0.72063
+        ],
+        "band_hz": 250.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/FL/1000Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          0.0206,
+          0.0309,
+          0.0986
+        ],
+        "direction": [
+          0.384585,
+          0.576877,
+          0.72063
+        ],
+        "band_hz": 1000.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/FL/3000Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          0.0206,
+          0.0309,
+          0.0986
+        ],
+        "direction": [
+          0.384585,
+          0.576877,
+          0.72063
+        ],
+        "band_hz": 3000.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/FL/8000Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          0.0206,
+          0.0309,
+          0.0986
+        ],
+        "direction": [
+          0.384585,
+          0.576877,
+          0.72063
+        ],
+        "band_hz": 8000.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/FR/250Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          0.0206,
+          -0.0309,
+          0.0986
+        ],
+        "direction": [
+          0.384585,
+          -0.576877,
+          0.72063
+        ],
+        "band_hz": 250.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/FR/1000Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          0.0206,
+          -0.0309,
+          0.0986
+        ],
+        "direction": [
+          0.384585,
+          -0.576877,
+          0.72063
+        ],
+        "band_hz": 1000.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/FR/3000Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          0.0206,
+          -0.0309,
+          0.0986
+        ],
+        "direction": [
+          0.384585,
+          -0.576877,
+          0.72063
+        ],
+        "band_hz": 3000.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/FR/8000Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          0.0206,
+          -0.0309,
+          0.0986
+        ],
+        "direction": [
+          0.384585,
+          -0.576877,
+          0.72063
+        ],
+        "band_hz": 8000.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/RL/250Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          -0.0215,
+          0.0558,
+          0.0774
+        ],
+        "direction": [
+          -0.345222,
+          0.895971,
+          0.279389
+        ],
+        "band_hz": 250.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/RL/1000Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          -0.0215,
+          0.0558,
+          0.0774
+        ],
+        "direction": [
+          -0.345222,
+          0.895971,
+          0.279389
+        ],
+        "band_hz": 1000.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/RL/3000Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          -0.0215,
+          0.0558,
+          0.0774
+        ],
+        "direction": [
+          -0.345222,
+          0.895971,
+          0.279389
+        ],
+        "band_hz": 3000.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/RL/8000Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          -0.0215,
+          0.0558,
+          0.0774
+        ],
+        "direction": [
+          -0.345222,
+          0.895971,
+          0.279389
+        ],
+        "band_hz": 8000.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/RR/250Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          -0.0215,
+          -0.0558,
+          0.0774
+        ],
+        "direction": [
+          -0.345222,
+          -0.895971,
+          0.279389
+        ],
+        "band_hz": 250.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/RR/1000Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          -0.0215,
+          -0.0558,
+          0.0774
+        ],
+        "direction": [
+          -0.345222,
+          -0.895971,
+          0.279389
+        ],
+        "band_hz": 1000.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/RR/3000Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          -0.0215,
+          -0.0558,
+          0.0774
+        ],
+        "direction": [
+          -0.345222,
+          -0.895971,
+          0.279389
+        ],
+        "band_hz": 3000.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/RR/8000Hz",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          -0.0215,
+          -0.0558,
+          0.0774
+        ],
+        "direction": [
+          -0.345222,
+          -0.895971,
+          0.279389
+        ],
+        "band_hz": 8000.0,
+        "directivity": 0.6,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/ITD/Front",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          0.0206,
+          -0.0309,
+          0.0986
+        ],
+        "direction": [
+          0.384585,
+          -0.576877,
+          0.72063
+        ],
+        "band_hz": 1000.0,
+        "directivity": 0.6,
+        "mode": "itd",
+        "pair": "Micro/FL/1000Hz",
+        "group": "hearing"
+      },
+      {
+        "name": "Micro/ITD/Rear",
+        "kind": "legacy-acoustic",
+        "body": "HeadPitch_link",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          -0.0215,
+          -0.0558,
+          0.0774
+        ],
+        "direction": [
+          -0.345222,
+          -0.895971,
+          0.279389
+        ],
+        "band_hz": 1000.0,
+        "directivity": 0.6,
+        "mode": "itd",
+        "pair": "Micro/RL/1000Hz",
+        "group": "hearing"
       }
     ],
     "output_names": [
@@ -33032,7 +34466,7 @@
       "neutral": "zero active drive on empty history; no twitch or oscillator",
       "fidelity": "versioned engineering projection; no learned task or biological calibration claim"
     },
-    "digest": "bd85f639ac3991aec6019cf4b90c08cee78496c58f42bef3186b10313888f91d",
+    "digest": "553dcc886745e8682b81c9e9dad02afeacda4dcc6221c1558547c5708da5976d",
     "neural_sensory_names": [
       "CameraBottom.on.r00c00",
       "CameraBottom.off.r00c00",
@@ -33283,7 +34717,25 @@
       "accelerometer.z",
       "gyro.x",
       "gyro.y",
-      "gyro.z"
+      "gyro.z",
+      "Micro/FL/250Hz",
+      "Micro/FL/1000Hz",
+      "Micro/FL/3000Hz",
+      "Micro/FL/8000Hz",
+      "Micro/FR/250Hz",
+      "Micro/FR/1000Hz",
+      "Micro/FR/3000Hz",
+      "Micro/FR/8000Hz",
+      "Micro/RL/250Hz",
+      "Micro/RL/1000Hz",
+      "Micro/RL/3000Hz",
+      "Micro/RL/8000Hz",
+      "Micro/RR/250Hz",
+      "Micro/RR/1000Hz",
+      "Micro/RR/3000Hz",
+      "Micro/RR/8000Hz",
+      "Micro/ITD/Front",
+      "Micro/ITD/Rear"
     ],
     "neural_output_names": [
       "HeadPitch",
@@ -42917,5 +44369,5 @@
     }
   ],
   "collision_filter_scope": "source masks aggregated per rigid cluster; joint-neighbour exclusions native; different instances retain external contact",
-  "digest": "86c4f91494149f19427354172a1146a5689aa4834ef0aa906313a5e9860e3c5a"
+  "digest": "0f66011114ff307705aecfb64dd3c3bead1b91c9940a35eb8d4984946f11075a"
 }

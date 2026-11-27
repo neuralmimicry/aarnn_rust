@@ -23,6 +23,26 @@ pub struct Senses {
     cells: HashMap<String, Vec<Cell>>,
     step: Option<u64>,
     values: Vec<f64>,
+    /// Sample-and-hold readings (`period_s`): sensor index -> (time, value).
+    held: HashMap<usize, (f64, f64)>,
+    /// Moving sound sources this step (an NPC, other robots), added to the
+    /// scene's static ones for `legacy-acoustic` receivers.
+    pub dynamic_sound_sources: Vec<aarnn_embodiment::acoustics::SoundSource>,
+}
+
+/// World-frame receiver of a `legacy-acoustic` sensor.
+fn acoustic_receiver(
+    physics: &Physics,
+    s: &aarnn_embodiment::aer::Sensor,
+) -> Result<aarnn_embodiment::acoustics::Receiver, String> {
+    let body = physics.body(s.body.as_deref().ok_or("acoustic sensor body absent")?)?;
+    let (position, r, _) = physics.body_state(body)?;
+    let delta = rotate(r, s.position_m.unwrap_or([0.; 3]));
+    Ok(aarnn_embodiment::acoustics::Receiver {
+        position: std::array::from_fn(|i| position[i] + delta[i]),
+        axis: rotate(r, s.direction.unwrap_or([1., 0., 0.])),
+        directivity: s.directivity.unwrap_or(0.),
+    })
 }
 impl Senses {
     pub fn measure(
@@ -36,7 +56,19 @@ impl Senses {
         }
         let mut cameras: HashMap<String, Vec<[f64; 4]>> = HashMap::new();
         let mut out = Vec::with_capacity(model.io.sensors.len());
-        for s in &model.io.sensors {
+        let now = physics.time();
+        for (index, s) in model.io.sensors.iter().enumerate() {
+            // Energy-needs channels are filled by the world after this pass.
+            if s.kind.starts_with("needs-") {
+                out.push(0.);
+                continue;
+            }
+            if let (Some(period), Some(&(at, value))) = (s.period_s, self.held.get(&index)) {
+                if now >= at && now - at < period - 1e-9 {
+                    out.push(value);
+                    continue;
+                }
+            }
             let body = physics.body(s.body.as_deref().ok_or("legacy sensor body absent")?)?;
             let (position, r, velocity) = physics.body_state(body)?;
             let axis = s.axis.unwrap_or(0);
@@ -63,7 +95,9 @@ impl Senses {
                     norm(v[axis], -bound, bound)
                 }
                 "legacy-contact" => {
-                    if let Some(direction) = s.direction {
+                    if let Some(region) = s.region_m {
+                        physics.region_contact(body, region)?
+                    } else if let Some(direction) = s.direction {
                         physics.directional_contact(body, direction)?
                     } else {
                         physics.body_contact(body)?
@@ -76,14 +110,25 @@ impl Senses {
                     let reach = s.angle_rad.ok_or("legacy range reach absent")?;
                     // Rays step over the robot's own links (a fly's thorax-
                     // centred ring otherwise reports its legs as obstacles).
-                    let distance = physics
-                        .ray_beyond_self(
+                    // A cone (`rays`) reads its nearest echo; a sonar loses
+                    // rays that strike a surface too obliquely.
+                    let single = [s.direction.ok_or("legacy ray direction absent")?];
+                    let rays = s.rays.as_deref().unwrap_or(&single);
+                    if rays.is_empty() {
+                        return Err(format!("range {} has no rays", s.name));
+                    }
+                    let mut distance = reach;
+                    for ray in rays {
+                        if let Some(d) = physics.echo_beyond_self(
                             point,
-                            rotate(r, s.direction.ok_or("legacy ray direction absent")?),
+                            rotate(r, *ray),
                             body,
-                        )?
-                        .unwrap_or(reach)
-                        .min(reach);
+                            s.incidence_max_rad,
+                        )? {
+                            distance = distance.min(d);
+                        }
+                    }
+                    let distance = distance.min(reach).max(s.min_m.unwrap_or(0.));
                     if let Some(table) = &s.lookup {
                         let mut raw = table.last().ok_or("empty range lookup")?[1];
                         for pair in table.windows(2) {
@@ -100,8 +145,11 @@ impl Senses {
                 }
                 "legacy-camera" => {
                     let name = s.camera.as_ref().ok_or("legacy camera absent")?;
-                    if !cameras.contains_key(name) {
-                        let [rows, cols] = s.retina_shape.ok_or("camera shape absent")?;
+                    // One camera may feed retinas of different shapes (a fish
+                    // eye's luminance cell and its 6 x 8 retina): cache per shape.
+                    let [rows, cols] = s.retina_shape.ok_or("camera shape absent")?;
+                    let key = format!("{name}#{rows}x{cols}");
+                    if !cameras.contains_key(&key) {
                         if rows == 0 || cols == 0 || rows * cols > 192 {
                             return Err("camera bound".into());
                         }
@@ -109,7 +157,7 @@ impl Senses {
                         let vertical = (physics.camera_fovy(name)?.to_radians() / 2.).tan();
                         let cells = self
                             .cells
-                            .entry(name.clone())
+                            .entry(key.clone())
                             .or_insert_with(|| vec![Cell::default(); rows * cols]);
                         let mut readings = Vec::new();
                         for y in 0..rows {
@@ -130,11 +178,11 @@ impl Senses {
                                 readings.push(cells[y * cols + x].sample(light, 0.002)?);
                             }
                         }
-                        cameras.insert(name.clone(), readings);
+                        cameras.insert(key.clone(), readings);
                     }
                     let [y, x] = s.cell.ok_or("camera cell absent")?;
                     let [_, cols] = s.retina_shape.unwrap();
-                    let sample = cameras[name]
+                    let sample = cameras[&key]
                         .get(y * cols + x)
                         .ok_or("camera cell outside retina")?;
                     sample[match s.mode.as_deref() {
@@ -144,6 +192,34 @@ impl Senses {
                         Some("gradient") => 3,
                         _ => return Err("camera mode".into()),
                     }]
+                }
+                "legacy-acoustic" => {
+                    use aarnn_embodiment::acoustics;
+                    let band = s.band_hz.ok_or("acoustic band absent")?;
+                    let rx = acoustic_receiver(physics, s)?;
+                    let mut sources: Vec<acoustics::SoundSource> = model
+                        .scene
+                        .as_ref()
+                        .map(|sc| sc.sound_sources.clone())
+                        .unwrap_or_default();
+                    sources.extend(self.dynamic_sound_sources.iter().cloned());
+                    if s.mode.as_deref() == Some("itd") {
+                        let pair_name = s.pair.as_deref().ok_or("itd pair absent")?;
+                        let pair = model
+                            .io
+                            .sensors
+                            .iter()
+                            .find(|x| x.name == pair_name)
+                            .ok_or("itd pair sensor not in the record")?;
+                        let other = acoustic_receiver(physics, pair)?;
+                        acoustics::itd_normalised(&sources, &rx, &other, band, now)
+                    } else {
+                        acoustics::normalised_level(
+                            acoustics::band_level_db(&sources, &rx, band, now),
+                            s.floor_db.unwrap_or(20.),
+                            s.ceil_db.unwrap_or(100.),
+                        )
+                    }
                 }
                 "legacy-flow" => {
                     let v = local(r, [velocity[3], velocity[4], velocity[5]])[axis];
@@ -165,6 +241,9 @@ impl Senses {
             };
             if !v.is_finite() {
                 return Err(format!("nonfinite sensor {}", s.name));
+            }
+            if s.period_s.is_some() {
+                self.held.insert(index, (now, v.clamp(0., 1.)));
             }
             out.push(v.clamp(0., 1.));
         }

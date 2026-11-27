@@ -3,7 +3,7 @@
   "compiler": "embodiment-rigid-graph-v2",
   "digest_encoding": "embodiment-binary-v1",
   "profile_id": "galbot_g1_golf",
-  "model_digest": "7b9c075cbb4b91cb5912364fb6531f85291c34f4e323ab2447be51c5691204d3",
+  "model_digest": "a0e51d22656280501fbec59b1fba4b969f395d9ab6ed29e0bd1df5a2ed49181b",
   "io_digest": "e7ec78c9180a8261316c86b76af3419b358fdc048e650e547033a1edd97230e4",
   "fidelity": "official-description",
   "variant_id": "wheeled",
@@ -651600,5 +651600,5 @@
     }
   ],
   "collision_filter_scope": "source masks aggregated per rigid cluster; joint-neighbour exclusions native; different instances retain external contact",
-  "digest": "ea6c400796ab6f84f55e151a86c5f1e958fd4745c326cf96087f59fa828c3c1f"
+  "digest": "cd7c6ce1a62298bae3bb8f493f0afb4f028563f0518d718744bc8a15f56f0756"
 }

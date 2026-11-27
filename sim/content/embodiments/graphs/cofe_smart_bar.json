@@ -3,7 +3,7 @@
   "compiler": "embodiment-rigid-graph-v2",
   "digest_encoding": "embodiment-binary-v1",
   "profile_id": "cofe_smart_bar",
-  "model_digest": "41c272fe977df9904e64e85a200c143fa21d3ab5bd8eb7618b2a15881d23a886",
+  "model_digest": "f66b76be450853cea9dfbefb629e33987e682ccb0825ddfc31e755df69c9a12c",
   "io_digest": "7da2ceb8c491db1dc4ffc382c1b32db98eb9d54790cffaaae9cac2129d25f795",
   "fidelity": "functional-surrogate",
   "variant_id": "original-v1",
@@ -13175,5 +13175,5 @@
   },
   "collision_exclusions": [],
   "collision_filter_scope": "source masks aggregated per rigid cluster; joint-neighbour exclusions native; different instances retain external contact",
-  "digest": "00a7b801be62339861ba0acdd467393e99a975b29551d58591807f46bc073be9"
+  "digest": "f9c1a99114a798418e3c4ecdc3a70eb9e0539fa09dcea1fb51c7154afdc6d7d9"
 }

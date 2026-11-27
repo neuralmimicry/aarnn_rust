@@ -8,7 +8,7 @@
   "exact_replica": "pending OEM variant and calibration",
   "controller_transfer": "celegans-muscle-v3-sim-v1; analytic stimulus fields, proprioception and resistive-force substrate; uncalibrated",
   "source": "scripts/embodiment_legacy.py:build",
-  "source_digest": "a2f0a10b13d7e755b75aca98929838ce2987f528a83c351b97123c5f4089ad5f",
+  "source_digest": "24bcc91ee720267a171386c5cdfa4099bc85ee10cefdd8c397f62e895668ddf9",
   "policy_digest": "35a2dbc6477ae9308c4f5eae4d09ccffc2f7aadce2cb54ce29018d63e43b9e2f",
   "io": {
     "schema_version": 1,
@@ -97,7 +97,21 @@
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
-        "body": "segment_23"
+        "body": "segment_23",
+        "bodies": [
+          "segment_12",
+          "segment_13",
+          "segment_14",
+          "segment_15",
+          "segment_16",
+          "segment_17",
+          "segment_18",
+          "segment_19",
+          "segment_20",
+          "segment_21",
+          "segment_22",
+          "segment_23"
+        ]
       },
       {
         "name": "celegans_s_07_touch_rear",
@@ -109,7 +123,21 @@
         ],
         "rate_hz": 500,
         "missing": "fault-disarm",
-        "body": "segment_00"
+        "body": "segment_00",
+        "bodies": [
+          "segment_00",
+          "segment_01",
+          "segment_02",
+          "segment_03",
+          "segment_04",
+          "segment_05",
+          "segment_06",
+          "segment_07",
+          "segment_08",
+          "segment_09",
+          "segment_10",
+          "segment_11"
+        ]
       },
       {
         "name": "celegans_s_08_light_left",
@@ -710,6 +738,80 @@
         "missing": "fault-disarm",
         "axis": 12,
         "mode": "ventral"
+      },
+      {
+        "name": "needs_energy",
+        "kind": "needs-energy",
+        "mode": "food",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "group": "needs"
+      },
+      {
+        "name": "needs_consume",
+        "kind": "needs-consume",
+        "mode": "food",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "group": "needs"
+      },
+      {
+        "name": "needs_cue_left",
+        "kind": "needs-cue",
+        "mode": "food",
+        "position_m": [
+          0.0195,
+          0.0195,
+          0.0
+        ],
+        "direction": [
+          0.7071,
+          0.7071,
+          0.0
+        ],
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "group": "needs",
+        "body": "segment_23"
+      },
+      {
+        "name": "needs_cue_right",
+        "kind": "needs-cue",
+        "mode": "food",
+        "position_m": [
+          0.0195,
+          -0.0195,
+          0.0
+        ],
+        "direction": [
+          0.7071,
+          -0.7071,
+          0.0
+        ],
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "group": "needs",
+        "body": "segment_23"
       }
     ],
     "output_names": [
@@ -823,7 +925,7 @@
       "neutral": "zero active effort; no twitch fallback",
       "calibration": "functional surrogate; twitch summation, head-to-tail rows; not measured muscle physiology"
     },
-    "digest": "6e34cd92e33c31062202dadd3aff8095e0319c61db6a297c90fc686d56094361"
+    "digest": "9b00655fc5a46bdaefedc0bfed5230589d435c4e92c808719efa060792115460"
   },
   "actuators": [
     {
@@ -4972,6 +5074,93 @@
       }
     ],
     "scientific_status": "analytic stimulus fields (normalised [0,1]) derived from the habitat objects; qualitative agar-plate assays, not measured chemistry or temperature",
+    "needs": {
+      "version": "needs-v1",
+      "resource": "food",
+      "basal_w_per_kg": 1.0,
+      "endurance_s": 240.0,
+      "effort_ref_w_per_kg": 2.0,
+      "refill_s": 20.0,
+      "start_fraction": 1.0,
+      "sources": [
+        {
+          "id": "bacterial_lawn_0",
+          "position_m": [
+            0.273,
+            0.13,
+            0.00585
+          ],
+          "radius_m": 0.2145,
+          "field_radius_m": 0.2275
+        },
+        {
+          "id": "bacterial_lawn_1",
+          "position_m": [
+            -0.312,
+            -0.156,
+            0.00585
+          ],
+          "radius_m": 0.169,
+          "field_radius_m": 0.2275
+        },
+        {
+          "id": "bacterial_lawn_2",
+          "position_m": [
+            0.1625,
+            -0.4225,
+            0.00585
+          ],
+          "radius_m": 0.1495,
+          "field_radius_m": 0.2275
+        },
+        {
+          "id": "food_contact_0",
+          "position_m": [
+            0.2405,
+            0.0,
+            0.0182
+          ],
+          "radius_m": 0.082875,
+          "field_radius_m": 0.2275
+        },
+        {
+          "id": "food_contact_1",
+          "position_m": [
+            0.2535,
+            0.065,
+            0.0182
+          ],
+          "radius_m": 0.082875,
+          "field_radius_m": 0.2275
+        },
+        {
+          "id": "food_contact_2",
+          "position_m": [
+            -0.2405,
+            -0.039,
+            0.0182
+          ],
+          "radius_m": 0.082875,
+          "field_radius_m": 0.2275
+        },
+        {
+          "id": "food_contact_3",
+          "position_m": [
+            0.039,
+            0.1105,
+            0.0182
+          ],
+          "radius_m": 0.082875,
+          "field_radius_m": 0.2275
+        }
+      ],
+      "caretaker": {
+        "until_s": 600.0,
+        "threshold": 0.4,
+        "feed_s": 20.0
+      },
+      "scientific_status": "engineering proxy: energy store, drain and refill are not calibrated metabolism or battery models; early-life caretaker presents food or docks the body"
+    },
     "stimuli": [
       {
         "field": "attractant_volatile",
@@ -5218,9 +5407,9 @@
       "note": "resistive force theory for a nematode on agar (Wallace 1968; Berri 2009); calibrated with a programmed travelling wave"
     }
   },
-  "scene_sources_sha256": "a715a28f67ac75c9624deb144618f412dae8688b833c24e07b4ae9e8838d2884",
+  "scene_sources_sha256": "f0ad36be6e4a13ae9f1747ba14d4ad5085d43896fe8f18d87c6169e1caaf33a3",
   "anatomy_sources_sha256": "76e90c0ee8947775dbfb7ae187162c7c383557a5343383f64af84d2e625f2bd1",
-  "neural_sources_sha256": "491b1c8df3570eda7bb994493ecd7617ca21066362363aaaec542de36deab729",
+  "neural_sources_sha256": "c4d6f92f5b435c040ea1d350ff17af6aac8f2625487a3987aeb9775d7f9cbafe",
   "bodies": [
     {
       "name": "segment_00",
@@ -17325,7 +17514,7 @@
     }
   ],
   "constraints": [],
-  "digest": "bd9830fe7e7dff95673d8a9e859d0eb1cc685b861d0458a18b0c8819da056bf7",
+  "digest": "9b3d17671717cee52d4dc266e8c9d14bbfdf63c9509021b8d184e10176f31682",
   "profile_assumptions": "sim/content/embodiments/celegans-simulation-v2.json",
   "profile_assumptions_sha256": "730d10c6055f5f667294df87d1503c38311d62d2a27cc5926baa5c0a7054cb42"
 }

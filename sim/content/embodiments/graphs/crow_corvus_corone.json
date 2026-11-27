@@ -3,7 +3,7 @@
   "compiler": "embodiment-rigid-graph-v2",
   "digest_encoding": "embodiment-binary-v1",
   "profile_id": "crow_corvus_corone",
-  "model_digest": "fc4d3671a16032cdc85d20018e1c7b98f3da460839b038a5626fcbfd26b38fce",
+  "model_digest": "c929af875fe2288d639641e31d81a1d9b42b237b8e3d51dfe00193574e0b0773",
   "io_digest": "1109d94dd58ac7a2c4f10120511e1dd54c21b63d7bf20efd1507caf4d742699a",
   "fidelity": "functional-surrogate",
   "variant_id": "reduced-31-v1",
@@ -5942,14 +5942,14 @@
       "owner": 4,
       "position": [
         0.03,
-        0.0,
+        0.012,
         0.01
       ],
       "quaternion_wxyz": [
-        -0.5,
-        -0.5,
-        0.5,
-        0.5
+        0.5989503218013738,
+        0.5989503218013739,
+        -0.37584373350374056,
+        -0.37584373350374056
       ],
       "fovy_deg": 75.0
     },
@@ -5958,14 +5958,14 @@
       "owner": 4,
       "position": [
         0.03,
-        0.0,
+        -0.012,
         0.01
       ],
       "quaternion_wxyz": [
-        -0.5,
-        -0.5,
-        0.5,
-        0.5
+        -0.37584373350374056,
+        -0.37584373350374056,
+        0.5989503218013739,
+        0.5989503218013738
       ],
       "fovy_deg": 75.0
     }
@@ -44557,5 +44557,5 @@
     }
   ],
   "collision_filter_scope": "source masks aggregated per rigid cluster; joint-neighbour exclusions native; different instances retain external contact",
-  "digest": "bb8c8a0e0d731c006fddad8371f9fbba1c492a86139257aee8ad970ac1a9d7af"
+  "digest": "6947848baefdb0b086094fbb87f249b88e36a2c3cb74cfe8250e9ef4a70250ee"
 }

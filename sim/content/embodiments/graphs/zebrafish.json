@@ -3,8 +3,8 @@
   "compiler": "embodiment-rigid-graph-v2",
   "digest_encoding": "embodiment-binary-v1",
   "profile_id": "zebrafish",
-  "model_digest": "9b921c8f6a61ac4f44b4ed3f0618e87e83702d1ff56a8dfa6c74082e22b40826",
-  "io_digest": "faab8e4c02b41b5556d5cd6f146174546e8088a7a011c62dd7853aa1ec2fddf2",
+  "model_digest": "1d23962e56363291d32158c8f30a94a5045d1d440981d4d8a4909a94dc2fbd61",
+  "io_digest": "1a1e49f92263d1e56c272fa9260a4421ed5c28d02552220cf951eb7e70296f06",
   "fidelity": "functional-surrogate",
   "variant_id": "original-v1",
   "controller_transfer": "legacy-native-projections-v1; native MuJoCo engineering adapter; calibration unvalidated",
@@ -64979,6 +64979,4530 @@
         "missing": "fault-disarm",
         "axis": 1,
         "mode": "legacy-y-up"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r0c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r0c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r0c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r0c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r0c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r0c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r0c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r0c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r0c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r0c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r0c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r0c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r0c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r0c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r0c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r0c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          0,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r1c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r1c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r1c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r1c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r1c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r1c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r1c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r1c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r1c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r1c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r1c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r1c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r1c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r1c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r1c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r1c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          1,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r2c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r2c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r2c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r2c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r2c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r2c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r2c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r2c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r2c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r2c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r2c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r2c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r2c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r2c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r2c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r2c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          2,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r3c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r3c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r3c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r3c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r3c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r3c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r3c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r3c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r3c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r3c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r3c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r3c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r3c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r3c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r3c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r3c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          3,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r4c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r4c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r4c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r4c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r4c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r4c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r4c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r4c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r4c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r4c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r4c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r4c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r4c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r4c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r4c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r4c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          4,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r5c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r5c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r5c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r5c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r5c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r5c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r5c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r5c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r5c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r5c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r5c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r5c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r5c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r5c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.on.r5c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_left.off.r5c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_16_eye_left",
+        "cell": [
+          5,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r0c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r0c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r0c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r0c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r0c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r0c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r0c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r0c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r0c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r0c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r0c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r0c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r0c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r0c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r0c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r0c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          0,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r1c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r1c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r1c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r1c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r1c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r1c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r1c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r1c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r1c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r1c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r1c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r1c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r1c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r1c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r1c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r1c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          1,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r2c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r2c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r2c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r2c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r2c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r2c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r2c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r2c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r2c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r2c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r2c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r2c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r2c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r2c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r2c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r2c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          2,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r3c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r3c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r3c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r3c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r3c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r3c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r3c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r3c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r3c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r3c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r3c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r3c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r3c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r3c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r3c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r3c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          3,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r4c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r4c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r4c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r4c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r4c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r4c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r4c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r4c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r4c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r4c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r4c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r4c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r4c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r4c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r4c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r4c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          4,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r5c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r5c0",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          0
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r5c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r5c1",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          1
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r5c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r5c2",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          2
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r5c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r5c3",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          3
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r5c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r5c4",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          4
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r5c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r5c5",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          5
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r5c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r5c6",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          6
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.on.r5c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "on",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_eye_right.off.r5c7",
+        "kind": "legacy-camera",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "camera": "zebrafish_s_18_eye_right",
+        "cell": [
+          5,
+          7
+        ],
+        "retina_shape": [
+          6,
+          8
+        ],
+        "mode": "off",
+        "group": "vision"
+      },
+      {
+        "name": "zebrafish_hear_inner_ear_left_100Hz",
+        "kind": "legacy-acoustic",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          -0.001,
+          0.003,
+          0.0
+        ],
+        "direction": [
+          0,
+          1,
+          0
+        ],
+        "band_hz": 100.0,
+        "directivity": 0.2,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "zebrafish_hear_inner_ear_left_300Hz",
+        "kind": "legacy-acoustic",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          -0.001,
+          0.003,
+          0.0
+        ],
+        "direction": [
+          0,
+          1,
+          0
+        ],
+        "band_hz": 300.0,
+        "directivity": 0.2,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "zebrafish_hear_inner_ear_right_100Hz",
+        "kind": "legacy-acoustic",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          -0.001,
+          -0.003,
+          0.0
+        ],
+        "direction": [
+          0,
+          -1,
+          0
+        ],
+        "band_hz": 100.0,
+        "directivity": 0.2,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
+      },
+      {
+        "name": "zebrafish_hear_inner_ear_right_300Hz",
+        "kind": "legacy-acoustic",
+        "body": "segment_00",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "position_m": [
+          -0.001,
+          -0.003,
+          0.0
+        ],
+        "direction": [
+          0,
+          -1,
+          0
+        ],
+        "band_hz": 300.0,
+        "directivity": 0.2,
+        "floor_db": 20.0,
+        "ceil_db": 100.0,
+        "group": "hearing"
       }
     ],
     "output_names": [
@@ -65025,7 +69549,7 @@
       "neutral": "zero active drive on empty history; no twitch or oscillator",
       "fidelity": "versioned engineering projection; no learned task or biological calibration claim"
     },
-    "digest": "faab8e4c02b41b5556d5cd6f146174546e8088a7a011c62dd7853aa1ec2fddf2",
+    "digest": "1a1e49f92263d1e56c272fa9260a4421ed5c28d02552220cf951eb7e70296f06",
     "neural_sensory_names": [
       "zebrafish_s_00_lateralline_l0",
       "zebrafish_s_01_lateralline_l1",
@@ -65058,7 +69582,203 @@
       "zebrafish_s_28_accel.x",
       "zebrafish_s_29_accel.y",
       "zebrafish_s_30_gyro.x",
-      "zebrafish_s_31_gyro.y"
+      "zebrafish_s_31_gyro.y",
+      "zebrafish_eye_left.on.r0c0",
+      "zebrafish_eye_left.off.r0c0",
+      "zebrafish_eye_left.on.r0c1",
+      "zebrafish_eye_left.off.r0c1",
+      "zebrafish_eye_left.on.r0c2",
+      "zebrafish_eye_left.off.r0c2",
+      "zebrafish_eye_left.on.r0c3",
+      "zebrafish_eye_left.off.r0c3",
+      "zebrafish_eye_left.on.r0c4",
+      "zebrafish_eye_left.off.r0c4",
+      "zebrafish_eye_left.on.r0c5",
+      "zebrafish_eye_left.off.r0c5",
+      "zebrafish_eye_left.on.r0c6",
+      "zebrafish_eye_left.off.r0c6",
+      "zebrafish_eye_left.on.r0c7",
+      "zebrafish_eye_left.off.r0c7",
+      "zebrafish_eye_left.on.r1c0",
+      "zebrafish_eye_left.off.r1c0",
+      "zebrafish_eye_left.on.r1c1",
+      "zebrafish_eye_left.off.r1c1",
+      "zebrafish_eye_left.on.r1c2",
+      "zebrafish_eye_left.off.r1c2",
+      "zebrafish_eye_left.on.r1c3",
+      "zebrafish_eye_left.off.r1c3",
+      "zebrafish_eye_left.on.r1c4",
+      "zebrafish_eye_left.off.r1c4",
+      "zebrafish_eye_left.on.r1c5",
+      "zebrafish_eye_left.off.r1c5",
+      "zebrafish_eye_left.on.r1c6",
+      "zebrafish_eye_left.off.r1c6",
+      "zebrafish_eye_left.on.r1c7",
+      "zebrafish_eye_left.off.r1c7",
+      "zebrafish_eye_left.on.r2c0",
+      "zebrafish_eye_left.off.r2c0",
+      "zebrafish_eye_left.on.r2c1",
+      "zebrafish_eye_left.off.r2c1",
+      "zebrafish_eye_left.on.r2c2",
+      "zebrafish_eye_left.off.r2c2",
+      "zebrafish_eye_left.on.r2c3",
+      "zebrafish_eye_left.off.r2c3",
+      "zebrafish_eye_left.on.r2c4",
+      "zebrafish_eye_left.off.r2c4",
+      "zebrafish_eye_left.on.r2c5",
+      "zebrafish_eye_left.off.r2c5",
+      "zebrafish_eye_left.on.r2c6",
+      "zebrafish_eye_left.off.r2c6",
+      "zebrafish_eye_left.on.r2c7",
+      "zebrafish_eye_left.off.r2c7",
+      "zebrafish_eye_left.on.r3c0",
+      "zebrafish_eye_left.off.r3c0",
+      "zebrafish_eye_left.on.r3c1",
+      "zebrafish_eye_left.off.r3c1",
+      "zebrafish_eye_left.on.r3c2",
+      "zebrafish_eye_left.off.r3c2",
+      "zebrafish_eye_left.on.r3c3",
+      "zebrafish_eye_left.off.r3c3",
+      "zebrafish_eye_left.on.r3c4",
+      "zebrafish_eye_left.off.r3c4",
+      "zebrafish_eye_left.on.r3c5",
+      "zebrafish_eye_left.off.r3c5",
+      "zebrafish_eye_left.on.r3c6",
+      "zebrafish_eye_left.off.r3c6",
+      "zebrafish_eye_left.on.r3c7",
+      "zebrafish_eye_left.off.r3c7",
+      "zebrafish_eye_left.on.r4c0",
+      "zebrafish_eye_left.off.r4c0",
+      "zebrafish_eye_left.on.r4c1",
+      "zebrafish_eye_left.off.r4c1",
+      "zebrafish_eye_left.on.r4c2",
+      "zebrafish_eye_left.off.r4c2",
+      "zebrafish_eye_left.on.r4c3",
+      "zebrafish_eye_left.off.r4c3",
+      "zebrafish_eye_left.on.r4c4",
+      "zebrafish_eye_left.off.r4c4",
+      "zebrafish_eye_left.on.r4c5",
+      "zebrafish_eye_left.off.r4c5",
+      "zebrafish_eye_left.on.r4c6",
+      "zebrafish_eye_left.off.r4c6",
+      "zebrafish_eye_left.on.r4c7",
+      "zebrafish_eye_left.off.r4c7",
+      "zebrafish_eye_left.on.r5c0",
+      "zebrafish_eye_left.off.r5c0",
+      "zebrafish_eye_left.on.r5c1",
+      "zebrafish_eye_left.off.r5c1",
+      "zebrafish_eye_left.on.r5c2",
+      "zebrafish_eye_left.off.r5c2",
+      "zebrafish_eye_left.on.r5c3",
+      "zebrafish_eye_left.off.r5c3",
+      "zebrafish_eye_left.on.r5c4",
+      "zebrafish_eye_left.off.r5c4",
+      "zebrafish_eye_left.on.r5c5",
+      "zebrafish_eye_left.off.r5c5",
+      "zebrafish_eye_left.on.r5c6",
+      "zebrafish_eye_left.off.r5c6",
+      "zebrafish_eye_left.on.r5c7",
+      "zebrafish_eye_left.off.r5c7",
+      "zebrafish_eye_right.on.r0c0",
+      "zebrafish_eye_right.off.r0c0",
+      "zebrafish_eye_right.on.r0c1",
+      "zebrafish_eye_right.off.r0c1",
+      "zebrafish_eye_right.on.r0c2",
+      "zebrafish_eye_right.off.r0c2",
+      "zebrafish_eye_right.on.r0c3",
+      "zebrafish_eye_right.off.r0c3",
+      "zebrafish_eye_right.on.r0c4",
+      "zebrafish_eye_right.off.r0c4",
+      "zebrafish_eye_right.on.r0c5",
+      "zebrafish_eye_right.off.r0c5",
+      "zebrafish_eye_right.on.r0c6",
+      "zebrafish_eye_right.off.r0c6",
+      "zebrafish_eye_right.on.r0c7",
+      "zebrafish_eye_right.off.r0c7",
+      "zebrafish_eye_right.on.r1c0",
+      "zebrafish_eye_right.off.r1c0",
+      "zebrafish_eye_right.on.r1c1",
+      "zebrafish_eye_right.off.r1c1",
+      "zebrafish_eye_right.on.r1c2",
+      "zebrafish_eye_right.off.r1c2",
+      "zebrafish_eye_right.on.r1c3",
+      "zebrafish_eye_right.off.r1c3",
+      "zebrafish_eye_right.on.r1c4",
+      "zebrafish_eye_right.off.r1c4",
+      "zebrafish_eye_right.on.r1c5",
+      "zebrafish_eye_right.off.r1c5",
+      "zebrafish_eye_right.on.r1c6",
+      "zebrafish_eye_right.off.r1c6",
+      "zebrafish_eye_right.on.r1c7",
+      "zebrafish_eye_right.off.r1c7",
+      "zebrafish_eye_right.on.r2c0",
+      "zebrafish_eye_right.off.r2c0",
+      "zebrafish_eye_right.on.r2c1",
+      "zebrafish_eye_right.off.r2c1",
+      "zebrafish_eye_right.on.r2c2",
+      "zebrafish_eye_right.off.r2c2",
+      "zebrafish_eye_right.on.r2c3",
+      "zebrafish_eye_right.off.r2c3",
+      "zebrafish_eye_right.on.r2c4",
+      "zebrafish_eye_right.off.r2c4",
+      "zebrafish_eye_right.on.r2c5",
+      "zebrafish_eye_right.off.r2c5",
+      "zebrafish_eye_right.on.r2c6",
+      "zebrafish_eye_right.off.r2c6",
+      "zebrafish_eye_right.on.r2c7",
+      "zebrafish_eye_right.off.r2c7",
+      "zebrafish_eye_right.on.r3c0",
+      "zebrafish_eye_right.off.r3c0",
+      "zebrafish_eye_right.on.r3c1",
+      "zebrafish_eye_right.off.r3c1",
+      "zebrafish_eye_right.on.r3c2",
+      "zebrafish_eye_right.off.r3c2",
+      "zebrafish_eye_right.on.r3c3",
+      "zebrafish_eye_right.off.r3c3",
+      "zebrafish_eye_right.on.r3c4",
+      "zebrafish_eye_right.off.r3c4",
+      "zebrafish_eye_right.on.r3c5",
+      "zebrafish_eye_right.off.r3c5",
+      "zebrafish_eye_right.on.r3c6",
+      "zebrafish_eye_right.off.r3c6",
+      "zebrafish_eye_right.on.r3c7",
+      "zebrafish_eye_right.off.r3c7",
+      "zebrafish_eye_right.on.r4c0",
+      "zebrafish_eye_right.off.r4c0",
+      "zebrafish_eye_right.on.r4c1",
+      "zebrafish_eye_right.off.r4c1",
+      "zebrafish_eye_right.on.r4c2",
+      "zebrafish_eye_right.off.r4c2",
+      "zebrafish_eye_right.on.r4c3",
+      "zebrafish_eye_right.off.r4c3",
+      "zebrafish_eye_right.on.r4c4",
+      "zebrafish_eye_right.off.r4c4",
+      "zebrafish_eye_right.on.r4c5",
+      "zebrafish_eye_right.off.r4c5",
+      "zebrafish_eye_right.on.r4c6",
+      "zebrafish_eye_right.off.r4c6",
+      "zebrafish_eye_right.on.r4c7",
+      "zebrafish_eye_right.off.r4c7",
+      "zebrafish_eye_right.on.r5c0",
+      "zebrafish_eye_right.off.r5c0",
+      "zebrafish_eye_right.on.r5c1",
+      "zebrafish_eye_right.off.r5c1",
+      "zebrafish_eye_right.on.r5c2",
+      "zebrafish_eye_right.off.r5c2",
+      "zebrafish_eye_right.on.r5c3",
+      "zebrafish_eye_right.off.r5c3",
+      "zebrafish_eye_right.on.r5c4",
+      "zebrafish_eye_right.off.r5c4",
+      "zebrafish_eye_right.on.r5c5",
+      "zebrafish_eye_right.off.r5c5",
+      "zebrafish_eye_right.on.r5c6",
+      "zebrafish_eye_right.off.r5c6",
+      "zebrafish_eye_right.on.r5c7",
+      "zebrafish_eye_right.off.r5c7",
+      "zebrafish_hear_inner_ear_left_100Hz",
+      "zebrafish_hear_inner_ear_left_300Hz",
+      "zebrafish_hear_inner_ear_right_100Hz",
+      "zebrafish_hear_inner_ear_right_300Hz"
     ],
     "neural_output_names": [
       "zebrafish_o_00_tail_l0",
@@ -75001,5 +79721,5 @@
     }
   ],
   "collision_filter_scope": "source masks aggregated per rigid cluster; joint-neighbour exclusions native; different instances retain external contact",
-  "digest": "73e2deccdc62cf5b8d5a0a1c7774944fad70a69381467049d5bf03b322d685f2"
+  "digest": "4eb222329d055e129822db7c2501138385e0aea4d106af6f572b9eea09f3b1e6"
 }

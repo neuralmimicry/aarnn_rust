@@ -114,6 +114,57 @@ impl Physics {
             self.m().nu as usize,
         )
     }
+    /// Remove static scenery from the world: every world-body geom whose name
+    /// starts with one of `prefixes` is moved 50 m below the floor with its
+    /// contacts disabled, so it neither collides nor returns a ray echo
+    /// (habitat variants, e.g. `NM_MUJOCO_REMOVE_GEOMS=habitat_slalom_`).
+    /// Returns the number of geoms removed.
+    pub fn remove_geoms(&mut self, prefixes: &[&str]) -> Result<usize, String> {
+        if prefixes.iter().all(|p| p.is_empty()) {
+            return Ok(0);
+        }
+        let mut removed = 0;
+        // SAFETY: geom ids are bounded by ngeom; name pointers are owned by the
+        // model; the geom arrays have ngeom rows (pos 3, contype/conaffinity 1,
+        // body id 1). Exclusive owner; derived quantities are recomputed below.
+        unsafe {
+            let m = self.model.as_ptr();
+            for g in 0..(*m).ngeom as usize {
+                if *(*m).geom_bodyid.add(g) != 0 {
+                    continue;
+                }
+                let name = ffi::mj_id2name(m, ffi::mjtObj_mjOBJ_GEOM as i32, g as i32);
+                if name.is_null() {
+                    continue;
+                }
+                let name = CStr::from_ptr(name).to_string_lossy();
+                if prefixes
+                    .iter()
+                    .any(|p| !p.is_empty() && name.starts_with(p))
+                {
+                    *(*m).geom_pos.add(3 * g + 2) = -50.0;
+                    *(*m).geom_contype.add(g) = 0;
+                    *(*m).geom_conaffinity.add(g) = 0;
+                    removed += 1;
+                }
+            }
+        }
+        self.forward();
+        Ok(removed)
+    }
+    /// Pose the model at a recorded generalised position (trace replay) and
+    /// recompute derived quantities; velocities are left unchanged.
+    pub fn set_qpos(&mut self, qpos: &[f64]) -> Result<(), String> {
+        if qpos.len() != self.m().nq as usize || !qpos.iter().all(|v| v.is_finite()) {
+            return Err("qpos shape/nonfinite".into());
+        }
+        // SAFETY: MuJoCo allocates nq scalars; exclusive data owner.
+        unsafe {
+            std::ptr::copy_nonoverlapping(qpos.as_ptr(), (*self.data.as_ptr()).qpos, qpos.len());
+        }
+        self.forward();
+        Ok(())
+    }
     pub fn qpos(&self) -> &[f64] {
         // SAFETY: MuJoCo allocates nq scalars until drop.
         unsafe { std::slice::from_raw_parts(self.d().qpos, self.m().nq as usize) }
@@ -323,6 +374,18 @@ impl Physics {
         direction: [f64; 3],
         root: usize,
     ) -> Result<Option<f64>, String> {
+        self.echo_beyond_self(point, direction, root, None)
+    }
+    /// `ray_beyond_self` with an echo rule: a hit whose angle of incidence
+    /// (between the ray and the surface normal) exceeds `incidence_max` is
+    /// reflected away and returns nothing, like a sonar beam grazing a floor.
+    pub fn echo_beyond_self(
+        &self,
+        point: [f64; 3],
+        direction: [f64; 3],
+        root: usize,
+        incidence_max: Option<f64>,
+    ) -> Result<Option<f64>, String> {
         if root >= self.m().nbody as usize {
             return Err("invalid ray root".into());
         }
@@ -333,7 +396,9 @@ impl Physics {
         let mut travelled = 0.;
         for _ in 0..32 {
             let mut geom = -1;
-            // SAFETY: as in `ray_groups`; `exclude` is a valid body index.
+            let mut normal = [0.; 3];
+            // SAFETY: as in `ray_groups`; `exclude` is a valid body index;
+            // `normal` is a three-element output buffer.
             let distance = unsafe {
                 ffi::mj_ray(
                     self.model.as_ptr(),
@@ -344,7 +409,7 @@ impl Physics {
                     true,
                     exclude as i32,
                     &mut geom,
-                    std::ptr::null_mut(),
+                    normal.as_mut_ptr(),
                 )
             };
             if distance < 0. || geom < 0 {
@@ -357,6 +422,17 @@ impl Physics {
             let body = unsafe { *self.m().geom_bodyid.add(geom as usize) } as usize;
             let body_tree = unsafe { *self.m().body_rootid.add(body) };
             if body == 0 || body_tree != tree {
+                if let Some(limit) = incidence_max {
+                    let length = direction.iter().map(|v| v * v).sum::<f64>().sqrt();
+                    let n = normal.iter().map(|v| v * v).sum::<f64>().sqrt();
+                    if length > 0. && n > 0. {
+                        let cos = (0..3).map(|i| direction[i] * normal[i]).sum::<f64>().abs()
+                            / (length * n);
+                        if cos.clamp(0., 1.).acos() > limit {
+                            return Ok(None);
+                        }
+                    }
+                }
                 return Ok(Some(travelled + distance));
             }
             let step = distance + 1.0e-6;
@@ -533,6 +609,37 @@ impl Physics {
         }
         Ok(0.)
     }
+    /// A bumper switch: 1 if any contact of `body` lies inside the
+    /// body-local box `region` (`[[x0, y0, z0], [x1, y1, z1]]`). A toe bumper
+    /// sits above the sole, so standing on the floor never presses it.
+    pub fn region_contact(&self, body: usize, region: [[f64; 3]; 2]) -> Result<f64, String> {
+        let (position, r, _) = self.body_state(body)?;
+        if !region.iter().flatten().all(|v| v.is_finite())
+            || (0..3).any(|i| region[0][i] > region[1][i])
+        {
+            return Err("invalid bumper region".into());
+        }
+        // SAFETY: owner-validated body; native contact/geom arrays are live.
+        unsafe {
+            for i in 0..self.d().ncon as usize {
+                let c = &*self.d().contact.add(i);
+                let belongs = [c.geom1, c.geom2].iter().any(|g| {
+                    *g >= 0
+                        && (*g as usize) < self.m().ngeom as usize
+                        && *self.m().geom_bodyid.add(*g as usize) == body as i32
+                });
+                if belongs {
+                    let local: [f64; 3] = std::array::from_fn(|axis| {
+                        (0..3).map(|j| r[j][axis] * (c.pos[j] - position[j])).sum()
+                    });
+                    if (0..3).all(|j| local[j] >= region[0][j] && local[j] <= region[1][j]) {
+                        return Ok(1.);
+                    }
+                }
+            }
+        }
+        Ok(0.)
+    }
     pub fn body_count(&self) -> usize {
         self.m().nbody as usize
     }
@@ -675,6 +782,42 @@ impl Physics {
             }).collect()
         }
     }
+    /// Pose a mocap body (position, unit quaternion w x y z) by name, for a
+    /// programmed actor sharing the world (`npc_actor`).
+    pub fn set_mocap_pose(
+        &mut self,
+        name: &str,
+        position: [f64; 3],
+        quaternion: [f64; 4],
+    ) -> Result<(), String> {
+        if !position
+            .iter()
+            .chain(quaternion.iter())
+            .all(|x| x.is_finite())
+        {
+            return Err("mocap pose must be finite".into());
+        }
+        let norm = quaternion.iter().map(|q| q * q).sum::<f64>().sqrt();
+        if norm < 1.0e-9 {
+            return Err("mocap quaternion must be non-zero".into());
+        }
+        let body = self.body(name)?;
+        // SAFETY: valid body ID; mocap ID checked against nmocap before write.
+        unsafe {
+            let id = *self.m().body_mocapid.add(body);
+            if id < 0 || id as i64 >= self.m().nmocap {
+                return Err(format!("{name} is not a mocap body"));
+            }
+            for (i, value) in position.into_iter().enumerate() {
+                *self.d().mocap_pos.add(id as usize * 3 + i) = value;
+            }
+            for (i, value) in quaternion.into_iter().enumerate() {
+                *self.d().mocap_quat.add(id as usize * 4 + i) = value / norm;
+            }
+        }
+        Ok(())
+    }
+
     pub fn place_voxel(&mut self, slot: usize, position: [f64; 3]) -> Result<(), String> {
         if slot >= 32 || !position.iter().all(|x| x.is_finite() && x.abs() <= 10.) {
             return Err("voxel position/slot budget".into());

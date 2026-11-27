@@ -29,11 +29,11 @@ class Bindings(unittest.TestCase):
         snapshot=dict(net=dict(num_sensory_neurons=len(sensory),num_output_neurons=len(output)),connectome_labels=dict(sensory_nodes=sensory,output_nodes=output))
         path=root/(profile+'.json');path.write_text(json.dumps(snapshot));return record,snapshot,path
 
-    def test_all_twenty_eight_named_contracts_and_distinct_brains(self):
+    def test_all_twenty_nine_named_contracts_and_distinct_brains(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);out=root/'bindings'
             records=sorted((ROOT/'sim/content/embodiments/generated').glob('*.xml'))
-            self.assertEqual(len(records),28)
+            self.assertEqual(len(records),29)
             for index,model in enumerate(records):
                 profile=model.stem;record,snapshot,path=self.fixture(profile,root)
                 before=path.read_bytes()
@@ -43,7 +43,7 @@ class Bindings(unittest.TestCase):
                 self.assertEqual(contract['s_names'],[s['name'] for s in record['io']['sensors']])
                 self.assertEqual(contract['o_names'],record['io']['output_names'])
             mapping=json.loads((out/'mujoco-bindings.json').read_text())
-            self.assertEqual(len(mapping),28);self.assertEqual(len({b['port'] for b in mapping.values()}),28)
+            self.assertEqual(len(mapping),29);self.assertEqual(len({b['port'] for b in mapping.values()}),29)
 
     def test_mismatch_and_dataset_alias_rejected_before_contract_creation(self):
         with tempfile.TemporaryDirectory() as d:

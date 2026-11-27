@@ -794,6 +794,78 @@
         ],
         "rate_hz": 500,
         "missing": "fault-disarm"
+      },
+      {
+        "name": "needs_energy",
+        "kind": "needs-energy",
+        "mode": "power",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "group": "needs"
+      },
+      {
+        "name": "needs_consume",
+        "kind": "needs-consume",
+        "mode": "power",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "group": "needs"
+      },
+      {
+        "name": "needs_cue_left",
+        "kind": "needs-cue",
+        "mode": "power",
+        "position_m": [
+          0.09,
+          0.09,
+          0.0
+        ],
+        "direction": [
+          0.7071,
+          0.7071,
+          0.0
+        ],
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "group": "needs"
+      },
+      {
+        "name": "needs_cue_right",
+        "kind": "needs-cue",
+        "mode": "power",
+        "position_m": [
+          0.09,
+          -0.09,
+          0.0
+        ],
+        "direction": [
+          0.7071,
+          -0.7071,
+          0.0
+        ],
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "group": "needs"
       }
     ],
     "output_names": [
@@ -861,7 +933,7 @@
       "stale_s": 0.1,
       "neutral": "zero effort; passive dynamics continue"
     },
-    "digest": "e7ec78c9180a8261316c86b76af3419b358fdc048e650e547033a1edd97230e4"
+    "digest": "982e61e4c523621183b262621510d1a6fcc16d0f09dfe849db3d47e93b6fb4b4"
   },
   "actuators": [
     {
@@ -1486,7 +1558,7 @@
       "encoding": "antagonist-rate-v1"
     }
   ],
-  "native_mjcf_sha256": "2b87d278218f2ff71ad1b465f2db22fa36151e57dffe28ab557ba42b33f098e7",
+  "native_mjcf_sha256": "3ee71352b80e8186cc5d69b84fd5caf59cd38e1356f1911ad4d0185a43342151",
   "source_licence": "Apache-2.0",
   "assumptions": "sim/content/embodiments/policy.json",
   "total_mass_kg": 95.41189818549127,
@@ -3992,13 +4064,67 @@
         "strength": 1,
         "anchor": "root",
         "internal": false
+      },
+      {
+        "id": "charging_dock",
+        "shape": "box",
+        "position": [
+          -1.0499999999999998,
+          -0.8999999999999999,
+          0.012
+        ],
+        "size": [
+          0.42000000000000004,
+          0.42000000000000004,
+          0.024
+        ],
+        "colour": [
+          0.12,
+          0.55,
+          0.9
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "plastic",
+        "cue": "beacon",
+        "radius": 0.8999999999999999,
+        "strength": 1.0,
+        "anchor": "root",
+        "internal": false
       }
     ],
-    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
+    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model",
+    "needs": {
+      "version": "needs-v1",
+      "resource": "power",
+      "basal_w_per_kg": 1.0,
+      "endurance_s": 240.0,
+      "effort_ref_w_per_kg": 2.0,
+      "refill_s": 20.0,
+      "start_fraction": 1.0,
+      "sources": [
+        {
+          "id": "charging_dock",
+          "position_m": [
+            -1.05,
+            -0.9,
+            0.012
+          ],
+          "radius_m": 0.51,
+          "field_radius_m": 1.05
+        }
+      ],
+      "caretaker": {
+        "until_s": 600.0,
+        "threshold": 0.4,
+        "feed_s": 20.0
+      },
+      "scientific_status": "engineering proxy: energy store, drain and refill are not calibrated metabolism or battery models; early-life caretaker presents food or docks the body"
+    }
   },
-  "scene_sources_sha256": "a715a28f67ac75c9624deb144618f412dae8688b833c24e07b4ae9e8838d2884",
+  "scene_sources_sha256": "f0ad36be6e4a13ae9f1747ba14d4ad5085d43896fe8f18d87c6169e1caaf33a3",
   "anatomy_sources_sha256": "76e90c0ee8947775dbfb7ae187162c7c383557a5343383f64af84d2e625f2bd1",
-  "neural_sources_sha256": "491b1c8df3570eda7bb994493ecd7617ca21066362363aaaec542de36deab729",
+  "neural_sources_sha256": "c4d6f92f5b435c040ea1d350ff17af6aac8f2625487a3987aeb9775d7f9cbafe",
   "bodies": [
     {
       "name": "base_link",
@@ -12734,6 +12860,35 @@
       "mesh_id": -1
     },
     {
+      "name": "habitat_charging_dock",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -1.0499999999999998,
+        -0.8999999999999999,
+        0.012
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.21000000000000002,
+        0.21000000000000002,
+        0.012
+      ],
+      "rgba": [
+        0.11999999731779099,
+        0.550000011920929,
+        0.8999999761581421,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
       "name": "omni_chassis_base_link_collision",
       "body": 3,
       "type": 7,
@@ -20559,5 +20714,5 @@
       "solref": "0.005 1"
     }
   ],
-  "digest": "7b9c075cbb4b91cb5912364fb6531f85291c34f4e323ab2447be51c5691204d3"
+  "digest": "4c8744509f7d574e7e8876cd3148093244c80c4e80d29a3c191b11c1f0ebfb0b"
 }

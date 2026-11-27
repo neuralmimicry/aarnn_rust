@@ -6,112 +6,112 @@
       "aliases": [
         "keenon_t8"
       ],
-      "sensory": 19,
+      "sensory": 23,
       "output": 8,
       "model": "keenon_t8.xml",
       "record": "keenon_t8.json",
       "config": "keenon_t8.config.json",
       "network": "",
-      "io_digest": "23d77c7603f4ee8f9c32130a78518d2237d792215df409c126674a2d04ad1192",
-      "model_digest": "c4e228ba32b0be17bb5f8a3f8346d55440e15134a2a4f887e64c417d5ab6c234"
+      "io_digest": "af367420dca9abb0bc8c730841bee366aea875e6aab15c8f4f6a7384e660caf5",
+      "model_digest": "a19694264f07435ea890ebd7d03e9da17ae2595711a5ebdbc0214d2110722148"
     },
     {
       "id": "keenon_t9",
       "aliases": [
         "keenon_t9"
       ],
-      "sensory": 19,
+      "sensory": 23,
       "output": 8,
       "model": "keenon_t9.xml",
       "record": "keenon_t9.json",
       "config": "keenon_t9.config.json",
       "network": "",
-      "io_digest": "0f234d26a2fa9fdd7de725ae3b0defe110906ade75d2523ed8fc260879d9c34e",
-      "model_digest": "463c03a7c7556b9f1af2abe386b3fd9c49585e4cb63a255fb2742fb9d66881d4"
+      "io_digest": "91c122752800b51587b405103e47e5b806c50f2df6a5f2866f1a255a27fe2cc3",
+      "model_digest": "b831d317ab1ef72603265ec15acb81989fe13d8999b76e4dafc77f2d554e21f2"
     },
     {
       "id": "keenon_t10",
       "aliases": [
         "keenon_t10"
       ],
-      "sensory": 19,
+      "sensory": 23,
       "output": 8,
       "model": "keenon_t10.xml",
       "record": "keenon_t10.json",
       "config": "keenon_t10.config.json",
       "network": "",
-      "io_digest": "8ddf8654532106e8176657bcd37820329f068a27e509eb3a9fc48e8d8205895f",
-      "model_digest": "23407cf209971c3057e144d42ee19f06e810465f720953f7275f27126877e3f2"
+      "io_digest": "8a7fec6e4574b97f1d8178c222df9203fabf28774b4e323bd068630e46304b12",
+      "model_digest": "12b2e7208ef96ff9a374755ea2a4b71de875db3d2ea505395b1bf9011f29ee6c"
     },
     {
       "id": "keenon_t11",
       "aliases": [
         "keenon_t11"
       ],
-      "sensory": 19,
+      "sensory": 23,
       "output": 8,
       "model": "keenon_t11.xml",
       "record": "keenon_t11.json",
       "config": "keenon_t11.config.json",
       "network": "",
-      "io_digest": "18586b90ef17ff8d0838610e21d944d65dd18321511fb8c8dba114efdaec24af",
-      "model_digest": "73cb906a522f3b34fd8214ff82add6588b78b95fd449eabae4fa87aca8131662"
+      "io_digest": "0c403fb50189d816671441fef5a8203905c9b785f439bfda9386815913ddf5a6",
+      "model_digest": "13c7aa6a152c314b3bc15c853ffa281edaffd7184feb79d6250951381db0feb1"
     },
     {
       "id": "keenon_w3",
       "aliases": [
         "keenon_w3"
       ],
-      "sensory": 23,
+      "sensory": 27,
       "output": 12,
       "model": "keenon_w3.xml",
       "record": "keenon_w3.json",
       "config": "keenon_w3.config.json",
       "network": "",
-      "io_digest": "c0759cf93c5db2c0f58828ac364e0c17b70a38ac6a5281e6a4ae96a4e862a1f0",
-      "model_digest": "0422ab9a874b43396e9233a927dba1f3939b56995b0a46ece9ecff8ff7036d3b"
+      "io_digest": "5b24c7f9fd69292fa93667512a1591597755eb99befb8b5272b6824ef7af6bc0",
+      "model_digest": "8b67634f6557f42e591138f36012937da450635f6431cdd7ad5a6b0acaea355e"
     },
     {
       "id": "keenon_s100",
       "aliases": [
         "keenon_s100"
       ],
-      "sensory": 19,
+      "sensory": 23,
       "output": 8,
       "model": "keenon_s100.xml",
       "record": "keenon_s100.json",
       "config": "keenon_s100.config.json",
       "network": "",
-      "io_digest": "b745d2804413ec4cfa0b4bb201f2d937001e62fcae4f548d43c58edf3356855e",
-      "model_digest": "410eab0f2dd660038c8d219839d681235199b15585210052bcec716941b49f38"
+      "io_digest": "8dea6eec875dd6f78a233cbd265e3b1a01b4a1b5f5a3f2acea28836178ce3923",
+      "model_digest": "e512ed03959b18c79a454840fc1062a2725c74f2f969ae8862818a6fa4903ebc"
     },
     {
       "id": "keenon_c30",
       "aliases": [
         "keenon_c30"
       ],
-      "sensory": 21,
+      "sensory": 25,
       "output": 10,
       "model": "keenon_c30.xml",
       "record": "keenon_c30.json",
       "config": "keenon_c30.config.json",
       "network": "",
-      "io_digest": "98aba52a647f34f705a07994bf75bc45871481d5aef0380333b4fa136d22b5ba",
-      "model_digest": "25ce7d78620fb1f33ab7e783330c777687c180b38e783b11bd17bf50007530db"
+      "io_digest": "6e5ce7acc50db63d504488c8633c490992e433ae9f1411c6c69dc10414332a6b",
+      "model_digest": "1cb6e9886dcdc6eb0b31c57151c0007832e54d75514c5e5e6c16246c8f284582"
     },
     {
       "id": "keenon_c40",
       "aliases": [
         "keenon_c40"
       ],
-      "sensory": 21,
+      "sensory": 25,
       "output": 10,
       "model": "keenon_c40.xml",
       "record": "keenon_c40.json",
       "config": "keenon_c40.config.json",
       "network": "",
-      "io_digest": "db3ca9dcd733f68abcce87e2f8917846ca0c8176af1fe59fbbae3a6953043197",
-      "model_digest": "f318e30d386d5b2991647f44a9dc71ad88605dd283cf103a39ff451016fdaa70"
+      "io_digest": "a53cf3f71e7603f83f1994738d4a2937045d7ca9871c706d0ce9d48bee48cc4c",
+      "model_digest": "f05f4503678da55fe0c36f8178628f5dc61df3ba7704e691c702a502162e8824"
     },
     {
       "id": "botinkit_omni",
@@ -125,7 +125,7 @@
       "config": "botinkit_omni.config.json",
       "network": "",
       "io_digest": "f2a398e0578bbdee6dadae26b8337a000620e8b335ff9b0f51daa975524fad23",
-      "model_digest": "598ea111478ed4d10ee59986802a11c2d4c6b0b8eebe35625d04edf7dd7b6575"
+      "model_digest": "b3e74ce711878ab8ffe8048a22547263684a41314e41746149651030b51713c0"
     },
     {
       "id": "cofe_robot_cafe",
@@ -139,7 +139,7 @@
       "config": "cofe_robot_cafe.config.json",
       "network": "",
       "io_digest": "3e5a0f2a3ddf8e6c25b211e85bae46089e3bdbf487617096d493bd2ab07e230f",
-      "model_digest": "0880c807b214dd9c475188097eaf34682cb9710c462e3c1bbf26faff51cd9f9b"
+      "model_digest": "348b4f47391e0ea0172abb9f2e41cdd258b37c81f42a46c901299f29a5db997f"
     },
     {
       "id": "cofe_smart_bar",
@@ -153,7 +153,7 @@
       "config": "cofe_smart_bar.config.json",
       "network": "",
       "io_digest": "7da2ceb8c491db1dc4ffc382c1b32db98eb9d54790cffaaae9cac2129d25f795",
-      "model_digest": "41c272fe977df9904e64e85a200c143fa21d3ab5bd8eb7618b2a15881d23a886"
+      "model_digest": "28fc857c33156f4e3ad81d3b48123431460ee5780e0131e2790719ea51e38416"
     },
     {
       "id": "xbot_s_pro",
@@ -167,7 +167,7 @@
       "config": "xbot_s_pro.config.json",
       "network": "",
       "io_digest": "7dacb487ee1c1ea6583b98c3a4400dcecf855d9a3250d2a8bee38629020e1fdb",
-      "model_digest": "cbad7abeb8bc7bee5fad7afedacd46d069bbd0b2b815706a8150db7413dc1d67"
+      "model_digest": "5814919d8f7aeee421270e3b1bf20b1d8539bad825455dc2cefa4be3bba24e68"
     },
     {
       "id": "xbot_ic60",
@@ -181,119 +181,119 @@
       "config": "xbot_ic60.config.json",
       "network": "",
       "io_digest": "0bc4b71f72a91f02847dd5e2e88dc59b8385ecc2479f624b5f1575ae166b5c96",
-      "model_digest": "ca7dc4908920fe6ca72f42df3aa981b92b29fbe19f883b4b8837a3bd3495c4d5"
+      "model_digest": "9cc0f82fe22400d9418605c0df8b16e015e9d21b47c6c65e460b2d5c38ec209f"
     },
     {
       "id": "ugot_mecanum",
       "aliases": [
         "ugot_mecanum"
       ],
-      "sensory": 19,
+      "sensory": 23,
       "output": 8,
       "model": "ugot_mecanum.xml",
       "record": "ugot_mecanum.json",
       "config": "ugot_mecanum.config.json",
       "network": "",
-      "io_digest": "ce881cb857c332e8022959cf0401c51d36643bf7271a86279fc655d048a479de",
-      "model_digest": "c62f0638e3292a20851281ce40f03530b0fc8c62e845f0c71f9a57775c285490"
+      "io_digest": "3142bbabd60a0f61a4dece5de8e07a67d85d169ce04cd1ca69e59098c5d71ecd",
+      "model_digest": "e773d7dcf8a55d794ee498ba8d7ccc9c500b0311ffc8b01e1b6348bda03472b3"
     },
     {
       "id": "ugot_quadruped",
       "aliases": [
         "ugot_quadruped"
       ],
-      "sensory": 27,
+      "sensory": 31,
       "output": 16,
       "model": "ugot_quadruped.xml",
       "record": "ugot_quadruped.json",
       "config": "ugot_quadruped.config.json",
       "network": "",
-      "io_digest": "667c2a92ff2bc09aaf0c56f4dde63d2d01223e1a8e711d8b6d06036d7ced6311",
-      "model_digest": "166174422b4926674ba5e39f1f6841cafb7b7064ea47d8b14fde4e917474ea91"
+      "io_digest": "3b424c1040f4c5da0dc613339ade94ee0df5511792e82899b0f247c73f8e01ed",
+      "model_digest": "616866991a349e74e64b3a169f04a27cc1243a3b05a30b93713af508b51a19d8"
     },
     {
       "id": "ugot_spider",
       "aliases": [
         "ugot_spider"
       ],
-      "sensory": 27,
+      "sensory": 31,
       "output": 16,
       "model": "ugot_spider.xml",
       "record": "ugot_spider.json",
       "config": "ugot_spider.config.json",
       "network": "",
-      "io_digest": "308bbd73d1d7f707e1a3b9d57898f83e0657029240b201781c87564923aff41b",
-      "model_digest": "8c1a86fbd1b2d2659944896be3179d83bfbf2379d73a6600b06725099b61635f"
+      "io_digest": "93b97917f17dbb425878034c23587fc077f974012eb02e241424815bab36a006",
+      "model_digest": "5e0d51ff56eb9bfccd89820e438ddf68d32c3a0c1f6095611c712fb28852a6c1"
     },
     {
       "id": "ugot_balance",
       "aliases": [
         "ugot_balance"
       ],
-      "sensory": 18,
+      "sensory": 22,
       "output": 4,
       "model": "ugot_balance.xml",
       "record": "ugot_balance.json",
       "config": "ugot_balance.config.json",
       "network": "",
-      "io_digest": "1f9326e45cc89adabacf44a9bb6c271610f443570f00c79827fe3e19f20d345f",
-      "model_digest": "616cbad09652ce7125413785a4e505a57742f988798578e14c41ed2b8da7fe00"
+      "io_digest": "5dcc0f716309a280596b793ebdaa0493f0604fc138ff1e6b5a1d907d197896ca",
+      "model_digest": "a70355419283e7e8f9832bc1ac0123877c94e477ee7a8aa42067c8113eed74d2"
     },
     {
       "id": "ugot_wheelleg",
       "aliases": [
         "ugot_wheelleg"
       ],
-      "sensory": 26,
+      "sensory": 30,
       "output": 12,
       "model": "ugot_wheelleg.xml",
       "record": "ugot_wheelleg.json",
       "config": "ugot_wheelleg.config.json",
       "network": "",
-      "io_digest": "53b9255d54438d446c43b5f479c335a6e1056029ddc252ce0c66d1b0a8023ed9",
-      "model_digest": "e5d9753ee58be1448523c11731b8d13bb36120e7989098ebcc2617a1c2f70c20"
+      "io_digest": "396abc55401bfa2956b8485475fc56b183df3cffc1f319194376ff2a2343c972",
+      "model_digest": "68a45050ff445357f754d6233a42b1b3c3546e0b11283df0381571ece4d90084"
     },
     {
       "id": "ugot_engineer",
       "aliases": [
         "ugot_engineer"
       ],
-      "sensory": 27,
+      "sensory": 31,
       "output": 16,
       "model": "ugot_engineer.xml",
       "record": "ugot_engineer.json",
       "config": "ugot_engineer.config.json",
       "network": "",
-      "io_digest": "61666f3b50e5417bd6e6300c741ba96b9ec5e05392479051d36c8784685847b8",
-      "model_digest": "aef5438935f081ceaa3e7780eed84887b5fa641285dbabb7a744315c763bf6a3"
+      "io_digest": "7225b07aece8468821bb04950c2eac1083e59c7154d742eb728d6febabd8bf48",
+      "model_digest": "2eb16915cc9a0cb6a8a966eed99982cb3c5803c894c545668ac0c354c5a2e40b"
     },
     {
       "id": "ugot_transform",
       "aliases": [
         "ugot_transform"
       ],
-      "sensory": 23,
+      "sensory": 27,
       "output": 12,
       "model": "ugot_transform.xml",
       "record": "ugot_transform.json",
       "config": "ugot_transform.config.json",
       "network": "",
-      "io_digest": "7f957941002dca2dabe05e47b81514602dc9b6783952412ff1de5c75df971155",
-      "model_digest": "4cf7c03bfbf3ec85f8ff02881b8731643fba4072fb520cad710e59071ea969c1"
+      "io_digest": "c55e1a4f2e5e46c3e76a9004819d85db4cd4f74f5faf1fd18708fb1e56406c2d",
+      "model_digest": "fc21f35ecb9e374fca1b21735dd4f78f2f16c62cdf95be90f8fc7aa96ce96a50"
     },
     {
       "id": "galbot_g1_golf",
       "aliases": [
         "galbot_g1_golf"
       ],
-      "sensory": 65,
+      "sensory": 69,
       "output": 54,
       "model": "galbot_g1_golf.xml",
       "record": "galbot_g1_golf.json",
       "config": "galbot_g1_golf.config.json",
       "network": "",
-      "io_digest": "e7ec78c9180a8261316c86b76af3419b358fdc048e650e547033a1edd97230e4",
-      "model_digest": "7b9c075cbb4b91cb5912364fb6531f85291c34f4e323ab2447be51c5691204d3"
+      "io_digest": "982e61e4c523621183b262621510d1a6fcc16d0f09dfe849db3d47e93b6fb4b4",
+      "model_digest": "4c8744509f7d574e7e8876cd3148093244c80c4e80d29a3c191b11c1f0ebfb0b"
     },
     {
       "id": "crow_corvus_corone",
@@ -307,7 +307,7 @@
       "config": "crow_corvus_corone.config.json",
       "network": "",
       "io_digest": "1109d94dd58ac7a2c4f10120511e1dd54c21b63d7bf20efd1507caf4d742699a",
-      "model_digest": "fc4d3671a16032cdc85d20018e1c7b98f3da460839b038a5626fcbfd26b38fce"
+      "model_digest": "5715536b5ae670942543d05ce6e9034989a713b233cee0bfbdc2d94cf2c77bec"
     },
     {
       "id": "celegans",
@@ -317,14 +317,14 @@
         "worms",
         "c_elegans"
       ],
-      "sensory": 48,
+      "sensory": 52,
       "output": 96,
       "model": "celegans.xml",
       "record": "celegans.json",
       "config": "celegans.config.json",
       "network": "network_celegans.json",
-      "io_digest": "6e34cd92e33c31062202dadd3aff8095e0319c61db6a297c90fc686d56094361",
-      "model_digest": "bd9830fe7e7dff95673d8a9e859d0eb1cc685b861d0458a18b0c8819da056bf7"
+      "io_digest": "9b00655fc5a46bdaefedc0bfed5230589d435c4e92c808719efa060792115460",
+      "model_digest": "9b3d17671717cee52d4dc266e8c9d14bbfdf63c9509021b8d184e10176f31682"
     },
     {
       "id": "drosophila_banc",
@@ -339,14 +339,14 @@
         "drosophila_banc_v626",
         "banc"
       ],
-      "sensory": 418,
+      "sensory": 428,
       "output": 48,
       "model": "drosophila_banc.xml",
       "record": "drosophila_banc.json",
       "config": "drosophila_banc.config.json",
       "network": "network_drosophila_banc.json",
-      "io_digest": "ebf5b2e60cfcd2adc49752be39c709798692764f91dcf5f91881dfae447a8fcf",
-      "model_digest": "55cb6ef7d354aff50d385af474d10707fa32a12c9818f9de1436d848ef9919ce"
+      "io_digest": "aa96f8930045c2fdffeeb868b0f015192cda5eacab253e9654570be74d62763f",
+      "model_digest": "7a6620cdb0c2f376b033df69a9a6dc190968bcd9903efe5897d98be43c33f1a6"
     },
     {
       "id": "drosophila_fafb",
@@ -356,14 +356,14 @@
         "drosophila_fafb_v783",
         "fafb"
       ],
-      "sensory": 418,
+      "sensory": 428,
       "output": 48,
       "model": "drosophila_fafb.xml",
       "record": "drosophila_fafb.json",
       "config": "drosophila_fafb.config.json",
       "network": "network_drosophila_fafb.json",
-      "io_digest": "b5887b9ed5b667d74ca87bbbd1bb85cb7dd6b15d818ea57b36306b0b38a5566e",
-      "model_digest": "db78019b6232305dd6f23dc6f90681bcd44e8db3a561d20a8738b09593376868"
+      "io_digest": "b2020554b3b7a3d1ce0b0e6fa891bc89e93c48ff5e1219bec7248246c75437af",
+      "model_digest": "794d48a9341c98508f4bbd4b4d4eac994bd6793e90fba61f2167af9eb85cb642"
     },
     {
       "id": "hexapod",
@@ -376,14 +376,14 @@
         "freenove",
         "six_legged"
       ],
-      "sensory": 34,
+      "sensory": 38,
       "output": 18,
       "model": "hexapod.xml",
       "record": "hexapod.json",
       "config": "hexapod.config.json",
       "network": "network_hexapod.json",
-      "io_digest": "4a55402b54b401bedebbdd3975d892657e59f3f9cc265ccaabac957464914983",
-      "model_digest": "46ba54cb9858d63a64ed64ed99e33231fe002eb5d8263e0afe9723e31c91c835"
+      "io_digest": "f3a5f05e3407bfd780b1aa69bea4446ca626ed73fbfba40b8634654a77cc2693",
+      "model_digest": "f2d2c1573590cd0b4823d1375085ff18e087d3fd5faab251d6407a34a7ffb28c"
     },
     {
       "id": "nao",
@@ -391,14 +391,14 @@
         "nao",
         "naos"
       ],
-      "sensory": 250,
+      "sensory": 272,
       "output": 40,
       "model": "nao.xml",
       "record": "nao.json",
       "config": "nao.config.json",
       "network": "network_nao.json",
-      "io_digest": "bd85f639ac3991aec6019cf4b90c08cee78496c58f42bef3186b10313888f91d",
-      "model_digest": "28f3d75621a73b2c7968bafe2dcc0de2fc89dd706c2ee567d24aa004c9c08098"
+      "io_digest": "20580fb77cec509528d19e7b198ee9d8de52f2ff02b0561bed66100e81f98b6f",
+      "model_digest": "7746c3786b0afc918aee97f429b9bf73970b2f082aaea865fe2376e7799648ef"
     },
     {
       "id": "zebrafish",
@@ -411,14 +411,29 @@
         "zfish",
         "zf"
       ],
-      "sensory": 32,
+      "sensory": 232,
       "output": 32,
       "model": "zebrafish.xml",
       "record": "zebrafish.json",
       "config": "zebrafish.config.json",
       "network": "network_zebrafish.json",
-      "io_digest": "faab8e4c02b41b5556d5cd6f146174546e8088a7a011c62dd7853aa1ec2fddf2",
-      "model_digest": "9b921c8f6a61ac4f44b4ed3f0618e87e83702d1ff56a8dfa6c74082e22b40826"
+      "io_digest": "c5bd427e7f412154f83f2e7d5af3d9b24fc325ec6f6e0a7ba4879ee59b891a22",
+      "model_digest": "725dcfb4e571421bc59ad2429a6b4d7efefef9f7050ca42f892f978c8ba78187"
+    },
+    {
+      "id": "salamander_crawler",
+      "aliases": [
+        "salamander_crawler",
+        "salamander"
+      ],
+      "sensory": 45,
+      "output": 22,
+      "model": "salamander_crawler.xml",
+      "record": "salamander_crawler.json",
+      "config": "salamander_crawler.config.json",
+      "network": "",
+      "io_digest": "348894543e69fdd77dc5767ad4e79faedc848bdcac9e3a47cbb65eaa3c2783b8",
+      "model_digest": "278bdd99b54a78d66424440e15fd641e1af7bc5c982bbc641370b107afd3d267"
     }
   ]
 }

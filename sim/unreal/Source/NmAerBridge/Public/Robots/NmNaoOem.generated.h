@@ -12,9 +12,9 @@
 
 namespace NmNaoOem
 {
-inline constexpr const TCHAR* ModelDigest = TEXT("28f3d75621a73b2c7968bafe2dcc0de2fc89dd706c2ee567d24aa004c9c08098");
-inline constexpr const TCHAR* IoDigest = TEXT("bd85f639ac3991aec6019cf4b90c08cee78496c58f42bef3186b10313888f91d");
-inline constexpr int32 SensorCount = 250;
+inline constexpr const TCHAR* ModelDigest = TEXT("e3202da32f48c76a363de9cee2954547ca622621e97a56df214b4e9a2fdcb690");
+inline constexpr const TCHAR* IoDigest = TEXT("553dcc886745e8682b81c9e9dad02afeacda4dcc6221c1558547c5708da5976d");
+inline constexpr int32 SensorCount = 268;
 inline constexpr double TotalMassKg = 5.305389999999997;
 inline constexpr double TorsoMassKg = 1.0496;
 inline constexpr double TorsoComM[3] = {-0.005, 0.0, 0.025};

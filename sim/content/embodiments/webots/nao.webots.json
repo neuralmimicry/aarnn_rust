@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "profile_id": "nao",
-  "model_digest": "28f3d75621a73b2c7968bafe2dcc0de2fc89dd706c2ee567d24aa004c9c08098",
-  "io_digest": "bd85f639ac3991aec6019cf4b90c08cee78496c58f42bef3186b10313888f91d",
+  "model_digest": "e3202da32f48c76a363de9cee2954547ca622621e97a56df214b4e9a2fdcb690",
+  "io_digest": "553dcc886745e8682b81c9e9dad02afeacda4dcc6221c1558547c5708da5976d",
   "targets": [
     {
       "joint": "HeadYaw",
@@ -3409,5 +3409,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 92,
-  "digest": "b5569957974d0118277424ef998c6d2528cf6ea7fee055edcd41892105a05ef4"
+  "digest": "70cfcbae2624270ac67bd7700c67341f255c30f578fc4466a886bf5a81455977"
 }

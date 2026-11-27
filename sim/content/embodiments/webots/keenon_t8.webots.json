@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "keenon_t8",
-  "model_digest": "c4e228ba32b0be17bb5f8a3f8346d55440e15134a2a4f887e64c417d5ab6c234",
+  "model_digest": "594aa01fd2490a8e8db2609f3b3a77c9497c6c08cb26954e4a4c543a541ede29",
   "io_digest": "23d77c7603f4ee8f9c32130a78518d2237d792215df409c126674a2d04ad1192",
   "targets": [
     {
@@ -2607,5 +2607,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 92,
-  "digest": "2cc54a84858bc7e12ec59f3f34ce6894cef67784aaed32999696acd3af5a7d65"
+  "digest": "287ab58654cf661f4f481a1e8c8f6c3ee42472aea69a31147111b849bb76b0e4"
 }

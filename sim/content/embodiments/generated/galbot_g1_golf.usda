@@ -8,7 +8,7 @@
 def Xform "Robot" (
     customData = {
         string aarnnIODigest = "e7ec78c9180a8261316c86b76af3419b358fdc048e650e547033a1edd97230e4"
-        string aarnnModelDigest = "7b9c075cbb4b91cb5912364fb6531f85291c34f4e323ab2447be51c5691204d3"
+        string aarnnModelDigest = "a0e51d22656280501fbec59b1fba4b969f395d9ab6ed29e0bd1df5a2ed49181b"
     }
     prepend references = @../../../../.agent/robot-expansion/assets/galbot-g1-golf/usd/galbot_one_golf.usda@
 )

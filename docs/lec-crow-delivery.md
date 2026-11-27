@@ -1724,8 +1724,1638 @@ Summary: `target/qa/nao_learn/closedloop_summary.json`. One run per condition; t
 
 - The naive robots learn while stuck at the wall, but cannot turn out faster. At the wall the learned and the innate turn are the same weak command. Learning pays off only before the wall, which is what the experienced robots show.
 - In this 3 m room a 1.5 m learned range keeps the turn command on almost everywhere: the experienced robot avoids every wall but mostly rotates in place, because continuous stride shortening stalls forward progress.
+- **Correction (24 Nov): the stall is a low obstacle, not only the turn command.**
+  - From about 50 s, both experienced robots (`cl6_experienced`, and the NPC-trained `test_walk_npc_trained`) are pinned against `target_ball`.
+    - `target_ball` is a collidable sphere 0.225 m in diameter at (0.78, -0.645). Its top is below the chest sonars.
+    - For the rest of the run the torso stays 0.18 m from the ball's centre, and the robot circles it (620-640 deg).
+    - Forward speed is zero even while both sonars read clear (> 1.5 m, 23 % of the time).
+  - So the 0 % rests on one early turn at the first wall. After that turn the experienced robots had no wall encounter at all (`nao_learn_closedloop.py report`: 0 encounters).
+  - The naive robots are trapped at the wall itself (torso 0.38 m from the ball).
+  - The NAO has no working sense for this obstacle. Its foot "bumpers" (`legacy-contact`, body-local +-y half-spaces of each sole, floor contacts included) read > 0.5 for 35-80 % of free walking. The real NAO's bumpers are at the front of the feet.
+  - Needed: frontal bumpers that ignore the floor, and an innate touch-withdrawal reflex (the same reflex template as the sonar reflex, which could in turn teach the bottom camera). Alternatively, a room without the ball, to isolate the wall result.
 - A 0.9 m map leaves room to walk. However, after turning ~90 deg along the first wall the robot met the next one nearly head-on, and 0.9 m of warning is too little for a ~1 deg/s turner.
 - Free navigation of the room needs faster turning (body mechanics), or a range matched to the room, not more learning.
+
+### drosophila_fafb never opened the MuJoCo display (fixed 24 Nov)
+
+The command `./run_sim.sh --sim mujoco --robots drosophila_fafb=1` loads `network_drosophila_fafb.json`: the June FAFB import, 693 MB, 20,048 neurons, 915,051 synapses, with morphology, growth and delays at depth 5 (a 2.7 GB snapshot in memory). The launcher starts the bridges and MuJoCo only after the orchestrator reports the network placed on a node, and it waits 300 s by default. Placement never happened. There were four causes, each found by sampling stacks under gdb and reading memory use and logs:
+
+1. Import, point-only anatomy reconstruction:
+   - every route candidate was checked against every soma and every previously routed segment, and the per-neuron incident filter and "already routed" checks were quadratic as well;
+   - fixed by indexing the bookkeeping (identical traversal and results; `morphology_contract.rs`) and by a connection budget (`NM_POINT_RECONSTRUCTION_MAX_CONNECTIONS`, default 50,000; 0 = no limit);
+   - above the budget the import stays executable without derived anatomy, through the existing "reconstruction unavailable" path.
+2. Import, runtime morphology (`Morphology::from_weights`):
+   - the unique-geometry pass and the two micro-relaxation passes compared every synapse with every other (about 5x10^11 pairs);
+   - fixed with grid broad phases that return the full-scan candidates in ascending order, so results are identical (test `synapse_grids_cover_every_pair_the_full_scan_accepts`);
+   - the FAFB import now takes 38 s (`celegans_depth_probe`); before, it never finished.
+3. The orchestrator loaded and re-aligned the full 2.7 GB snapshot (`load_network_config_or_snapshot`, and `load_io_contract_from_path`, which fully decoded a snapshot just to read its `net`):
+   - about 19-40 GB and many minutes while holding the placement state, so the node could not register;
+   - the I/O contract now comes from the metadata decoder (same `net`);
+   - for snapshots over 256 MiB, when nodes preload from file, the orchestrator reads the configuration only;
+   - `run_webot.sh` now defaults `NM_DISTRIBUTE_STARTUP_SNAPSHOT=auto` (it forced 1); remote compute still distributes.
+4. Every run left a 2.7 GB snapshot copy in `logs/sim_cluster_*/startup-snapshots.*`:
+   - `run_webot.sh` deletes it on exit, but `run_sim.sh` kills the cluster 1 s after TERM, before that runs;
+   - `run_sim.sh` now removes the copies after shutdown.
+
+Result (`target/qa/fafb_debug/run_sim6.log`, memory-capped scope):
+- node ready in 80 s;
+- orchestrator at 424 MB;
+- placement confirmed ("Distributed across 1 nodes") about 2.5 min after launch;
+- bridges ready, and the MuJoCo body ready with the brain bound.
+
+Remaining limit: this network is too heavy to run interactively on one laptop. After placement the node used about 22 GB and a step took 114 s, so the fly does not move within minutes. For a live display, use a lighter configuration of this connectome (morphology and growth off, a lower depth) or the designed `drosophila_banc` circuit.
+
+### NPC teacher experiments (started 24 Nov)
+
+Direction from the user: pre-programmed NPCs as teachers, which learners experience and align with, and then apply what they learn to tasks the NPCs do not know.
+
+**Infrastructure** (`adapters/mujoco/src/npc_actor.rs`):
+- `NM_MUJOCO_NPC_ACTOR=script.json` adds a kinematic (mocap) NAO-sized orange actor to the learner's MuJoCo world. A sibling MJCF is loaded after the record's digest check; the pinned model is untouched.
+- The actor has no contacts, and range and retinal rays see it.
+- Scripts are keyframes in the world frame `[t, x, y, yaw]`, or in the learner frame `[t, distance, bearing, facing]` relative to the learner's chest and heading, so the NPC follows the learner.
+- The actor's pose is traced as `npc_actor`. Tests: 4 in `npc_actor::tests`.
+- Note: `run_sim.sh` runs `target/debug/aarnn-mujoco` (feature `viewer`).
+
+**Perception check** (`scripts/qa/npc_perception_report.py`, `target/qa/npc_teacher/perception_frozen`; actor crossing ~1 m ahead):
+- The chest sonars detect the NPC like any obstacle: 0.46-0.48 m reported at 0.50-0.58 m, in the +-20 deg beams.
+- The cameras barely register it (6x8 ON/OFF retina, mean activity 0.001-0.006).
+- So the NAO cannot yet tell a conspecific from a wall. Conspecific recognition is the missing sense for imitation proper.
+
+**First experiment** (stand, train, then walk; `scripts/qa/npc_teacher_report.py`):
+1. The learner stands (walk command silenced; the walking tonic is kept in `connectome_labels.npc_teacher`) while the NPC approaches it 16 times from +-20 deg, close enough to trigger the innate reflex, which teaches through the locus coeruleus gate.
+2. The recorded senses are replayed through the plastic and frozen networks; the trained network is exported.
+3. The walk command is restored and the robot is tested in the room without the NPC: a task the NPC never showed.
+
+With world-frame approaches the reflex made the learner back away and turn (-47 deg over 480 s), so from the 4th approach the NPC missed its sonar beams (`train_npc`, not used). The learner-frame NPC fixes this (`train_npc_rel`).
+
+**Result** (`target/qa/npc_teacher/analysis_rel/report.json`; threshold 8.87 Hz = half the frozen reflex peak):
+
+| | left LT onset | left LT at 0.6-1.2 m | left sonar->LT weight | right LT onset | right LT at 0.6-1.2 m | right weight |
+|---|---|---|---|---|---|---|
+| approach 1 / 2 | 0.41 m | 0.4 Hz | 0.11 | 0.42 m | 0.4 Hz | 0.09 |
+| approach 15 / 16, plastic | 1.25 m | 17.5 Hz | 1.18 (x13 of frozen) | 0.45 m | 3.0 Hz | 0.31 (x3.4) |
+| approach 15 / 16, frozen replay | 0.42 m | 0.4 Hz | 0.09 | 0.40 m | 0.4 Hz | 0.09 |
+
+- The left side learns anticipation from the NPC: LT now fires from 1.25 m, three times the reflex range.
+- The right side strengthens but more slowly, because its innate reflex is weaker. Its onset has not moved yet.
+- Frozen replay of the same senses stays flat, so the change is plasticity, not input.
+
+**Transfer: walking alone, no NPC, 800 s** (`scripts/qa/nao_learn_closedloop.py`, `closedloop_summary_with_npc.json`):
+
+| network | time within the 0.4 m reflex zone of a wall | first reflex | cells visited | fell |
+|---|---|---|---|---|
+| naive | 93.2 % | 49.6 s | 28 | no |
+| trained by the scripted open-loop teacher | 0 % | never | 35 | no |
+| trained by the NPC teacher | 0 % | never | 33 | no |
+
+- On its first wall approach, the NPC-trained robot starts turning about 1.3 m from the wall. The naive robot starts at 0.47 m, then backs off and stays trapped.
+- The NPC-trained robot's path is near-identical to that of the robot trained by scripted approaches: path length 94 vs 95 m, same places.
+- The early turn is learned from an NPC walking up to the robot, and it carries over to a wall, which the NPC never showed.
+- But from about 55 s, like the scripted-trained robot, it is pinned against the low `target_ball` (see the 24 Nov correction above). So the run shows one avoided wall, not sustained navigation.
+
+Limits:
+- One run per condition.
+- The NAO cannot tell an NPC from a wall, so this is learning from the NPC's *presence*, not imitation of its behaviour.
+- Imitation needs a conspecific sense; see the perception check above.
+- The transfer test needs a sense for low obstacles (frontal bumpers) or a room without the ball.
+
+Video: `target/showcase-videos/nao_learns_from_npc.mp4`.
+- Segments: approach 1 (reflex only), approach 15 (anticipation from 1.25 m), walking alone (an early turn), then pinned on the ball.
+- Pipeline: `target/qa/npc_teacher/video/make_cards.sh`.
+
+### Realism and resilience (24 Nov)
+
+Purpose of the per-body training (user, 24 Nov):
+- Biology has thousands of neuron types and parameter sets; only a subset suits a given animal or device.
+- The algorithms for stimulation flow, growth and pruning are the same for every body. The engineered complexity depth balances latency against measurable intelligence.
+- Connectomes differ between species so that they connect to the anatomy of the nearest biologically equivalent body.
+- Training per robot, per environment and per simulator is there to establish where each neuron sits in its body, and the length, growth and connections of its dendrites, axons and synapses.
+- The designed circuits below use shared blocks (`aarnn_circuit`: hindbrain, oscillators, motor sequences) on each body's own senses. Their 3D layouts (`layout_designed_circuit.py`) are hand-placed starting anatomy, not yet learned. Morphology learned through growth and pruning is the next step.
+
+Direction from the user:
+- Make every body as true to the real robot or animal as possible: "make the fly look more like a fly"; make the NAO a SoftBank/Aldebaran NAO V6.
+- Every robot should be available in every engine.
+- Give robots and animals their real senses, including vision and hearing.
+- Resource monitoring must pace itself rather than crash a process or the host.
+
+**NAO V6 senses (every engine).** Sources:
+- the Aldebaran NAO 6 technical documentation (sonar, cameras, contact sensors);
+- the ros-naoqi NAO V50 URDF (camera, bumper and FSR frames, masses);
+- the Webots R2025a `Nao.proto`, a V5 robot (sonar poses and the sonar sensor model).
+
+- Cameras:
+  - now on `HeadPitch_link`, so they move with HeadYaw/HeadPitch; v1 hung them level on the torso;
+  - top camera at Head (0.05871, 0, 0.06364), pitched 1.2 deg;
+  - bottom camera at (0.05071, 0, 0.01774), pitched 39.7 deg down, looking at the feet;
+  - vertical field of view 43.7 deg (56.3 x 43.7 deg on a 4:3 retina).
+- Sonar:
+  - chest transducers at torso (0.0477, +-0.0416, 0.0509), aimed 25.8 deg out and 13.6 deg down;
+  - a 60 deg cone sampled by 91 rays, listed in the record, so every engine casts the same rays;
+  - reading = the nearest echo, V6 range 0.20-0.80 m (below 0.20 m it reads 0.20, presence only);
+  - a ray whose incidence on the surface exceeds pi/8 is reflected away. This is the Webots "sonar" rule, and it means the floor never echoes.
+  - One ping every 20 ms (sample and hold).
+  - v1 used one ray per side, 20 deg out, reaching 2.55 m, the older NAO figure.
+- Foot bumpers:
+  - two ON/OFF switches at each toe (`region_m`: the toe shell from 10 mm above the sole);
+  - standing never presses them; v1 used the left/right halves of each sole, which read the floor.
+- Tests:
+  - `nao_v6_toe_bumpers_and_sonar_cone_are_physical`: standing gives no bumper and no echo; the toe pressed on the 0.225 m target ball switches the bumper; the sonar sees that ball from 0.45 m.
+  - The engines' measurements: MuJoCo (`echo_beyond_self`, `region_contact`), Webots (region; root-laser range proxy with the new minimum), Isaac (`senses.py`).
+  - Unity (`NmNaoRobot.cs`) and Unreal (`NmNaoActor.cpp`): cone sonar and toe bumpers in their own channel layouts. Not compiled here.
+- Kept from v1: link masses (5.305 kg, the V50 URDF sum; V6 is 5.48 kg), 8 phalanges per hand, and the 3-axis foot force instead of 4 FSRs per foot. Changing these needs an IO version.
+
+**Touch withdrawal (NAO networks).**
+- A press on either toe bumper of a foot drives a touch cell T of that side (lumbosacral dorsal horn, lamina V, in the 3D layout).
+- T kicks the back-off bout BACK and the turn away (RS) of its side.
+- The T -> RS gain (3x the sonar proximity drive) is the smallest at which RS latches through the spinal-brainstem path at S1. Measured: RS 17.7 Hz, BACK 19 Hz, reversal 18 Hz on a press.
+- T is not a teacher by default (`--touch-teaches 0`): the learned cells are sonar distance cells.
+- The NAO sonar reading is now taken from the body record. Defaults: proximity onset 0.7 m, learned distance map 0.45-0.75 m.
+
+**Learning with the V6 senses** (`target/qa/nao_v6`; threshold: half the frozen reflex peak):
+
+| training | left turn onset, approach 1 -> 16 | right | synapses | frozen replay |
+|---|---|---|---|---|
+| 16 scripted approaches (open loop) | 0.38 -> 0.66 m | 0.38 -> 0.58 m | | flat (0.38 m) |
+| 16 NPC approaches (closed loop, standing learner) | 0.45 -> 0.75 m | 0.43 -> 0.75 m | x15 / x14 | flat |
+
+- With the cone sonar the right side learns as well as the left. With the v1 single ray it barely learned.
+- The onset now reaches the sonar's 0.8 m limit.
+- Walking tests: see the results below.
+
+**V6 walking tests, slow turning (stride steering only, 800 s each, `target/qa/nao_v6`):**
+
+| network | first turn onset | time in the 0.4 m reflex zone | stalled |
+|---|---|---|---|
+| naive | 0.39 m | 90.4 % (trapped at the first wall from 33 s) | 94 % |
+| 16 scripted approaches | 0.59 m | 88.7 % | 90 % |
+| 16 NPC approaches | 0.59 m | 95.4 % | 96 % |
+
+- With real sensing, learning still moves the turn earlier, but every robot is trapped.
+- The ball confound is gone: the cone sonar sees the ball, and no bumper was pressed.
+- The limit is turning, ~0.4 deg/s from stride shortening.
+
+**Turning (24 Nov).**
+- `scripts/qa/nao_turn_probe.py` drives the generated NAO with the walk network's own target pattern, through the servo path, without a brain.
+- The NAO turns with its one hip yaw-pitch motor, and timing decides it:
+  - in phase with the half-centres: ~1 deg/s;
+  - lagged ~0.075 cycle: +-11 deg/s, nearly in place, no falls in 40 s;
+  - later lags tipped the body on left turns.
+- In the network:
+  - yaw delay cells `YD_A`/`YD_B` (tau `--yaw-lag-ms`) drive the existing yaw AND cells (+-`--yaw-turn` 0.15 rad);
+  - both are now on by default;
+  - `--force-turn` latches a turn command for measurement.
+- Closed loop, frozen V6 network, 50 s forced turns, no falls:
+
+| yaw lag | left turn | right turn | drift |
+|---|---|---|---|
+| 150 ms | +3.8 deg/s | -7.2 deg/s | 0.03-0.48 m |
+| 300 ms | +5.8 | -9.9 | 0.12-0.24 m |
+| 400 ms (default) | +6.6 | | 0.17 m |
+| 500 ms | +7.1 | | 0.12 m |
+| 150 ms, no stride steering | +0.9 | | 0.54 m |
+
+- That is 18-27x the stride-only turn (0.37 deg/s), mostly in place.
+- In the closed loop, stride steering and hip yaw work together.
+
+**Auditory orienting calibrated.**
+- Open-loop probe of the walk network with the hearing group:
+  - a sound louder on the left microphones (time difference 0.8) drives OR_l to 20 Hz and turns the head +0.53 rad;
+  - the right mirror gives -0.54 rad;
+  - silence gives 0.
+- Bridge fix: `scripts/run_sim.sh` sized the TCP bridge from the profile table (NAO 250). It now uses the binding contract's channel count (`brain_sensory`), so a network with optional groups binds.
+
+**V6b walking networks** (`target/qa/nao_v6b`; 268 inputs, 116 cells):
+- touch, fast turning, hearing and auditory orienting;
+- scripted open-loop training gives an onset of 0.66 / 0.61 m (frozen 0.38 m);
+- NPC training with an audible NPC (footsteps): L 0.448 -> 0.75 m, R 0.445 -> 0.742 m.
+
+**Corner trap of the trained walkers and its fixes** (800 s walks, `nao_learn_closedloop.py report`):
+
+| network | reflex zone | stalled | wall encounters | 0.25 m cells | bumper pressed |
+|---|---|---|---|---|---|
+| V6b naive | 14.6 % | 46.9 % | 11 | 40 | 25.8 % |
+| V6b, 16 scripted approaches | 87.8 % | 94.6 % | 2 | 10 | 0 % |
+| V6b, NPC-trained | 85.1 % | 92.0 % | 2 | 11 | 0 % |
+| V6c naive | 16.5 % | 48.0 % | 16 | 39 | 24.8 % |
+| V6c, 16 scripted approaches | 62.2 % | 60.2 % | 15 | 36 | 0 % |
+
+- With fast turning the naive robot explores, but both trained V6b robots were pinned in one corner for ~760 s. They rocked in place (yaw -50 to -69 deg) with an obstacle on each side.
+- Cause: with obstacles on both sides, both learned turns (LT_l, LT_r) fire and the turn command flips between them.
+- V6c (`--lt-cross 1.0`): each learned turn also inhibits the opposite turn command (commissural inhibition, on RS, which is not plastic). The trained robot now explores nearly as much as the naive one (36 vs 39 cells, 15 encounters).
+- The trained robot never touches an obstacle (bumper 0 %), while the naive one presses a bumper 25 % of the time: the learned turn anticipates the contact.
+- It still spends 230 s pinned once. There the learned turn from the farther obstacle on one side fought the innate near reflex from the nearer one.
+- V6d (`--near-veto 2.0`): a near-sonar cell vetoes the turn toward its own side, whatever a learned turn asks (on RS: every synapse onto LT is plastic). Training and walk: `target/qa/nao_v6d`.
+
+**Fall recovery.** User: "when a robot falls over it should also be trained to stand up / recover from a fall".
+- `scripts/qa/nao_getup_probe.py` lays the generated NAO down on open floor and plays keyframe programs through the servo path.
+  - A program is keyframes over ten joint groups (symmetric, or left/right for a roll).
+  - Every program ends in a fixed tail: a balanced flat-foot squat (forward-kinematics solved), then a rise to StandInit.
+  - Robustness: a program must work from the worst of three landings (tilt +-0.15, roll +-0.1, joint noise 0.05).
+  - Definitions shared with the network: `scripts/nao_getup_program.py`.
+- A whole-program evolution strategy had no slope: every failure ends on the floor with about the same score (80 generations at upright -0.18).
+  - An evolved program that "stood" had pushed on the room's step, so the probe now trains on open floor only.
+- **Staged (curriculum) search** (`--staged`): each stage has its own goal and is searched from where the best previous stage left the body:
+
+| stage | goal (score) | result (worst of 3 starts) |
+|---|---|---|
+| kneel (3 keyframes) | hips up, knees down, head and chest off the floor, still, facing down | hands and feet, trunk 33 deg up, still |
+| crouch (2 keyframes) | centre of mass over the feet, soles flat, knees off the floor | CoM over the feet 0.000-0.003 m, soles flat 1.0, trunk 40-50 deg |
+| (fixed) squat, rise, StandInit | | upright 0.994, torso 0.32 m |
+| roll (back -> front; 3 asymmetric keyframes) | chest down, still | chest axis -0.96 (prone) |
+
+  - The crouch stage was the key: from hands and feet, the knee range (max 121 deg) does not allow sitting back on the heels.
+  - Pushing the trunk back needs the shoulders opening (hands planted), not swinging the arms back, which collapsed the prop.
+
+| program | starts that stand up | time |
+|---|---|---|
+| front (`target/qa/nao_getup/front_getup.json`) | 3/3 search starts + 8/8 others (tilt +-0.3, roll +-0.25, joint noise up to 0.15 rad) | 15.1 s |
+| back = roll + front (`back_getup.json`) | 3/3 + 8/8 | 18.8 s |
+
+- **In the network** (`build_nao_walk_network_json.py --getup front_getup.json --getup-back back_getup.json`):
+  - gravity sense: accelerometer.x through a relay (vestibular nuclei) into FALL_front (chest-down, < 0.35) and FALL_back (chest-up, > 0.65);
+  - lying chest-up plays the roll, which ends chest-down; that then plays the front get-up;
+  - each program is a chain of keyframe cells (`aarnn_circuit.add_motor_sequence`), a fixed action pattern in the midbrain of the 3D layout:
+    - a keyframe cell K (22 mV plateau) drives the joints' posture cells to its targets and is ended by its adaptation cell;
+    - a latched handover starts the next: latch S, edge cell X = S and not K;
+    - a trigger and a slow gate stop a running program restarting; a program that ends with the body still lying retries;
+    - while it runs it silences the walk command and half-centres.
+  - Durations are calibrated in the runtime (`measure_sequence`): front within 1.7 %, roll within 5 % of the found timing.
+  - Pitfalls found on the way: idle graded cells leak ~0.035 each (12 of them held the gate on); a cell's own partial activation must never cut its starter or reset its latch (the next keyframe's adaptation does).
+- Test harness: `NM_MUJOCO_START_POSE=front|back` (+ `NM_MUJOCO_START_Z`, `NM_MUJOCO_START_JOINTS`) starts the MuJoCo body lying.
+  - The joints must be in StandInit: in the zero pose, the arms point into the floor face-down and threw the body onto its back.
+- First closed-loop test (lock step, network only): the body did not follow.
+  - Lying face-down, the chest sonar saw the floor and latched the back-off bout, the gait started, and the x-only fall sense was weak (accelerometer.x ~0.30 +- 0.06, not 0.255).
+  - Keyframe drives sagged with the keyframe cell's own release.
+  - Fixes:
+    - the fall detectors and program gates silence the walk command, the half-centres and the back-off;
+    - a two-axis otolith-like fall sense (x and z);
+    - each keyframe drives the joints through a saturating motor relay M, with drives read from a curve measured in the runtime (`measure_drive_curve`).
+- Closed loop after the fixes (`target/qa/nao_getup_net/net2_*`, 40 s):
+  - **face-down start: standing at 22.5 s and held to 40 s** (torso 0.31 m, upright 0.99).
+    - The first attempt reached the crouch (upright 0.96) and toppled backward onto its back.
+    - The face-up sense then played the roll (face-down at 13 s) and the second get-up stood.
+  - Face-up start: the roll worked (face-down at 4 s) and the get-up reached upright 0.71, then fell back. Later rolls only reached the side.
+  - Crouch to squat is fragile in the adapter's servo path (it holds in the probe). A timed chain cannot notice that the body is tipping.
+- This get-up is an engineered fixed action pattern found by an offline search. That is not how AARNN networks learn. Next (user, 24 Nov: AARNN networks learn by experience):
+  - the found program becomes a teacher only, guiding the limbs in early trials;
+  - body-state cells (vestibular, joint sense) tuned to the postures on the way have the only plastic synapses, onto the next movement's cells, gated by an LC cell when the body progresses toward upright;
+  - then the teacher is switched off and the robot must right itself from unseen falls, each movement triggered by the sensed body state.
+- **The learning test** (user, 24 Nov): stand up from a fall at any angle and position, on or near fixtures, adapting the movements. A fixed set of movements that works only on a flat, empty floor does not count.
+  - Battery (`nao_getup_probe.py --battery`, room fixtures on): 8 places x 8 body rotations about the long axis (chest-down, 45 deg steps, on each side, chest-up).
+  - The fixed programs choose front or back from the gravity sense.
+
+| place | fixed programs stand up |
+|---|---|
+| open floor | 6/8 |
+| next to the target ball | 6/8 |
+| by a table leg | 6/8 |
+| head to a wall | 3/8 |
+| head on the step | 3/8 |
+| side to a wall | 2/8 |
+| feet to a wall | 0/8 |
+| half under the table (0.24 m) | 0/8 |
+| **total** | **26/64 (41 %)** |
+
+  - Every side-lying start fails. Near walls and the step the roll fails. Under the table the robot would first have to crawl out.
+  - This is the baseline the learned righting must beat. Its plan:
+    - a repertoire of movement synergies (the found keyframes and their mirror images);
+    - selection by body-state context through plastic synapses;
+    - spontaneous exploration when nothing is selected;
+    - learning gated by a progress signal (the gravity sense moving toward upright), trained over many closed-loop falls from varied starts.
+- **Fall generator** (MuJoCo adapter, `NM_MUJOCO_REFALL_S`):
+  - lays the body down again every period, uniform rotation about the long axis, tilt +-0.2 rad, one of `NM_MUJOCO_REFALL_PLACES`, seeded (`NM_MUJOCO_REFALL_SEED`);
+  - the brain keeps running, so experience carries over from fall to fall;
+  - each fall is logged on stderr.
+- **Exploration and progress-gated learning** (`--getup-learn 1 --getup-select 1 --getup-explore 1`; `target/qa/nao_getup_explore`, 299 cells):
+  - repertoire: the get-up, the roll and its mirror image; every step of each program can be entered through its own learning cell L;
+  - context: body-state band cells (gravity sense and six joint senses);
+  - selection: a righting-mode cell (lying on any side, or a program running) brings every L near threshold, and lateral inhibition lets the best-matching one win;
+  - exploration: three slow oscillators with unrelated periods bias the L cells differently over time, so a different movement wins each try. On a synthetic side-lying body: get-up entry, squat step, mirrored roll, get-up, ...;
+  - reward (innate vestibular values): P_up when the gravity bands step toward upright, P_ventral when they step toward chest-down while lying; both drive LC, which gates the band -> L plasticity;
+  - each L stays active while its movement runs (so progress pairs with it), then is refractory.
+- Pitfalls, all measured with open-loop replays of a recorded get-up:
+
+| design | what happened | fix |
+|---|---|---|
+| progress = fast relay - slow relay of one sense | saturated at 20 Hz while standing still | band transitions (AND of excitation only) |
+| band = relay(k) - relay(k+1), equal weights | every band whose lower relay was on stayed on. In the spatial layout, excitation delivers ~1.373x nominal and inhibition ~0.9x | inhibition x1.53 |
+| graded bands in the AND | transitions never fired during a quick rise | binarised band copies, a trace held ~1-2 s |
+| default learning rate | about 1 % change in 40 s | eta 0.3. Learning normalises each L's inputs (which state, not how much), hence competitive selection |
+| point-cell layout | almost no learning | spatial layout (morphology and delays). The dendrite/bouton plasticity needs the anatomy |
+
+  - The spatial layout changes every circuit calibrated with point cells (active dendrites); the Freenove hexapod drifted +82 deg spatial vs -4 deg flat.
+- Closed-loop baseline on the test falls (fixed programs, fall every 25 s, seed 21, `target/qa/nao_getup_learn/test_fixed`): **3 of 12 recovered** within 25 s.
+- The first closed-loop learning attempt froze, and open-loop replays of its sensors exposed more faults:
+
+| fault | fix |
+|---|---|
+| MOVING summed the idle leak of 20 keyframe cells, so it read "moving" always and STUCK never fired | MOVING reads the motor relays M (silent at rest) |
+| lateral inhibition from idle L cells held every L below threshold | inhibition through a thresholded relay per L |
+| L held its keyframe on, and two movements (the roll and its mirror) latched together | L only starts a program (a one-shot pulse cut by the program's own gate) |
+| a latched choice never ended, or two latched together (the hold is far stronger in the spatial layout) | window-ending adaptation 20, mutual inhibition 40 |
+| the innate triggers started programs on top of explored ones | exploring, they are a preference onto that program's entry cell |
+
+- Final structure:
+  - learning cells only at program entry points (get-up start, crouch, squat; roll; mirrored roll);
+  - each choice latches for a ~5 s eligibility window, so progress pairs with it;
+  - one program at a time.
+  - On a side-lying replay it explores get-up, mirrored roll and roll in turn.
+  - Known imperfection: a choice made while another program runs cannot start anything, but can be credited with that program's progress.
+- Online learning run (900 s, seed 21): `target/qa/nao_getup_explore/learn_run2`. The measure is the stand-up fraction per fall across the run against 3/12.
+- Then hexapod, fly and fish righting.
+
+**Hexapod v3 = the Freenove Big Hexapod Robot Kit for Raspberry Pi (FNK0052)** (user directive, 24 Nov).
+
+Sources: Freenove's open-source code and tutorial (CC BY-NC-SA 3.0; only numbers are used, no code). Modelled (`freenove_hexapod_body`, `HEX_*` in `scripts/embodiment_legacy.py`):
+
+| item | model | v2 |
+|---|---|---|
+| legs | coxa 33, femur 90, tibia 110 mm; radial from coxa mounts at (x fwd, y left) (+-76, +-55), (0, +-85) mm, corner legs 36 deg from the body axis | 56 mm links, all sideways |
+| servos | 18 MG996R-class (stock photo; standard metal-gear): 0.92 N m, 6.16 rad/s, 0-180 deg about the 90 deg centre, full torque at 0.15 rad error | +-3.2-4 N m from the legacy proto |
+| built pose | the kit's calibration pose (all servos at 90 deg: coxa radial, femur horizontal, tibia vertical) = joint zero | |
+| mass | 2.12 kg: chassis 1.1 kg (plates, Pi, shield, 4x18650, six coxa servos), per leg 0.07 / 0.075 / 0.025 kg | 0.88 kg |
+| sonar | HC-SR04 on the head: 15 deg cone, sonar specular loss, 0.02-3 m (the kit's software reads 3 m) | IR-style lookup to 1.2 m |
+| camera | Raspberry Pi camera (OV5647) on the head, vertical field 41.4 deg | |
+| IMU | MPU6050 on the shield (the contract's body accel/gyro) | |
+
+- The kit has no foot switches, and its hobby servos report no angle. The contract's 6 foot-contact (now the tibia tip) and 18 joint-angle channels are simulated proprioception.
+- The two SG90 head servos are not in the 18-output contract.
+- Regeneration, the contract lane and the native tests pass.
+
+Gait feasibility (`scripts/qa/hexapod_gait_probe.py`: per-leg IK tripod/wave gaits, the kit's 40 mm step, through the servo limits, no brain):
+- the IK is exact (`scripts/hexapod_kinematics.py`, shared with the network builder);
+- with a tall stance (coxa 0.10 m above the feet, feet 90 mm beyond the coxa link) the tripod walks 5.1 cm/s straight at 1 Hz; 0.3 rad stance rotation turns 32 deg/s;
+- at 60 mm hip height it only reached 1-3 cm/s (femur stall).
+
+**Walking network = the kit's own way of walking, on the kit's own senses** (`scripts/build_hexapod_cpg_network_json.py`).
+- The stock kit walks open loop. Its software steps a fixed gait cycle through leg IK, and its servos report nothing back.
+- The network is a central pattern generator on the shared blocks, using only the stock senses:
+  - rhythm: one half-centre pair (`add_leg_oscillators`), ~0.9 Hz; phase A swings tripod lf/rm/lr, phase B rf/lm/rr;
+  - lift: the half-centres raise the swinging tripod;
+  - stride: two-cell lagged interneuron chains per side and phase (smooth S-shaped protraction and retraction);
+  - posture: motor cells hold the IK stance; joint targets come from the probe's IK;
+  - HC-SR04 obstacle turn through the shared hindbrain: relay, proximity cell P, bistable RS turn cells with the ARTR flip-flop choosing the side, and a turn bout that keeps its direction after the echo is lost (the HC-SR04 is blind beyond ~22 deg of incidence);
+  - spontaneous run-and-turn bouts (`add_turn_bouts`) with back-off (BACK, the moonwalker-neuron analogue, reverses the stride through AND gates).
+- The record's joint-angle and foot-contact channels are not used (the stock kit has neither).
+- `--trim 0.2` (right stride x1.2, left x0.8) walks straight; 0.1 turned -52 deg and 0.3 +59 deg in 30 s.
+- Closed loop (MuJoCo, lock step): ~4-4.5 cm/s on flat floor, tilt < 8 deg. In 120 s it walks to a wall, backs off and turns, and explores 12 cells of 0.25 m.
+
+Fixes on the way:
+
+| version | problem | fix |
+|---|---|---|
+| old Cruse reflex net | swing cells latched with femurs lifted; the robot lay on its belly; it needs sensors the kit lacks | CPG |
+| CPG, NEAR cell | tonic -173 mV/ms against a 200 mV/ms sensor drive: never turned | the shared measured sonar relay and P cell |
+| hindbrain v1 | turn gates at 0.27 release; an RS adaptation handed the turn to the other side mid-turn | AND gates 13/14; a separate turn bout |
+| bout v1 | both RS on (left and right turns cancelled); 30 mV plateau never let go | RS mutual inhibition 12; 22 mV bout with a tonic in its band |
+| single delay cell | exponential stride: a shove, then a stop; stalled on the habitat's ribbed mat (ribs 3.9 cm) | two-cell chain |
+| no exploration | a front leg wedged on a slalom post outside the 15 deg cone: 96 s jammed | turn bouts + back-off |
+
+- 3D layout rules (`layout_designed_circuit.py`, insect anatomy):
+  - rhythm and premotor chains in the thoracic ganglia;
+  - command in the central complex;
+  - ARTR in the lateral accessory lobe flip-flop;
+  - RS as suboesophageal descending neurons;
+  - BACK as the moonwalker descending neurons.
+- Still open:
+  - the two SG90 head servos (pan/tilt for camera and sonar) are not in the 18-output contract;
+  - joint-angle and foot channels could become optional groups;
+  - a 1x1 camera cell only.
+
+The legacy hand-made Webots `HexapodRobot.proto` is not updated. The native Webots adapter uses the record-generated Freenove model.
+
+**Fly anatomy v4** (`scripts/embodiment_legacy.py`).
+- The head (0.6 g) and abdomen (0.5 g) are now real bodies. Their moments cancel, so mass (10.3 g) and centre of mass are unchanged. v3 hung them as massless decoration.
+- The compound-eye cameras sit on the head at the catalogue eye positions.
+- Flight proof: in the air 13.8 of 15 s, attitude rms 2.1 deg (v3: 1.5 deg), unchanged hover.
+- Real leg proportions from the flybody model (TuragaLab, Apache-2.0, CT-based; 50x scale) are built and kept off (`FLY_REAL_LEGS`):
+  - attachment on the pro-, meso- and metathorax;
+  - per-pair coxa, femur, tibia and tarsus lengths;
+  - forelegs forward, hindlegs back.
+  - With them the fly lost attitude: at 2 s with the v3 0.3 g links (pitch inertia x4, centre of mass 1.4 cm lower). With realistic 0.05 g links it lost attitude after 1.5-9 s, even with the ideal controller.
+  - A realistic fly needs a flight-motor and control retune. The legs stay v3 until then.
+
+**Other bodies.**
+- Crow: each retina sits on its own side of the head, axis 26 deg outward. The fields overlap ~40 deg in front, the corvid binocular field. v1: both retinas at one point, looking ahead, saw the same image.
+- C. elegans: the gentle-touch channels have receptive fields. `touch_front` is any of segments 12-23 (ALM/AVM, anterior half); `touch_rear` is any of segments 0-11 (PLM). v2 sensed only the nose and tail-tip segments. Names and count are unchanged.
+
+**Optional sensor groups (user decision, 24 Nov).**
+- A body carries all its real senses. Each sensor outside the original contract has a `group` (`vision`, `hearing`).
+- A network binds exactly the named channels it was built with, in its own order (`Binding.sensor_names`, `selection()` in `aer.rs`; `scripts/mujoco_bindings.py`; `scripts/robot_aer.py`). Only optional-group channels may be left out.
+- Preserved networks therefore keep their exact contract and are never resized:
+  - `network_zebrafish.json` binds its 32 channels of the 228;
+  - the BANC/FAFB connectomes bind their 418 of 424;
+  - `network_nao.json` keeps 250.
+- New or designed networks can also receive the new senses.
+- An adapter caches a camera's retina per shape, because one eye can feed a 1x1 luminance cell and a 6x8 retina. This was a bug before groups.
+
+| body | added (group) | channels |
+|---|---|---|
+| zebrafish | 6 x 8 ON/OFF retina per lateral eye on the existing eye cameras (vision) | 192 |
+| zebrafish | inner ears (otolith organs), 100 and 300 Hz, nearly omnidirectional (hearing) | 4 |
+| Drosophila (BANC, FAFB) | antennal Johnston's organs on the head, 150/300/600 Hz, strongly directional (hearing) | 6 |
+| NAO V6 | 4 head microphones FL/FR/RL/RR (V5 head-chain positions) x 4 bands (250 Hz-8 kHz) + front/rear interaural time difference (hearing) | 18, enabled after the 24 Nov walking tests |
+
+- NAO auditory pathway (`build_nao_walk_network_json.py --hearing 1`, used only if the body has the group):
+  - cochlear-nucleus relays;
+  - lateral superior olive level comparators;
+  - medial superior olive time-difference cells;
+  - superior-colliculus orienting cells that turn the head (HeadYaw) toward a sound.
+  - Each stage has its anatomical place in the 3D layout.
+- The crow's IO is a proposed projection (`spec/crow-io.proposed.json`). Its ears belong in that projection and are not added yet.
+
+**Hearing (shared model).**
+- `crates/aarnn-embodiment/src/acoustics.rs`:
+  - free-field sources with spectra and on/off schedules;
+  - spherical spreading;
+  - receiver directivity that grows with frequency (head shadow, so high sounds give larger level differences between the ears);
+  - incoherent summation;
+  - interaural time difference.
+- Sensor kind `legacy-acoustic` in MuJoCo, Webots and Isaac; scene `sound_sources`.
+- The NPC actor makes footstep noise while it walks.
+- Next, an IO version per body:
+  - NAO V6: 4 omnidirectional head microphones FR/FL/RL/RR, 100 Hz-10 kHz;
+  - the fly's antennal Johnston's organs, the fish's inner ear, the crow's ears;
+  - each wired to its auditory relay cells (cochlear nucleus, superior olive).
+
+**Self-protection under resource pressure** (`src/monitor.rs`).
+- One cgroup-aware `ResourceSample` per process:
+  - VmRSS and its peak;
+  - the tightest `memory.max` on its own cgroup path (e.g. a `systemd-run -p MemoryMax=` scope);
+  - MemAvailable, memory pressure (PSI), load, threads, free disk.
+- Headroom and level: normal; warn (below 2x `NM_MEM_RESERVE_MB`, default 1 GB, or 10 % of the limit); critical (below the reserve).
+- Fixed:
+  - the CPU reading was always 0 (a new sysinfo `System` per call);
+  - the GA stored KiB as MB and sized its thresholds from host RAM; it now uses the effective limit.
+- Admission control:
+  - nodes stream the snapshot metadata;
+  - `estimate_runner_bytes` sums the dense matrices, plasticity and delay copies, decode and anatomy;
+  - a node refuses a network that would not fit, with a clear error, instead of being OOM-killed.
+  - The orchestrator no longer reads a large snapshot into a string.
+  - Live: "node nao_0 admits ... (~67 MB estimated; normal (rss 22 MB, headroom 6030 MB, limit 6144 MB ...))".
+- Pacing in every network worker (`monitor::Pacer`):
+  - warn: steps slow down (1-50 ms) and structural growth pauses;
+  - critical: steps hold;
+  - critical for 30 s (`NM_PRESSURE_CRITICAL_GRACE_S`): the network pauses with its state kept.
+- Heartbeats report RSS, limit, headroom, level, PSI, load, threads and free disk (proto fields 48-56). Capacity is scaled by the level (critical: 0), and placement uses the reported headroom.
+- Disk:
+  - snapshot autosaves and `runtime snapshot` writes check free disk (`NM_DISK_RESERVE_MB`, default 2 GB);
+  - the UI picks the OpenGL renderer for captures or low VRAM (wgpu under Xvfb locked the GPU on 23 Nov).
+- Launch scripts:
+  - `scripts/run_sim.sh` and `run_webot.sh` run themselves inside a `systemd-run --user --scope` capped at `NM_MEMORY_MAX` (default 80 %) unless already capped (`NM_MEMORY_GUARD=0` to disable).
+  - A runaway process is then killed inside the scope, not the desktop.
+- Not done:
+  - the placement planner still demands 8 bytes per neuron;
+  - a critical node can still receive the planner's minimum share;
+  - checkpoint-and-exit on critical memory is not implemented (the network pauses instead).
+
+### Growth (neurogenesis at energy peaks), 24 Nov
+
+User rule:
+- growth stays off only for C. elegans, whose network failed with more than its 302 neurons;
+- every other network grows until its own tests show that additional neurons do more harm than good.
+
+- Until now the designed-circuit template froze structure for every body: growth, morphological growth, new edges, resonance gain and ambient energy were all off. No run had a single growth event. The original `network_nao.json` has growth on.
+- The runtime's mechanism:
+  - a cell at its firing-rate saturation (0.5) spawns a precursor;
+  - the precursor is specified, migrates and differentiates;
+  - it is placed at the highest-energy free location of an energy field built from local activity, morphology and ambient energy;
+  - each spawn halves local energy;
+  - admission is limited by area and membrane volume ("ConstrainedByMembrane").
+- Measured:
+  - NAO get-up network, replay of fall experience: +16 neurons in 10 s, placed in the vestibular nuclei (8), cerebellar proprioceptive relay (4), cochlear nucleus (2) and superior colliculus (2), where the activity peaks. Then constrained by membrane.
+  - Freenove hexapod CPG with the template's newborn wiring: 38 -> 80 neurons in 15 s. Newborns joined the motor outputs at full strength (p_out 1.0, 0.05-0.25 each; w_out sum 1.2 -> 56), all outputs saturated in 3 s and the walk collapsed (0.05 m in 120 s instead of 1.07 m).
+- Changes:
+  - template: growth on except C. elegans;
+  - newborn defaults for designed circuits: synapses x0.05 (`growth_new_synapse_scale`, new runtime parameter), designed cells keep their synapses (no migration), p_in/p_out 0.25;
+  - new runtime parameter `growth_placement_mode` (high / low / mid);
+  - the open-loop probe follows a growing network and dumps per-synapse route gains.
+- Even with x0.05 newborns the hexapod's outputs still rose (0.50 -> ~0.9 mean, open loop, 30 s) in every placement mode. Two more causes, both fixed:
+  1. **IO connectivity floor.** While growth is on, every step tops up each sensory channel with no hidden target (1 wire) and each output with too few hidden inputs ((hidden/12) clamped to 8-32 for invertebrates, 1 for humans), using random 0.1-0.4 wires to the nearest cells. That bootstraps random networks. In a designed circuit it gave the 18 servos 8 random wires each, and it silenced the swing half-centre (E_gait_sw 0 Hz) even when no neuron was born. New runtime parameter `growth_io_floor_enabled` (default true) gates the floor in both the point-cell and the morphology paths; designed circuits set it false.
+  2. **Newborn cell type.** A newborn takes its type from its region's type distribution. Designed circuits have no `brain_regions`, so newborns got the template's default biology (spiking, synaptic gain 100). Driven by the 500 Hz posture cells they fired at ~250 Hz, and through x0.05 synapses still matched the designed motor drive. New runtime parameter `growth_newborn_type`: designed circuits name `Growth:newborn`, an immature graded interneuron (no tonic, release max 20 Hz, ~0.4 Hz at rest). It joins nearly silent and gains influence only through experience, as adult-born neurons do.
+- Hexapod CPG, open loop, 30 s sonar ramp, after both fixes (`target/qa/growth_placement/hex_ol4.txt`):
+
+  | placement | newborns | mean output (off 0.504) | \|output - off\| | E_gait_sw (off 10.3 Hz) | newborn to nearest designed cell |
+  |---|---|---|---|---|---|
+  | high | +15 | 0.533 | 0.049 | 10.0 | 0.107 |
+  | low | +26 | 0.539 | 0.060 | 9.3 | 0.124 (11 in the suboesophageal descending neurons) |
+  | mid | +23 | 0.540 | 0.061 | 10.0 | 0.063 |
+  | high, old IO floor | +18 | 0.567 | 0.101 | 0.0 | 0.081 |
+
+- Closed loop showed three more causes (all fixed):
+  3. **Sensory attach.** In AARNN mode every newborn is attached to its nearest unused sensory channel with a 0.1-0.4 weight that `growth_new_synapse_scale` did not scale. Each newborn sat at -13 mV, at full release. It is now scaled.
+  4. **Newborn scale.** 0.05 of the 0.05-0.25 draw is ~2 mV/ms per sensory synapse at full sensor value. Newborns saturated, every saturated cell spawned again, and growth cascaded to the neuron cap. The template now uses 0.0025 (~0.1 mV/ms per sensory synapse, ~0.004 mV/ms from a 20 Hz cell). Newborns rest at 0.1-0.6 Hz. Replayed on a recorded walk, the growing network tracks the growth-off one exactly.
+  5. **Newborns never learned.** A cell past the end of a plastic-cell mask was frozen. `PlasticCellMask.newborns` now lets newborns learn (a critical period); the NAO learning builders set it.
+- Results, after the fixes:
+  - **Hexapod, closed-loop walk, 120 s** (`target/qa/growth_placement/walk_hex_*`, `hex_trace.py`):
+
+    | growth | neurons at end | net displacement | path | explored cells |
+    |---|---|---|---|---|
+    | off | 38 | 1.10 m | 8.74 m | 12 |
+    | neurogenesis, high | 116 (cap) | 1.07 m | 9.11 m | 12 |
+    | neurogenesis, low | 116 (cap) | 1.03 m | 7.16 m | 11 |
+    | neurogenesis, mid | 108 | 1.05 m | 8.44 m | 12 |
+    | morphological growth only | 38 | 0.48 m | 2.21-2.60 m | 4-5 |
+
+  - **NAO, open-loop obstacle learning, 12 paired episodes** (`target/qa/growth_placement/nao5`, look-ahead turn cell LT onset distance):
+
+    | growth | neurons grown | first 3 | last 3 | mean |
+    |---|---|---|---|---|
+    | off | 0 | 0.38 m | 0.48 m | 0.425 m |
+    | high | +100 | 0.38 m | 0.47 m | 0.421 m |
+    | low | +100 | 0.38 m | 0.46 m | 0.420 m |
+    | mid | +2 | 0.38 m | 0.48 m | 0.425 m |
+
+  - **Placement:**
+    - Growth: low places newborns farthest from the designed cells (0.12-0.19 vs 0.05-0.11) and reaches new regions (suboesophageal descending neurons). In the open-loop test it grows the most (+26 vs +15 high, +23 mid). In the NAO layout, mid placement found almost no admissible location (+2).
+    - Stability: no placement harms the walk once newborns join silent.
+    - Learning: no placement changes the NAO obstacle learning. Newborns join silent, and in these tests none gained influence. This is the open question for growth: newborns now learn, but nothing yet shows them contributing.
+- **Morphological growth** (`morpho_growth_enabled`: neurite growth, contact synaptogenesis, synapse migration, soma movement) runs only in the closed-loop runtime. The probe skips it for point-cell networks. It stalled the hexapod walk in every variant:
+  - contacts at the template's full strength 1.0 (~11 mV/ms each; 3,417 contacts in 120 s);
+  - contacts at the silent strength with migration off (new runtime parameter `morpho_synapse_migration_enabled`; migration had moved ~560 premotor synapses onto other servos);
+  - contacts no longer overwriting existing synapses. A contact between connected cells used to replace the designed weight; `apply_morpho_evolution_result` now keeps it.
+
+  The remaining harm path is not found. The femurs settle at a uniform neutral posture, so the designed motor drive is lost. Designed circuits keep neurogenesis on and morphological growth off (`Circuit.morpho_growth`) until it preserves their function. Training-established neurite lengths and connections (user, 24 Nov) depend on this fix.
+
+### Righting by experience: why M3 did not learn, and M4 (24 Nov)
+
+Per-fall replay of the M3 run (`target/qa/resume_2026-11-24/tools/getup_episodes.py`, output `target/qa/nao_getup_explore/learn_run2_episodes.txt`). It stood 2 of 36 times:
+- The roll programs never ran, although 17 falls landed on the back. The front get-up from fall 0 rolled NAO supine, and from then on only the front program ran: every ~8.3 s it re-entered and its gate cut every other start.
+- No body-state band covered lying supine or on a side. The accelerometer.x code stopped at 0.54 (supine reads 0.75) and there was no accelerometer.y.
+- Learning ran away. In 50 s the band synapses onto `L_getup_00` grew 43-fold. Every input of the plastic cell learned, so its control wiring (mode drive x5.5, oscillator bias x10, movement inhibition) hit the clamp and latched the entry for good. Frozen, the same entry only pulses.
+- Progress fired without progress. The soft band edges left the next gravity band up at ~0.3 release while the body lay still, and the binarised copy counted that as reached, so `P_up` ran ~8 Hz and opened the learning gate the whole time.
+
+M4 changes:
+- Bands: accelerometer.x to 0.80; accelerometer.y with right side, centre and left side bands.
+- Progress: a band counts only above 0.6 release (`--getup-progress-band-min`), held for 300 ms (`--getup-progress-hold-ms`).
+- Runtime:
+  - `PlasticCellMask.pre_hidden` restricts learning by presynaptic cell. Only body-state synapses (and newborns') learn; an entry cell's control wiring is fixed, as a Purkinje cell's climbing fibre is.
+  - `aarnn_plasticity_w_max` caps a learning synapse at the circuit's scale. `nao_getup_learning.py make --w-max-mv`, default 0.3 mV/ms.
+- Growth on (neurogenesis; newborns plastic); morphological growth off.
+
+Open loop on the same sensor stream:
+- the entries now alternate, including both rolls;
+- the supine band fires lying on the back;
+- `P_up` and `LC` stay at 0 while the body does not improve;
+- learned weights stop at the cap.
+
+Closed-loop test: `target/qa/nao_getup_m4/run1`, same fall generator.
+
+### Learning through growth (night of 24-25 Nov)
+
+User directive: "continue with the intent of the project, across all robots, all environments, all simulators. prove learning through growth."
+
+**Status at 06:00, 25 Nov (all runs finished).** Open loop: frozen test after 24 approaches, growth on vs off, rng_seed replicates, newborns silenced afterwards. Closed loop: MuJoCo habitat, lock-step.
+
+| body | open loop: what growth adds | newborns silenced | closed loop |
+|---|---|---|---|
+| Freenove hexapod | onset 0.96 -> 1.42-1.47 m, mid band 4.0 -> 15.5-16.4 Hz (3 seeds) | back to 0.94 m | time near obstacles 17.1 % off -> 9.2 % / 5.5 % in 2 of 3 growth seeds; the third wedged facing a wall. Cause found and fixed 25 Nov: the reversed stride reused the forward trim and cancelled left turns; with the fix the seed-2 walk is 6.1 % near against 47.5 %, but on the fixed gait growth off is also low (5.2 % against 3.0-6.2 %), so the earlier gap was mostly the broken escape. 600 s pairs on the fixed gait (26 Nov): growth 2.8 / 4.3 / 4.8 % near obstacles against 5.4 % off, a small gain in every seed; see "The seed-2 wedge" and "600 s pairs" |
+| UGOT quadruped | onset 0.55 -> 0.86 / 1.41 / 0.98 m (3 seeds), no runaway | back to 0.58-0.59 m | one run, confined start: under 1 m from obstacles 24.6 % with growth (42 -> 17 -> 15 % per third) against 83.7 % off (ends parked at ~0.7 m) |
+| Keenon T8 | onset 1.54 -> 1.62-1.66 m, far band +40-90 % (3 seeds) | back to 1.54 m | one run, 600 s: growth starts worse and improves (under 1 m: 29 -> 22 -> 10 % per third), growth off stays flat (19 -> 16 -> 19 %); total slightly worse (8.3 % vs 5.7 % under 0.66 m) |
+| Drosophila (BANC walk) | far band 4.6 -> 9.5-9.6 Hz (3 seeds; unchanged by the protocol fix) | back to 4.6 Hz | not run |
+| NAO, point cells | near 14.7 -> 18.7-19.0 Hz, onset 0.69 -> 0.73-0.74 m (3 seeds) | back to 14.7 Hz | first 195 s (before seed 2's fall): explored cells 23 / 21 with growth against 13 off and 12 frozen, on equal path (27 m); seed 7 over 600 s: 37 cells vs 19, stalled 35 % vs 66 % |
+| zebrafish | far band 7.4 -> 10.9-11.7 Hz (3 seeds); the onset is at its 0.3 m sensing limit | back to 7.4 Hz | not run |
+| C. elegans | growth off by design (connectome fails above 302) | - | - |
+
+Bugs found and fixed tonight:
+- the shared-ray protocol (front ray);
+- the Keenon teacher threshold;
+- inheritance on inhibition-coded cells (Keenon runaway);
+- learner cells at the origin (fish newborns refused).
+
+Not run tonight:
+- Webots: its world is a 200 m bare floor with no obstacles, the controller build is 3 days old, and it needs the NVIDIA display (GPU lock-up risk unattended);
+- Unity, Unreal and Isaac: same display constraint.
+
+The test is growth on against growth off, on each body's own learning by experience, with the same seeds.
+- Learning: teacher-gated anticipation. An innate near-obstacle reflex drives LC, the modulatory cell, and teaches a learning-turn cell LT. LT's silent synapses from distance-tuned sonar cells learn when an echo predicts the reflex.
+- Measure: LT activity by obstacle distance over repeated approaches, and in the pause with no obstacle. A tonically active LT is not learning.
+- Proof that growth carries learning: the gain over growth off, and its loss when the newborns are silenced afterwards (knockout).
+- Harness: `scripts/qa/growth_learning_nao.py --body nao|hexapod` (learn, frozen test, knockout). Protocols: `nao_learn_openloop.py` and `hexapod_learn_openloop.py`.
+
+Freenove hexapod learner (`build_hexapod_cpg_network_json.py --learn-groups 20`), insect anatomy:
+- distance-tuned sonar cells CS (0.45-0.75 m) in the mushroom-body calyx;
+- LT as a mushroom-body output neuron;
+- LC as its dopaminergic teacher; the innate near turn (P_sonar, 0.40 m) drives both.
+- Learning: the CS -> LT synapses grew x3.8 in 8 approaches. Over 24 approaches the onset moved from 0.35 m to 0.93 m (0.96 m frozen).
+
+Mechanisms found and changed tonight (runtime parameters default to the old behaviour):
+
+| problem | effect | change |
+|---|---|---|
+| matrix STDP with graded cells | in point-cell networks every LT input, the teacher's included, depressed to the floor; point-cell NAO and hexapod learned nothing (the spatial NAO learns through the dendritic-bouton path) | `aarnn_matrix_plasticity_rule` (oja for the point-cell learners) |
+| every input of a plastic cell learned | the teacher synapse and control wiring changed | `PlasticCellMask.pre_hidden`: only named presynaptic classes learn (the climbing fibre stays fixed) |
+| newborns came from the first saturated cell in index order | the gait CPG (built first, always saturated) fathered every newborn; none joined learning, and the hexapod learned slightly worse (0.91 vs 0.96 m) | the most active eligible cell spawns; `growth_parent_cells` sets a neurogenic niche, as adult neurogenesis is confined to niches (mushroom-body Kenyon cells in insects) |
+| niche newborns never became neurons | `assess_growth` checked other areas before the parent's own; compact neighbouring nuclei overlap, so every newborn was "AmbiguousAreaOverlap" and refused | the parent's own area first; `NM_TRACE=1` logs `[growth-admit]` and `[growth-mature]` |
+| newborns had no lineage | a newborn shared nothing of its parent's selectivity | `growth_inherit_sensory_inputs` (parent's sensory inputs x scale x jitter 0.5-1.5); `growth_new_input_synapse_scale` separate from the output scale (inputs before outputs mature) |
+| newborns' own inputs learned too | niche newborns potentiated their sonar and newborn-newborn inputs to the cap and saturated; LT was held on at every distance, including with no obstacle | `PlasticCellMask.newborn_outputs` separate from `newborns`: inputs fixed (diverse inherited tunings), outputs onto LT plastic, so experience selects the newborns that predict the teacher |
+
+Results so far (24 approaches; `target/qa/growth_learning`):
+- NAO, spatial: growth off 0.38 -> 0.67 m (frozen test 0.68 m).
+  - growth without a niche (+100, reticulospinal and lumbar): no change;
+  - CS niche with learning inputs (+39): no change; newborn -> LT drive stayed negligible.
+- NAO, point cells: no learning in any condition (STDP).
+- Hexapod: growth off 0.35 -> 0.93 m.
+  - niche with learning inputs (+78): LT saturated at every distance and in the pause - runaway, not learning;
+  - fixed-input niche conditions: running.
+
+**Result: learning through growth (25 Nov, 00:00-00:50).** Clonal newborns in the CS niche, with growth on (`aarnn_circuit.growth_niche_fields`):
+- each newborn takes its parent's relay type (`growth_newborn_inherit_type`) and its sonar input jittered 0.5-1.5x, so each gets its own distance threshold;
+- inputs are fixed, outputs silent and plastic;
+- the bootstrap contact is skipped (at an inherited input scale of 1.0 the random 0.1-0.4 contact to a constant channel saturated every newborn).
+
+Freenove hexapod, 24 approaches, frozen test after learning (`target/qa/growth_learning/hex`):
+
+| condition | neurons | learned onset | LT 0.75-1.5 m | LT far | LT, no obstacle |
+|---|---|---|---|---|---|
+| growth off | 60 | 0.96 m | 4.0 Hz | 0.0 | 0.0 |
+| growth, inherited input x1.0 | 60 + 78 | **1.46 m** | **15.9 Hz** | 0.4 | 0.0 |
+| growth, inherited input x1.2 | 60 + 78 | **1.72 m** | **19.5 Hz** | 4.2 | 0.0 |
+| growth x1.0, newborns silenced after learning | (60 + 78) | 0.94 m | 3.4 Hz | 0.0 | 0.0 |
+| growth x1.0, plasticity frozen | 60 + 78 | 0.36 m (innate) | 0.07 Hz | 0.0 | 0.0 |
+
+- Growth extends what is learned: anticipation reaches 1.5-1.7 m, against the designed sonar group's 0.45-0.75 m range.
+- The gain is carried by the newborns: silencing them returns the robot to the growth-off level.
+- It needs experience: with plasticity frozen, the newborns change nothing.
+- The robot never turns with no obstacle in range.
+
+Same harness on the other bodies (generic block `aarnn_circuit.add_learned_anticipation`, `--learn-groups N` in each builder, protocol `scripts/qa/body_learn_openloop.py`):
+
+| body | neurons grown | with growth | growth off | newborns silenced |
+|---|---|---|---|---|
+| Drosophila walk (rays reach 8 cm) | +80 | LT far 9.5 / 9.55 / 9.57 Hz (3 growth seeds) | 4.6 Hz | 4.6 Hz; plasticity frozen 0.06 Hz |
+| NAO, point cells (oja) | +73 / +73 / +74 | near 18.8 / 19.0 / 18.7 Hz, onset 0.74 / 0.74 / 0.73 m | 14.7 Hz, 0.69 m | 14.7 Hz, 0.69 m |
+| UGOT quadruped | +80 | near 2.5 Hz | 0.35 Hz | 0.47 Hz (learner weak: inverting range cells uncalibrated) |
+| zebrafish (rays reach 0.3 m) | +2 | no change | LT already active across the whole range | - |
+| Keenon T8 | +80 | LT silent | LT silent | inverting cells never switched on (fixed) |
+
+The inverting range cells (rays that code d / reach) are now calibrated like the legged explorer's proximity cells; the quadruped and Keenon reruns are running.
+
+Rerun with direct proximity cells (`off3` / `growth3`, rng_seed 7), frozen test after learning:
+
+| body | grown | LT test far / mid / near, growth | growth off | newborns silenced |
+|---|---|---|---|---|
+| UGOT quadruped | +80 | 0.08 / 0.58 / **13.5 Hz** | 0.00 / 0.05 / 5.2 Hz | 0.00 / 0.06 / 6.7 Hz |
+| Keenon T8 | +80 | 0.00 / 0.01 / 0.18 Hz | 0.00 / 0.00 / 0.16 Hz | 0.16 Hz |
+
+- Quadruped: growth more than doubles the learned near response, and silencing the newborns returns it to the growth-off level.
+- Keenon: the learner still did not work. Two faults, both fixed on 25 Nov:
+  - **Protocol, shared channels** (`body_learn_openloop.py`). The front ray belongs to both sides; whichever side was written last set it, so left approaches always read "far" on the front ray and lost that teacher. This affects every body with shared rays: quadruped, Keenon and Drosophila (4 of 6 rays shared). Their earlier runs had it in both conditions, so the growth comparisons stand, but the left turn was under-taught (quadruped LT_l inputs 0.11 against LT_r 0.72).
+  - **Keenon teacher threshold** (`aarnn_circuit._range_cell`). The direct proximity cell ramps over ~0.3-0.5 m, and its switch-on drifts nearer as the coded threshold grows. At Keenon's 0.66 m teach distance (code 0.22) it gave 1.4 Hz at the protocol's nearest approach, so LC and LT barely fired. A two-point calibration (`_prox_inh_gain`: 1.0 at the quadruped's code 0.093, 1.5 at Keenon's 0.22) now puts ~5 Hz at the teach distance on both. (A single factor of 2.2 from a linear model switched the quadruped's teacher on at 1 m: rejected.)
+- Reruns with both fixes (`v4off_s{7,4,5}`, `v4growth_s{7,4,5}`) are running for both bodies, plus a Drosophila rerun with the protocol fix.
+
+UGOT quadruped with both fixes (frozen test after 24 approaches; the switch-on correction is 1.001 at its teach code, so only the protocol fix changes its network inputs):
+
+| rng_seed | growth: onset / LT far, mid, near / no obstacle | growth off | newborns silenced |
+|---|---|---|---|
+| 7 | **0.86 m** / 0.9, 6.7, 19.6 Hz / 0.04 Hz | 0.55 m / 0.02, 0.37, 11.9 Hz / 0.00 | 0.59 m / 0.03, 0.57, 14.3 Hz |
+| 4 | **1.41 m** / 10.0, 18.1, 20.0 Hz / 0.39 Hz | 0.55 m (same) | 0.59 m |
+| 5 | **0.98 m** / 1.0, 9.2, 19.8 Hz / 0.03 Hz | 0.55 m (same) | 0.58 m |
+
+- In every seed, growth (+80 newborns in the CS niche) extends the learned turn from 0.55 m to 0.86-1.41 m, and silencing the newborns returns it to 0.58-0.59 m.
+- No runaway: LT stays at 0.03-0.39 Hz with no obstacle. Seed 4 generalises furthest (10 Hz in the far band).
+- With the protocol fixed, the two sides are now balanced (sensory inputs to LT_l / LT_r 0.80 / 0.79 growth off, against 0.11 / 0.72 before).
+
+Keenon T8 with both fixes (rng_seed 7 / 4 / 5, identical to two decimals across seeds):
+
+| condition | onset, learning | onset, frozen test | LT far / mid / near | LT, no obstacle |
+|---|---|---|---|---|
+| growth off | 0.97 -> 1.55 m | 1.54 m | 2.8 / 17.8 / 19.8 Hz | 0.03 Hz |
+| growth (+80), inherited input x1.0 | 1.33 -> 1.86 m | 1.86 m | 19.8 / 20.0 / 20.0 Hz | **14.5 Hz** |
+| same, newborns silenced | | 1.54 m | 2.8 / 17.8 / 19.8 Hz | 0.03 Hz |
+
+- The Keenon now learns: growth off moves the turn from 0.97 to 1.55 m in 24 approaches.
+- With growth, LT is tonic (14.5 Hz with no obstacle): a runaway, not learning, even though the onset reads 1.86 m (the protocol's starting distance).
+- Cause: 21 of 80 newborns fire with no obstacle (their CS parents: 0.04 Hz). A newborn inherits its parent's sensory input x 0.5-1.5, which suits excitatory relays. On these inhibition-coded proximity cells it weakens the inhibition, and newborns with 0.52-0.76 x the parent's input fire at 4-12 Hz at every distance; those at >= 0.95 x stay silent. Their outputs then learn to the cap and hold LT on.
+- Rule: a clone must keep its parent's silence with nothing near, so on an inhibition-coded cell its inherited input must never be weaker than the parent's. Here: `growth_new_input_synapse_scale` 2.0 (inheritance 1.0-3.0 x; the newborns tune at or nearer than their parents). Running as `v4growthB_s{7,4,5}`. The UGOT quadruped's earlier growth3 run had no such runaway at x1.0 (no-obstacle LT 0.00 Hz): its cells sit further from switch-on at far.
+
+With inheritance x2.0 (`v4growthB`, frozen test):
+
+| rng_seed | growth: onset / LT far, mid / no obstacle | growth off | newborns silenced |
+|---|---|---|---|
+| 7 | **1.65 m** / 4.0, 19.3 Hz / 0.04 Hz | 1.54 m / 2.8, 17.8 Hz / 0.03 Hz | 1.54 m / 2.8, 17.8 Hz |
+| 4 | **1.62 m** / 4.5, 18.8 Hz / 0.05 Hz | 1.54 m | 1.54 m |
+| 5 | **1.66 m** / 5.3, 19.5 Hz / 0.05 Hz | 1.54 m | 1.54 m |
+
+- No runaway, and a consistent gain carried by the newborns in every seed: onset +0.08-0.12 m and far-band response +40-90 %, back to the growth-off level when they are silenced.
+- The gain is smaller than on the quadruped. The Keenon's growth-off learner already fills its mid band (17.8 of 20 Hz), and its newborns now tune only at or nearer than their parents.
+
+Closed loop, Freenove hexapod in the MuJoCo habitat, 600 s, growth off (`target/qa/growth_learning/hex/walk`, `scripts/qa/hexapod_near_score.py`):
+
+| network | time < 0.40 m from an obstacle | entries into that range | explored cells (0.25 m) |
+|---|---|---|---|
+| frozen | 11.7 % | 67 | 36 |
+| learning | 6.6 % | 31 | 45 |
+
+Replicates (growth seeds via the snapshot `rng_seed`; the probe's own seed does not reach growth): growth tests at 1.46 / 1.42 / 1.47 m and mid-band 15.9 / 15.5 / 16.4 Hz. Growth off gives 0.96 m and 4.0 Hz in every seed; newborns silenced give 0.94 m.
+
+Closed loop with growth (same habitat and start, 600 s, 138 neurons at the end), share of time within 0.40 m of an obstacle:
+
+| network | 0-200 s | 200-400 s | 400-600 s | total | entries |
+|---|---|---|---|---|---|
+| frozen | 13.7 % | 9.7 % | 11.7 % | 11.7 % | 67 |
+| learning, growth off | 9.3 % | 6.5 % | 3.8 % | 6.6 % | 31 |
+| learning + growth (x1.0) | 28.9 % | 2.2 % | 0.4 % | 10.5 % | 48 |
+| learning + growth (x1.2) | 7.0 % | 64.1 % | 0.3 % | 23.8 % | 100 |
+
+- By the last third, the growing learners almost never come near an obstacle (0.3-0.4 % against 3.8 %).
+- But each had a stretch stuck facing an obstacle at 0.3-0.4 m: x1.2 from 200 to 380 s, x1.0 around 60-80 s.
+- Likely cause: the learned turn (strong and sustained with growth) and the innate one drive both turn cells, so the winner-take-all fails, both turn commands cancel and the stride is inhibited.
+- Next test: the learner with RS mutual inhibition 24 (`--rs-mutual`).
+
+With RS mutual inhibition 24 (`walk_m24_*`, 25 Nov 01:49-02:25, rng_seed 7; open-loop learning unchanged):
+
+| network | 0-200 s | 200-400 s | 400-600 s | total | entries | longest stretch < 0.40 m | explored cells |
+|---|---|---|---|---|---|---|---|
+| frozen (no plasticity, no growth) | 21.5 % | 9.6 % | 2.8 % | 11.3 % | 74 | 3.2 s | 49 |
+| learning, growth off | 24.0 % | 1.2 % | 7.1 % | 10.8 % | 68 | 5.0 s | 49 |
+| learning + growth | 11.5 % | 6.5 % | **0.7 %** | **6.2 %** | **56** | 6.3 s | 28 |
+
+- The stuck episodes are gone: the longest stretch near an obstacle with growth falls from 23-32 s (without mutual inhibition) to 6.3 s. The winner-take-all diagnosis holds.
+- Growth has the least time near obstacles overall and in the last third, and the shortest stays per entry (0.66 s against 0.95 s off and 0.92 s frozen).
+- Caveats:
+  - the frozen network's near time also falls over the run (21.5 -> 2.8 %), so part of the late-window decline is where the walk takes the robot, not learning;
+  - the growing learner covered fewer cells (28 against 49): it turns away earlier and circles in open floor;
+  - one seed per condition. Seeds 2 and 3 for growth and growth off are running (`walk_m24_{growth,off}_s{2,3}`).
+
+Seed replicates (25 Nov 04:05-05:05). All four hit the 1 h wall-clock limit on the overloaded host: growth reached ~281 s, growth off ~429 s. So the comparison below covers the first 280 s:
+
+| network | time < 0.40 m, 0-280 s | 0-140 s | 140-280 s | entries | longest stretch | explored cells |
+|---|---|---|---|---|---|---|
+| growth off (rng_seed 7, 2 and 3) | 17.1 % | 30.8 % | 3.4 % | 48 | 3.2 s | 26 |
+| frozen | 18.4 % | 27.2 % | 9.5 % | 51 | 3.2 s | 18 |
+| growth, rng_seed 7 | 9.2 % | 15.1 % | 3.4 % | 48 | 4.7 s | 12 |
+| growth, rng_seed 3 | **5.5 %** | 7.6 % | 3.4 % | 24 | 2.2 s | 34 |
+| growth, rng_seed 2 | 49.0 % | 46.4 % | 51.6 % | 123 | 9.0 s | 10 |
+
+- Growth off is deterministic: rng_seed reaches only growth, and the three growth-off runs are bit-identical. The baseline is therefore one trajectory.
+- Two of three growth seeds halve or better the early time near obstacles (9.2 % and 5.5 % against 17.1 %).
+- Seed 2 wedged at 80 s: facing an obstacle at 0.39-0.42 m, it stepped in place for the rest of the run, motor rates near neutral, yaw wobbling 0-16 degrees, position fixed.
+  - Replaying a held 0.40 m echo through the learned network gives a clean decision (RS_r 18 Hz, RS_l 0, the bout held), so this is not the two turn cells cancelling. The turn is commanded but makes no headway.
+  - Likely a leg caught on the obstacle, the jam the explore bouts were added for. Not resolved tonight. (Wrong: see the next paragraph.)
+
+**The seed-2 wedge: cause and fix (25 Nov morning).** The obstacle was the arena wall (x = 1.3 m), met head-on. The hexapod's two sonar channels are one HC-SR04, so both read the same distance (0.32-0.42 m) and only the ARTR picks the side.
+
+What happened:
+- Replaying the walk's own sensor stream through its network gives a clean decision: RS_r, a left turn, at ~15 Hz. BACK stays on for the whole bout as well, because the bout cell holds it and P/LT keep re-kicking the bout (growth made LT stronger).
+- Measured yaw rate in each replayed state:
+
+  | state | seed 2 | growth off |
+  |---|---|---|
+  | left turn + BACK | +0.6 deg/s | +2.2 deg/s |
+  | right turn + BACK | -3.4 deg/s | -14.8 deg/s |
+
+- The body is symmetric. The programmed gait (`scripts/qa/hexapod_gait_probe.py`) turns +-22.9 deg/s in place, and +22.9 / -17.0 deg/s while reversing.
+- The fault was in the network. The reversed stride (the Z cells) reused the forward stride's trim (right x1.2, left x0.8), which corrects the forward gait's drift. In reverse that trim yaws the body right, so it cancelled every left turn made while backing.
+- A left-chosen escape from a wall therefore never turned. The hexapod rocked at the back-off threshold for 200 s.
+
+Two fixes, as flags in `build_hexapod_cpg_network_json.py` (default off):
+- `--back-untrim 1`: the reversed stride ignores the trim.
+- `--back-onset-ms 1500`: BACK only at a bout's onset, through slow feed-forward inhibition from a new cell BACK_I. The hexapod reverses once and then turns in place, as worms and flies do.
+
+Same network and seed, 180 s, rebuilt by `target/qa/resume_2026-11-24/tools/hex_wedge_variant.py`. The rebuilt control reproduces the original walk exactly. Times near obstacles are per 60 s window:
+
+| variant | near the obstacle (< 0.40 m) | per 60 s | longest stretch |
+|---|---|---|---|
+| control (as walked) | 47.5 % | 19 / 71 / 55 % | 9.0 s, wedged from 54 s |
+| reversed stride untrimmed | **6.1 %** | 9.9 / 4.6 / 2.6 % | 2.2 s |
+| BACK at onset only | 7.1 % | 14.5 / 6.7 / 0.0 % | 2.8 s |
+| both | 8.4 % | 24.4 / 0.9 / 0.0 % | 3.0 s |
+
+- All three escape the wall by 80-90 s, and the time near obstacles keeps falling across the run.
+Replicates over the first 300 s (`target/qa/growth_learning/hex/wedge/walk_{untrim,both}_{s7,s3,off}`), time near the obstacle per 100 s window:
+
+| network | as walked (trim in reverse) | untrimmed reverse | untrimmed + BACK at onset |
+|---|---|---|---|
+| growth, seed 7 | 16.2 / 6.8 / 12.0 % (mean 11.7) | 0.0 / 4.2 / 4.8 % (3.0) | 15.4 / 3.9 / 0.1 % (6.5) |
+| growth, seed 3 | 6.5 / 6.5 / 3.0 % (5.3) | 5.2 / 6.7 / 6.6 % (6.2) | 13.2 / 0.0 / 0.0 % (4.4) |
+| growth off | 37.9 / 10.1 / 2.4 % (16.8) | 4.7 / 5.8 / 5.2 % (5.2) | - |
+| growth, seed 2 (180 s, per 60 s) | 19 / 71 / 55 % (wedged) | 9.9 / 4.6 / 2.6 % | 24.4 / 0.9 / 0.0 % |
+
+- With the reversed stride untrimmed (now the builder default), no run wedges. Longest stretch near an obstacle is 1.6-3.4 s, against up to 9 s before.
+- **The closed-loop growth advantage reported above does not survive the fix.** With untrim, growth off is at 5.2 % and the growth seeds at 3.0-6.2 %. Much of the earlier gap (17.1 % off against 9.2 / 5.5 %) came from how often each run picked the broken left escape.
+- "BACK at onset" gives the clearest within-run learning curve: the last 100 s is 0.0-0.1 % in both growth seeds. It has not been run on growth off.
+- Needed: 600 s growth-on vs growth-off pairs, 3 seeds, all on the fixed gait.
+
+600 s pairs on the fixed gait (reversed stride untrimmed, no BACK_I; learning on; `target/qa/growth_learning/hex/pairs600`, 26 Nov 00:11-00:55; `hexapod_near_score.py --window-s 200`):
+
+| network | 0-200 s | 200-400 s | 400-600 s | total | entries | longest stretch | explored cells (0.25 m) |
+|---|---|---|---|---|---|---|---|
+| growth off | 5.2 % | 7.7 % | 3.3 % | 5.4 % | 34 | 3.0 s | 51 |
+| growth, rng_seed 7 | 2.1 % | 3.7 % | 2.5 % | **2.8 %** | 33 | 3.3 s | 40 |
+| growth, rng_seed 2 | 7.3 % | 0.9 % | 6.3 % | 4.8 % | 33 | 2.9 s | 60 |
+| growth, rng_seed 3 | 5.9 % | 4.3 % | 2.5 % | 4.3 % | 41 | 2.7 s | 52 |
+
+- No run wedges in 600 s. Seed 2, which wedged before the fix, explores the most ground (60 cells).
+- All three growth seeds spend less time near obstacles than growth off (2.8-4.8 % against 5.4 %; mean 4.0 %). In the last third, two of the three are lower (2.5 % against 3.3 %).
+- The gain is small and does not grow steadily over the run. Growth off is a single trajectory (it is deterministic), and windows of the same run vary by 2-5 points. So this is a consistent direction, not a clear closed-loop proof.
+- On the hexapod the open-loop growth result (onset 0.96 -> 1.42-1.47 m, removed by silencing the newborns) is the strong evidence. The closed-loop gain is modest.
+
+NAO, closed loop in the walled MuJoCo room, 600 s, point-cell learner (`target/qa/growth_learning/nao_cl`, `nao_learn_closedloop.py report`):
+
+| network | wall encounters | explored cells (0.25 m) | stalled | bumper pressed | reflex zone |
+|---|---|---|---|---|---|
+| learning, growth off | 2 | 19 | 66.1 % | 38.0 % | 7.8 % |
+| learning + growth (+73 clonal newborns) | 11 | 37 | 35.2 % | 22.6 % | 7.9 % |
+
+- The growth-off run spent 47 s inside the reflex range at its second encounter and stalled for most of the run.
+- With growth, most encounters ended within about a second inside the reflex range (exceptions 31 s and 9.8 s), with turn onsets at 0.48-0.72 m.
+- One run each (closed loop is chaotic): supporting evidence, not a proof.
+
+Replicate and control (25 Nov, 01:50-02:43):
+
+| network | wall encounters | explored cells | stalled | bumper pressed | reflex zone | fell |
+|---|---|---|---|---|---|---|
+| frozen (no plasticity, no growth) | 13 | 30 | 48.7 % | 0.0 % | **57.2 %** | no |
+| learning + growth, rng_seed 2 | 5 | 26 | 65.9 % | 0.0 % | 5.9 % | **yes, at 198 s** |
+
+- Frozen spent 57 % of the run inside the reflex zone, with stays of 169 s and 171 s. Both learners (growth on or off) kept that under 8 %, so learning, not the reflex alone, clears the walls.
+- The rng_seed-2 growth run fell backwards while backing off a wall: pitch went from -4 to -67 degrees in one second while the robot moved back, with no bumper contact. This is the back-off gait, not the learner; neither seed-7 run fell. With the robot down from 198 s, its stalled share counts the fall.
+- So in closed loop on the NAO, growth is not yet shown to beat growth off: seed 7 favours growth, seed 2 is lost to the fall. Growth off at rng_seed 2 is running for a paired comparison.
+- Growth off at rng_seed 2 is bit-identical to rng_seed 7 (growth off is deterministic). Before seed 2's fall, both growth seeds explored more on the same path:
+
+  | 0-195 s | path | explored cells |
+  |---|---|---|
+  | growth, rng_seed 7 | 27.4 m | 23 |
+  | growth, rng_seed 2 | 27.4 m | 21 |
+  | growth off | 27.3 m | 13 |
+  | frozen | 25.0 m | 12 |
+
+  Growth explores ~1.7x the room in both seeds. Over the full run only seed 7 counts (37 against 19 cells).
+- Falls are a standing NAO gait risk, not a growth effect. In 39 earlier NAO walk traces (get-up runs excluded), three fell without growth: `nao_learn/cl2_frozen` at 76 s, `cl2_learn` at 78 s and `cl3_learn09` at 102 s, the first a frozen network.
+
+Keenon T8, closed loop in its MuJoCo room, 600 s, rng_seed 7 (`target/qa/growth_learning/keenon/walk`, `tools/ray_near_score.py`, rays proximity_0/1/7):
+
+| network | under 0.66 m (teach), per 200 s | total | under 1.0 m, per 200 s | total | entries (0.66 m) | explored cells | path |
+|---|---|---|---|---|---|---|---|
+| learning, growth off | 4.8 / 5.7 / 6.6 % | 5.7 % | 19.4 / 15.9 / 19.0 % | 18.1 % | 60 | 298 | 190 m |
+| learning + growth (x2.0 inheritance) | 11.2 / 8.7 / **5.1 %** | 8.3 % | 29.2 / 21.8 / **10.1 %** | 20.3 % | 102 | 286 | 167 m |
+
+- With growth the robot improves over the run, as the hexapod did; without growth it does not. Overall, growth is slightly worse.
+- One run each, so this is a learning-curve signature, not a proof.
+
+UGOT quadruped, closed loop, 600 s, rng_seed 7 (`target/qa/growth_learning/quad/walk`):
+
+| network | nearest ray, median | under 1 m, per 200 s | under 1 m, total | under 0.28 m (reflex) | explored cells | path |
+|---|---|---|---|---|---|---|
+| learning, growth off | 0.69 m | 51 / 100 / 100 % | 83.7 % | 0 % | 8 | 48 m |
+| learning + growth | **1.03 m** | 42 / **17 / 15 %** | **24.6 %** | 0 % | 6 | 45 m |
+
+- Both runs stay inside a ~0.4 x 0.5 m patch of the start area and never reach the 0.28 m reflex, so this tests the learned turn alone, in a confined start.
+- Without growth the robot ends parked ~0.7 m from an obstacle for the last 400 s. With growth it keeps clear and improves over the run.
+- One run each.
+
+Zebrafish, why growth did nothing (+2 newborns):
+- The builders give each designed cell its position, but the generic learning block placed LC, LT, TN and CS at the origin. A newborn is born next to its parent, so every fish newborn landed at the origin of a laid-out body, inside two overlapping real nuclei: 37 of 39 were refused (`AmbiguousAreaOverlap`).
+- Fix: `layout_designed_circuit.zebrafish` places the learner in the adult telencephalon:
+  - CS in the dorsal pallium Dp (the olfactory-cortex homolog; the fish's learning channels are olfactory, and the adult zebrafish pallium is a neurogenic niche);
+  - LT in Dm (the amygdala homolog);
+  - the TN teacher relays in the olfactory bulb;
+  - LC in the locus coeruleus.
+
+  `aarnn_circuit.apply_learner` applies the profile's rules to learning cells still at the origin (`_place_learner_cells`). Now 39 of 39 newborns are admitted (31 within Dp, 6 expanding it, 2 attached to the nearest area).
+- The fish learner is also at ceiling from the first approach: its CS -> LT weights reach the cap (10 x 0.136) in episode 0, and its rays reach only 0.3 m, so there is no range left for growth to extend. Reruns with the placed learner (`v2off` / `v2growth`, rng_seed 7 / 4 / 5) are running.
+
+Zebrafish with the placed learner (frozen test after 24 approaches):
+
+| condition | neurons grown | LT far / mid / near | onset | no obstacle |
+|---|---|---|---|---|
+| growth, rng_seed 7 | +80 (was +2) | **11.1** / 20.0 / 20.0 Hz | 0.27 m | 0.00 Hz |
+| growth, rng_seed 5 | +80 | **10.9** / 20.0 / 20.0 Hz | 0.27 m | 0.00 Hz |
+| growth, rng_seed 4 | +80 | **11.7** / 20.0 / 20.0 Hz | 0.27 m | 0.00 Hz |
+| growth off (all seeds) | 0 | 7.4 / 19.9 / 20.0 Hz | 0.26 m | 0.00 Hz |
+| growth, newborns silenced | (+80) | 7.4 / 19.9 / 20.0 Hz | 0.26 m | 0.00 Hz |
+
+- Once newborns can be admitted, growth raises the learned far-band response by ~48 %, and silencing them removes the gain.
+- The onset cannot move: the fish's rays reach only 0.3 m, so the learned turn already starts at the edge of its senses.
+- The Drosophila, quadruped and Keenon learners are also unplaced (and the quadruped, fly and Keenon base circuits too). With everything at the origin, newborns fall outside every area and attach to the nearest, so growth was not blocked there. Placing them is still to do.
+
+Righting learner M4b (state bands, held progress, winner-gated starts, innate gravity veto) did not stand in 13 closed-loop falls. The front program still runs while supine, and LC never fired. Shelved tonight; see the M3/M4 section.
+
+### Learned foraging and recharging (design, 25 Nov)
+
+The goal, in the user's words (25 Nov):
+- The biomimetic bodies (C. elegans, Drosophila, zebrafish, crow) use their senses and needs to seek food.
+- The machines use their sensors, actuators and needs to seek power.
+- Every body explores its environment naturally.
+- The seeking is learned:
+  - a newborn feeds when food is presented but does not seek it;
+  - a robot is given power before it seeks it;
+  - experience, survival and interaction with others teach the needs through action. Nothing links a need to an approach by wiring.
+
+What exists today (survey, 25 Nov):
+- Nothing seeks food or power.
+- Only the crow has need channels (`hunger`, `thirst`, `fatigue`, `energy_reserve`, `beak_taste_*`, set at `adapters/mujoco/src/world.rs:614-621`). Its energy drains with mechanical power (`world.rs:1004-1017`) and never refills.
+- Only C. elegans has a sensed field:
+  - `scene.stimuli` / `field_value` in `crates/aarnn-embodiment/src/aer.rs:141-166, 248-306`;
+  - filled by `scripts/embodiment_scene.py:117-160`;
+  - read at `world.rs:734-738`.
+- Food objects are in the C. elegans, crow, fly and fish scenes but are inert; the scene notes say "scenery never supplies … food energy".
+- Every profile already has a `light_beacon`.
+
+Design. Only the physiology and a feeding reflex are innate; the seeking is learned:
+
+| part | innate (body / world) | learned (network, plastic) |
+|---|---|---|
+| energy | a store that drains with basal use plus mechanical power; at 0 the body stops (as the crow) | - |
+| feeding | food at the mouth (taste) or contact with a dock: the body stops and energy flows in while it stays, capped at full | - |
+| interoception | channel `energy_reserve` (battery state of charge on robots, hunger on animals) and a `consume` channel (taste / charge current) | - |
+| reward | an energy-gain transient cell (fast minus slow copy of `energy_reserve`) drives the modulator (LC/dopamine-like) | - |
+| cues | food odour (a field around food items); dock beacon (light, IR or sound) | which cue predicts energy, and in which internal state |
+| exploration | the existing run-and-turn bouts (ARTR side, bout clock) | - |
+| seeking | - | value cells: conjunctions of cue side x hunger band (CS-like, silent plastic synapses) onto a value cell per side. Value biases the turn (RS) toward the higher side and suppresses bouts while value rises (klinotaxis / klinokinesis) |
+
+- **Why "seek when hungry" needs no wiring:** energy can only flow in below full. The conjunction cells (cue x low reserve) are paired with reward; (cue x full reserve) never are. The network learns from its own physiology that a cue matters when the reserve is low.
+- **Caretaker phase:** early in life the world presents food at the mouth, or docks the robot, when the reserve runs low. The parent or owner can be an NPC teacher (`NM_MUJOCO_NPC_ACTOR`). The newborn feeds by reflex, and the cue is strongest exactly when energy rises, so the association forms before the body ever seeks.
+  - The caretaker then withdraws: food stays where it grows, the dock stays on the wall.
+  - A body that has learned the cue's value climbs its gradient during exploration. A naive body only stumbles on food.
+- **Growth:** the conjunction cells are a neurogenic niche (clonal newborns, inputs fixed, outputs silent and plastic), the same rule that proved learning through growth on obstacle anticipation.
+- **Proof** (same standard as growth):
+  - experienced vs naive: time to food from random starts, and fraction of starts reaching food before the reserve is empty;
+  - growth on vs off;
+  - knockout of the learned value synapses and of the newborns, which returns the body to naive.
+
+Per body:
+
+| body | food / power | cue senses | new channels |
+|---|---|---|---|
+| C. elegans | bacterial lawn (`food_contact_*`, lawns) | `chem_left/right` (attractant), `taste_front_center` (exists) | `energy_reserve`, `consume` |
+| Drosophila | fruit | antennal odour pair | `odour_l/r`, `energy_reserve`, `consume` (proboscis taste) |
+| zebrafish | prey (14 items) | olfactory pair (the `olfactory_*` channels are 0.3 m range rays, not chemical) | true `odour_l/r`, `energy_reserve`, `consume` |
+| crow | `food_0..7`, `water_bowl` | eyes, `beak_taste_*` (exist) | refill on beak contact; the existing need channels become real |
+| hexapod, NAO, UGOT, Keenon, Botinkit | a charging dock | dock beacon (the existing `light_beacon`; hexapod camera on/off; a beacon receiver pair on bases that have only rays) | `battery`, `charge_current`, `beacon_l/r` where missing |
+
+Work order:
+- **F1 world:**
+  - generalise the crow's energy to every profile (per-body capacity, basal and mechanical drain);
+  - food and dock items with a `scene.stimuli` field per profile (generalise `celegans_stimuli`);
+  - the feeding/charging transfer after `physics.step()` in `world.rs`, plus a caretaker mode;
+  - new channels as an optional sensor group, so existing networks stay bound;
+  - energy and feeding in the trace.
+- **F2 network:** `aarnn_circuit.add_learned_foraging(...)`, holding the reward transient, feeding reflex, conjunction niche, value cells and steering bias, plus layout rules per anatomy.
+- **F3 open loop:** a protocol like `body_learn_openloop.py` (caretaker sessions, then a gradient test).
+- **F4:** closed loop per body.
+- **F5:** the other engines.
+
+**F1 done (25 Nov): energy, food and docks.**
+
+Record (`scripts/embodiment_scene.py` `needs_block` / `needs_sensors`, regenerated with `scripts/embodiment.py`; `--check` clean):
+- `scene.needs` (`needs-v1`) holds:
+  - resource: food or power;
+  - store = 1 W/kg x total mass x 240 s;
+  - drain = basal x (1 + effort), effort = mechanical power / (2 W/kg x mass), at most 1;
+  - refill from empty in 20 s at a source, only below full;
+  - the sources;
+  - a caretaker: until 600 s, below 40 % reserve, a 20 s feed.
+- Sources per body:
+
+  | body | sources | consumed within | cue field |
+  |---|---|---|---|
+  | C. elegans | 3 bacterial lawns + 4 food spots | 0.065 m + half the source | 0.23 m |
+  | Drosophila (both) | 8 fruit / food items | 0.055 m + half | 0.19 m |
+  | zebrafish | 14 prey | 0.0375 m + half | 0.13 m |
+  | hexapod, UGOT, NAO, Keenon, Galbot | one charging dock: a 0.18-0.42 m floor pad (no collision) in the corner farthest from the furniture | 0.1 half extent + half the pad (0.22 m hexapod, 0.51 m room) | 0.35 half extent (0.46 m hexapod, 1.05 m room) |
+
+  - None: the crow (keeps its own energy, hunger and taste channels) and the fixed-base machines (Cofe, Xbot, Botinkit).
+- Optional sensor group `needs` (4 channels):
+  - `needs_energy` (interoception / battery state of charge);
+  - `needs_consume` (taste of food / charge current);
+  - `needs_cue_left` / `needs_cue_right`: odour or dock-beacon receivers aimed 45 degrees outward, reading the strongest source's Gaussian field times `0.5 + 0.5 cos` of the bearing. A sum saturated among the worm's seven food sources.
+  - Existing networks bind without the group (named binding), so no snapshot changes.
+
+Engines:
+- **MuJoCo** (`adapters/mujoco/src/world.rs` `NeedsState`) implements it fully. Each 2 ms step:
+  - drain;
+  - refill at a source or while the caretaker feeds;
+  - caretaker onset;
+  - exhaustion at zero, which disarms the body (a flat battery, an exhausted animal).
+- **Trace:**
+  - each row carries `needs`: energy, fraction, consume, caretaker feeding, source reached, cumulative feeds / visits / energy consumed, exhausted;
+  - the header carries capacity, mass and sources.
+- **Overrides:** `NM_MUJOCO_NEEDS=0` disables the model; `NM_MUJOCO_NEEDS_ENDURANCE_S`, `NM_MUJOCO_NEEDS_START` and `NM_MUJOCO_CARETAKER_S` override its parameters.
+- **Other engines** have no energy model and report neutral needs channels (full reserve, no refill, no cue):
+  - Webots (legacy and projection paths);
+  - Isaac (`sim/isaacsim/senses.py`);
+  - Unity / Unreal through the shared `aarnn_embodiment::projection` (FFI).
+
+Checks:
+- **Hexapod (fixed gait, no growth):** its 60 s walk is identical to its pre-needs run (1199 / 1199 trace rows).
+  - With endurance shortened to 40 s, the store drains 1.0 -> 0.5 in 10 s of walking, and the caretaker charges it 3 times in a minute.
+- **C. elegans:** spawns on a food spot (no inflow while full), drains to 0.89 in 25 s, and its cue pair now reads a gradient (left 0.64 / right 0.29 as it turns from the nearest food).
+- **Tests:**
+  - `aarnn-embodiment` 25;
+  - `aarnn-mujoco` 14 + 4 (the C. elegans contract tests count 48 core channels plus the group);
+  - simulator content 8;
+  - Isaac parity;
+  - Webots and FFI build.
+
+### F2: learned foraging / recharging (25 Nov)
+
+Circuit: `aarnn_circuit.add_learned_foraging`, built into the hexapod with `build_hexapod_cpg_network_json.py --forage 1`. Insect layout:
+- hunger in the pars intercerebralis;
+- feeding in the gustatory suboesophageal zone;
+- reward from the PAM dopaminergic cluster;
+- value at an appetitive mushroom-body output neuron;
+- cue-band cells in the calyx;
+- rise / fall cells in the LAL.
+
+Innate parts (physiology, not seeking):
+- **FEED** (`needs_consume`: food at the mouth, charge current; it flows only below a full reserve):
+  - stops the walk command while feeding (consummatory reflex);
+  - teaches the value cell V;
+  - drives the reward cell DA_R, which joins LC in the plasticity gate and is classified dopaminergic for the neuromodulator pools.
+- **HUNGER:** tonically on, silenced by SATED, a relay of the reserve at 0.5. It switches 14.7 Hz at reserve 0.30, 4 Hz at 0.45, 0 Hz from 0.50 up.
+- **Run and turn:** RISE (V above its 3 s copy V_SLOW) suppresses the spontaneous turn-bout clock (keep running); FALL starts a turn bout (a pirouette).
+  - Both need HUNGER: motivational state gates the use of a food memory, not its formation (Drosophila MB-MP1, Krashes et al. 2009).
+  - Gating learning by hunger failed: hunger falls as soon as a meal refills the reserve, so cue and reward overlapped for only ~5 s per feed and the value learned 0.5 Hz instead of 19 Hz.
+
+Learned part:
+- 12 cue-band cells (6 intensity bands per side) project onto V through silent plastic synapses (oja, gated).
+- The newborn niche covers the sonar and cue cells, with clonal newborns: inputs fixed, outputs silent and plastic. The builder's own mask first made newborn inputs plastic and their outputs fixed, and growth did nothing until that was corrected.
+
+Open loop (`scripts/qa/forage_openloop.py`, Rust probe; `target/qa/forage/hex/ol_*`). Six caretaker cycles: the reserve drains 0.9 -> 0.35 over 40 s with faint wandering cues, then a 20 s feed (refill, both cues at 1). A frozen test follows: the cue rises 0 -> 1 over 20 s, holds, falls over 20 s, three times hungry (reserve 0.3) and three times sated (0.95).
+
+| network | V at faint cue (< 0.25) / strong (>= 0.75) | cue at which V passes 2 Hz | hungry, cue rising: RISE / bout clock | hungry, cue falling: FALL / bout clock | sated |
+|---|---|---|---|---|---|
+| naive (before the caretaker) | 0.0 / 0.25 Hz | never | 0 / 5.9 Hz | 0 / 6.3 Hz | 0 / 6.5-6.9 Hz |
+| learned, growth off | 0.48 / 18.9 Hz | 0.205 | 10.7 / **1.1 Hz** | 6.8 / **4.8 Hz** | RISE 0.04, clock 7.2 Hz (cue ignored) |
+| learned + growth (3 seeds, +78 newborns) | **2.3-3.5** / 20.0 Hz | **0.12-0.14** | | | gated |
+| growth, newborns silenced | 0.37 / 18.1 Hz | 0.23 | | | |
+
+- Before the caretaker feeds, the cue means nothing: no value, no run / turn modulation, only exploration.
+- After them, a hungry body runs on while the cue strengthens and turns when it fades (bout clock 1.1 vs 4.8 Hz): learned klinokinesis. A sated body keeps the memory but ignores it.
+- Growth extends the learned value to fainter cues, i.e. detection from farther away (onset 0.12-0.14 vs 0.205). Silencing the newborns returns it to the no-growth level (0.23): learning through growth, on its third task.
+
+Hunger gate, second version (both bodies rebuilt): HUNGER near saturation (tonic 14 mV/ms) and a 14 mV/ms gate. It now switches on below a reserve of about 0.35, not 0.5 (measured 26 Nov; see "The hunger threshold" under the foraging trials). With tonic 8 the Keenon's HUNGER reached only 9.8 Hz (its template keeps active dendrites), and a sated Keenon still ran on rising cues (bout clock 3.1 Hz up vs 7.5 Hz down). Re-measured, frozen tests after six caretaker feeds:
+
+| body / network | hungry: bout clock while cue rises / falls | sated: rising / falling | cue at which V passes 2 Hz |
+|---|---|---|---|
+| hexapod, growth off | **1.0 / 4.7 Hz** | 7.7 / 7.4 Hz (ignored) | 0.205 |
+| hexapod, growth (seed 7, +78) | 0.4 / 3.0 Hz | 7.2 / 6.7 Hz | **0.12** |
+| hexapod, growth, newborns silenced | 1.6 / 5.8 Hz | 7.1 / 7.3 Hz | 0.23 |
+| Keenon T8, growth off | **0.5 / 6.2 Hz** | 5.3 / 5.4 Hz (ignored) | 0.145 |
+| Keenon T8, growth (seed 7, +80) | 0.0 / 1.0 Hz | 5.4 / 5.9 Hz | **0.063** |
+| Keenon T8, growth, newborns silenced | 0.8 / 6.1 Hz | 5.3 / 5.4 Hz | 0.145 |
+
+- Naive networks (before any feed): no RISE / FALL, the same bout clock on rising and falling cues (5.2-6.3 Hz), on both bodies.
+- The Keenon runs the archetype explorer with spontaneous turn bouts (`--explore 1`) and the forage block (`--forage 1`); the learner fields now cover both learners (`aarnn_circuit.learner_fields`, `growth_niche_fields` with CS_ and CF_ parents).
+
+Closed loop, first run (900 s, care until 400 s, endurance 160 s; `target/qa/forage/hex/walk_*_v1`):
+- Both robots wedged against the slalom post 0.30 m from the dock from the start: the dock had been placed by centre distance to the furniture.
+- The dock is now placed by edge clearance (hexapod: (-0.78, -0.26), 0.38 m from the nearest solid edge; records regenerated).
+- Rerun (900 s, care until 400 s, default endurance; first hunger gate):
+  - no growth and naive (bit-identical) walked into slalom post 3 (0.16 m from its centre) by 100 s and stayed there. 1.5 m from the dock they never sensed it (cue <= 0.05) and were exhausted at 488 s.
+  - with growth (seed 7) the robot wandered: it reached the dock once at 87 s and after the caretaker came within 0.43 m (cue 0.66), but was exhausted at 494 s, 60 s after its hunger began.
+  - The hexapod habitat tests its post blindness (the HC-SR04 cone misses posts) more than its foraging. Closed-loop foraging moves to the Keenon T8 in the open room (dock (-1.05, -0.9), cue field 1.05 m).
+
+Keenon T8, closed loop, first round (900 s, care until 400 s; `target/qa/forage/keenon/walk_*_v1`; from 400 s):
+
+| network | dock arrivals | charging | exhausted at | survived after care |
+|---|---|---|---|---|
+| learned, growth off | 1 | 1 s | 556 s | 156 s |
+| naive (plasticity off) | 2 | 2 s | 591 s | 191 s |
+| learned + growth (seed 7) | 12 | 19 s | 780 s | 380 s |
+
+- The learned robots found the dock: growth off 9.9 s after its hunger began; growth 7.7 s and 36.6 s after its two hunger episodes.
+- But on every arrival the base kept rolling at 0.13-0.28 m/s, grazed the pad's edge (0.38-0.46 m from its centre against a 0.51 m reach) and left within seconds.
+- The feeding reflex had stopped only the forward command (MLR), while the turn cells (ARTR, RS) drive the Keenon's wheels directly.
+- Feeding now halts locomotion as a whole (`add_learned_foraging(..., halt=[RS_l, RS_r, ARTR_l, ARTR_r])`, a worm dwelling on food).
+
+Second round (feeding halts forward and turn drive; `walk_*_v2`; from 400 s):
+
+| network | reserve at 400 s | arrivals | charging | hunger episodes that reached the dock | exhausted at |
+|---|---|---|---|---|---|
+| learned, growth off | 0.55 | 0 | 0 s | 0 of 1 | 499 s |
+| naive | 0.99 | 6 | 8 s | 1 of 1 (34 s) | 665 s |
+| growth, seed 5 | 0.59 | 5 | 7 s | 2 of 2 (8, 43 s) | 584 s |
+| growth, seed 7 | 0.78 | 21 | 29 s | **4 of 4** (5, 22, 50, 74 s) | **834 s** |
+
+- The growth robots seek the dock when hungry.
+- Survival is confounded by the reserve each run had when care ended (0.55-0.99). Single runs; the comparison is not yet conclusive.
+- Charging was still ~1.4 s per arrival. The trace shows why: the wheels stop within 0.3 s of arriving, then the stall reflex (STALL) reads the stopped base as blocked, and REV drives all four wheels backward at -0.7 about a second later, off the pad.
+- Feeding now also silences STALL and REV.
+
+Third round (feeding also silences STALL and REV; `walk_*_v3`):
+- Every robot that reached the dock stayed on it.
+- Cause: intake flowed whenever the reserve was below full. At full, intake stopped and the walk resumed. One wheel turn drained the reserve a fraction below full, intake restarted, and feeding halted the robot again, so it never left the pad.
+- Fix (`needs-v1`, `refill_start_fraction`, default 0.9): intake starts only below 0.9 of full and then continues to full, or until the body leaves the source. A full body walks off and explores again.
+
+Fourth round (refill hysteresis; `walk_*`, 25 Nov; `aarnn-mujoco --needs-report TRACE --from-s 400`):
+
+| network | reserve at 400 s | arrivals | at the dock / charging | lowest reserve | hunger episodes (time to the dock) |
+|---|---|---|---|---|---|
+| learned, growth off | 0.86 | 10 | 76 s / 52 s | 0.56 | none |
+| naive (plasticity off) | 1.00 | 7 | 67 s / 46 s | 0.24 | 1, reached (50.5 s) |
+| growth, seed 7 | 0.86 | 12 | 79 s / 53 s | 0.58 | none |
+| growth, seed 5 | 0.85 | 4 | 53 s / 42 s | 0.19 | 3: reached (59.4, 26.6 s), the third still open at 900 s |
+
+- All four survive to 900 s. Charging now lasts the full refill (42-53 s in 4-12 visits, against ~1.4 s per visit before).
+- **This round does not test seeking.** Every robot first reaches the dock at 13.5 s, on the same path. The dock lies on the room's habitual route, so the robots recharge in passing. Growth off and growth seed 7 never got hungry after care.
+- A fair test needs releases away from the dock with the robot hungry: see "Foraging trials" below.
+
+#### Foraging trials: hungry releases away from the food (26 Nov)
+
+Trial mode in the MuJoCo adapter (`world.rs`, `struct Release`):
+- `NM_MUJOCO_RELEASE_S` (period), `NM_MUJOCO_RELEASE_FROM_S` (first release), `NM_MUJOCO_RELEASE_ENERGY` (reserve at release), and `NM_MUJOCO_RELEASE_PLACES="x,y,yaw[,z];..."` (used in order).
+- At each release the free root is put upright at the next place, velocities zeroed and the reserve reset. Joints and the brain carry over: the network keeps everything it learned.
+- The trace records `needs.releases`. `aarnn-mujoco --needs-report TRACE --from-s 400` times each trial to the first arrival at a source and prints the share reached, the median time, and the mean with each miss counted as the full window.
+
+Keenon protocol:
+- Care until 400 s, then 12 releases.
+- Six places 1.5-1.8 m from the dock (1.4-1.7 cue-field radii), each used twice.
+- The robot always faces away from the dock (180 degrees) or sideways (+-90 degrees), never toward it.
+- Control: the learned growth network (seed 7) released sated (reserve 1.0) at the same places.
+
+**The hunger threshold.** The first round reset the reserve to 0.45, just under the circuit's nominal 0.5. Measured open loop (`target/qa/forage/*/hunger_curve`, reserve held 6 s per level), HUNGER is silent until the reserve falls below 0.40 on every body:
+
+| reserve | 0.45 | 0.40 | 0.35 | 0.30 | 0.20 |
+|---|---|---|---|---|---|
+| Keenon T8 HUNGER / SATED (Hz) | 0 / 18.6 | 0 / 15.5 | 3.2 / 8.6 | 17.6 / 2.4 | 19.0 / 0 |
+| Drosophila | 0 / 18.6 | 0 / 15.5 | 3.2 / 8.6 | 17.6 / 2.4 | 19.0 / 0 |
+| zebrafish | 0 / 15.3 | 2.8 / 9.9 | 16.2 / 4.1 | 18.7 / 1.0 | 19.0 / 0 |
+
+- The SATED relay still fires 15-19 Hz at reserves of 0.40-0.50. The second hunger gate (tonic 14, inhibition 24) moved the switch from 0.5 down to about 0.33.
+- So a release at 0.45 left the robot sated for the first 20-30 s of each trial, until the drain took the reserve below 0.35.
+
+Round 1, released at 0.45 and therefore mostly sated (`trials_mild`; stopped after 4-9 trials once the threshold was found):
+
+| network | trials reached | median time to the dock | mean, misses counted as 50 s |
+|---|---|---|---|
+| learned, growth off | 5 of 9 | 6.6 s | 26.6 s |
+| naive | 5 of 9 | 6.9 s | 26.4 s |
+| growth, seed 7 | 3 of 5 | 18.2 s | 32.6 s |
+| growth, seed 5 | 3 of 5 | 21.5 s | 30.1 s |
+| growth seed 7, sated | 3 of 4 | 31.0 s | 30.2 s |
+
+- As expected with hunger off, the learned and naive robots reach the dock equally often: the learned run / turn modulation is gated by hunger.
+- Round 2 releases every body at 0.30 (HUNGER 17-19 Hz from the start), every 40 s (the fly every 36 s, because it drains fastest).
+
+How the robots moved (`--needs-report` now also reports per trial, from the root pose and the source positions in the trace header):
+- approach speed: the fall in distance to the dock per second before arrival;
+- heading error to the dock (90 degrees = no preference);
+- turn rate while getting nearer vs farther. This is measured by position, because the cue sensors depend on bearing and turning alone makes them rise.
+
+| round 1 (0.45) | approach | heading error | turn rate nearer / farther |
+|---|---|---|---|
+| growth off | +0.108 m/s | 80 deg | 20.0 / 17.8 deg/s |
+| naive | +0.107 m/s | 79 deg | 18.9 / 16.0 deg/s |
+| growth, seed 7 | +0.081 m/s | 82 deg | **18.5 / 21.2** deg/s |
+| growth, seed 5 | +0.082 m/s | 78 deg | **15.2 / 19.4** deg/s |
+| growth seed 7, sated | +0.092 m/s | 71 deg | 19.0 / 16.8 deg/s |
+
+- Only the two growth learners turn more while moving away from the dock than toward it: klinokinesis in closed loop. The effect is small. Naive, growth off and sated turn more while approaching.
+- The misses show the limit of bout timing alone. In one, the robot ran past at 0.3 m/s, 0.59 m from the dock centre (reach 0.51 m), with its left cue at 0.83, and drove on. Nothing in the circuit steers toward the stronger side.
+
+Round 2, hungry releases (reserve 0.30, 12 trials every 40 s from 400 s; `keenon/trials`, `report.txt`):
+
+| network | trials reached | median | mean, misses = 40 s | approach | heading error | turn rate nearer / farther |
+|---|---|---|---|---|---|---|
+| learned, growth off | 3 of 12 | 29.5 s | 35.6 s | +0.034 m/s | 89 deg | 15.7 / 15.3 deg/s |
+| naive | **9 of 12** | 6.5 s | **18.7 s** | +0.136 m/s | 71 deg | 17.5 / 13.6 deg/s |
+| growth, seed 7 | 6 of 12 | 20.1 s | 29.7 s | +0.057 m/s | 88 deg | **15.9 / 19.8** deg/s |
+| growth, seed 5 | 6 of 12 | 31.8 s | 35.0 s | +0.023 m/s | 89 deg | **15.0 / 21.9** deg/s |
+| growth seed 7, released sated | 8 of 12 | 16.7 s | 24.2 s | +0.092 m/s | 80 deg | 20.1 / 17.8 deg/s |
+
+- **Learned klinokinesis alone does not get the robot to the dock.** The naive network reaches it most often, and the same growth network does better sated than hungry.
+- The learned effect is real and replicates across both rounds and both seeds: hungry growth learners turn 25-46 % more while moving away from the dock than toward it. No other network does.
+- But in this room the outcome of a trial is decided in its first seconds, by which way the robot's spontaneous turn goes after release.
+  - Example, the 440 s release with the dock 90 degrees to the right (right cue 0.34, left 0.04): the naive robot happened to turn right and docked in 4 s. The growth-off learner turned left; its cue fell to 0 and it drove on for 8 s before its next bout.
+  - Extra turning when the value falls cannot undo a wrong first turn quickly. In open floor it costs travel, so hungry learners cover less ground than sated ones.
+- The misses are not exhaustion: no robot ran out, because each release resets the reserve.
+
+**Learned steering (klinotaxis)**, `add_learned_foraging(..., steer=True)`, Keenon `--forage-steer 5` (`target/qa/forage/keenon_steer`):
+- V_l / V_r: one value cell per side, taught by FEED like V, each learning through silent plastic synapses from that side's cue bands.
+- STEER_l / STEER_r: V_l - V_r and V_r - V_l, gated by HUNGER, silenced while feeding. Each drives a graded wheel push-pull toward its side.
+- The value is learned; only the sensorimotor wiring is innate, as a worm's head-swing comparison or a fly's bilateral antennal comparison.
+
+Open loop (`keenon_steer/steer_openloop.py`; six caretaker feeds, then frozen 8 s blocks):
+
+| reserve, cue left / right | naive: STEER_l / STEER_r | learned: V_l / V_r | learned: STEER_l / STEER_r |
+|---|---|---|---|
+| 0.30, 0.60 / 0.10 | 4.4 / 3.8 Hz | 13.5 / 0.3 Hz | **19.8 / 0.0 Hz** |
+| 0.30, 0.10 / 0.60 | 4.2 / 4.8 Hz | 0.3 / 13.5 Hz | **0.0 / 19.8 Hz** |
+| 0.30, 0.35 / 0.35 | 4.5 / 4.5 Hz | 5.7 / 5.7 Hz | 13.7 / 13.7 Hz (cancel) |
+| 0.95, 0.60 / 0.10 | 0 / 0 | 13.5 / 0.3 Hz | 2.7 / 0.0 Hz |
+
+- Naive, the cue does nothing: the value cells are silent and the steering cells sit at their symmetric hungry baseline, which cancels at the wheels.
+- Learned and hungry, the robot turns toward the side whose cue predicts the dock. Sated, the turn is almost gone (2.7 Hz).
+
+Closed loop, the same hungry releases as round 2 (reserve 0.30, 12 trials every 40 s; `keenon_steer/trials`):
+
+| network (with learned steering) | trials reached | median | mean, misses = 40 s | approach | heading error |
+|---|---|---|---|---|---|
+| learned, growth off | **12 of 12** | **4.6 s** | **9.5 s** | +0.228 m/s | 64 deg |
+| naive (same network, plasticity off) | 7 of 12 | 23.1 s | 27.2 s | +0.086 m/s | 83 deg |
+| growth, seed 7 | **12 of 12** | 11.0 s | 16.1 s | +0.128 m/s | 83 deg |
+
+- **This is the closed-loop proof of learned seeking.** The two networks differ only in whether they learn. The learned robot found the dock in every trial, 3x faster on average.
+- With growth (seed 7) the learner also docked in every trial, but more slowly than without growth (mean 16.1 s against 9.5 s). Growth widens the learned cue range in open loop (detection from 0.063 instead of 0.145); here that does not translate into faster docking. Its earlier, wider value may start the steering turn from farther away, where the bilateral difference is small. One seed only.
+- The naive robot's 7 arrivals are the exploration baseline (round 2: naive 9 of 12, growth off 3 of 12 without steering).
+- After its first feeds the learned robot docked 13 times after care and was 0.94 full at the end; the naive one docked 7 times.
+- Steering replaces nothing innate. Feeding, hunger and exploration are unchanged; what the robot learned from the caretaker's feeds is which way to turn.
+
+Fish and fly (`--explore 1 --forage 1` on `build_zebrafish_swim_network_json.py` / `build_drosophila_walk_network_json.py`; cells placed by `layout_designed_circuit.forage_rule`: hypothalamus, vagal lobe / SEZ, posterior tuberculum / PAM, ventral striatum / appetitive MBON, olfactory bulb / antennal lobe), open loop, growth off:
+
+| body | hungry: bout clock rising / falling | sated: rising / falling | cue at which V passes 2 Hz |
+|---|---|---|---|
+| zebrafish | **0.9 / 7.4 Hz** | 5.9 / 6.0 Hz | 0.19 |
+| Drosophila (BANC walk) | **0.5 / 6.2 Hz** | 5.3 / 5.4 Hz | 0.145 |
+
+- Zebrafish with growth (seed 7, +80 newborns): V passes 2 Hz at cue **0.112** (no growth 0.19); hungry bout clock 0.3 Hz rising / 3.1 Hz falling; sated 6.2 / 6.0 Hz. With the newborns silenced: 0.20, back to the no-growth level.
+- Drosophila with growth (seed 7, +80): V passes 2 Hz at cue **0.097** (no growth 0.145); hungry bout clock 0.15 / 2.4 Hz; sated 5.2 / 5.8 Hz. With the newborns silenced: 0.145.
+- Growth extends the learned food / dock value to fainter cues on all four bodies tested, and silencing the newborns removes the gain each time:
+
+  | body | no growth | growth | newborns silenced |
+  |---|---|---|---|
+  | hexapod | 0.205 | 0.12-0.14 (3 seeds) | 0.23 |
+  | Keenon T8 | 0.145 | 0.063 | 0.145 |
+  | zebrafish | 0.19 | 0.112 | 0.20 |
+  | Drosophila | 0.145 | 0.097 | 0.145 |
+
+- The block and its bout clock are identical on every body, so in open loop the fly matches the Keenon closely.
+- The worm has no designed hindbrain to attach the block to, and no growth. It learns in its own connectome instead (next section).
+
+Fish and fly with learned steering (`--forage-steer`: fish 2, fly 3; `target/qa/forage/{fish,fly}_steer`):
+- Wiring, innate:
+  - fish: STEER_l drives the right tail motors and STEER_r the left ones, so the tail bends toward the steering side;
+  - fly: each STEER cell inhibits its own side's coxa channels, so the fly turns toward that side.
+- Open loop (six caretaker feeds, then frozen 8 s blocks; `ol.log`). Hungry (reserve 0.30), cue 0.60 on one side and 0.10 on the other:
+
+  | body | naive: STEER toward / away from the cue | learned: V toward / away | learned: STEER toward / away | learned, sated (0.95): STEER toward |
+  |---|---|---|---|---|
+  | zebrafish | 2.6 / 2.3 Hz | 8.1-8.6 / 0.1 Hz | **18.8 / 0.0 Hz** | 0.0 Hz |
+  | Drosophila | 4.2-4.8 / 3.8-4.2 Hz | 13.6 / 0.3 Hz | **19.8 / 0.0 Hz** | 2.7 Hz |
+
+Closed loop, hungry releases. Care until 400 s; then 12 releases (fish every 40 s, fly every 36 s), each 0.18-0.24 m from the nearest prey, never facing it, at reserve 0.30, with the brain persisting:
+
+| zebrafish network (with learned steering) | trials reached | median | mean, misses = 40 s | approach | heading error |
+|---|---|---|---|---|---|
+| learned, growth off | **10 of 12** | **4.3 s** | **10.9 s** | +0.037 m/s | 52 deg |
+| naive (same network, plasticity off) | 5 of 12 | 6.2 s | 28.8 s | +0.010 m/s | 110 deg |
+| growth, seed 7 | **12 of 12** | 5.9 s | **6.7 s** | +0.036 m/s | 55 deg |
+
+- The fish replicates the Keenon result. The learned fish reached prey twice as often as the naive one, and 2.6x faster on average. With growth it reached prey every time, and its mean time was the lowest of the three.
+- After care, the growth fish arrived 130 times, ended 0.95 full, and its reserve never fell below 0.21. The learner arrived 74 times (end 0.80) and the naive fish 31 times (end 0.69).
+- A miss is a fish stuck at the tank wall, not one swimming in the wrong direction:
+  - in both of the learner's misses, and in 5 of the naive fish's 7, the fish sat against the wall (x or y at +-0.36 m), or in a corner, for the rest of the window;
+  - it bobbed between the floor and mid-water (z 0.01-0.11 m), with approach at 0;
+  - arrival counts the horizontal distance, so depth cannot cause a miss.
+- The naive fish's first trial overlapped a caretaker feed by 0.55 s (fixed since: a release now ends any feed).
+
+Drosophila, first set (`fly_steer/trials`): learned 3 of 12 (mean 30.8 s), naive 1 of 12 (33.4 s), growth (seed 7) 3 of 12 (28.7 s). This set does not test learning:
+- 5 of its 12 release points lay 0.05-0.08 m from the arena wall (+-0.52 m), and the heading chosen to avoid facing the fruit pointed the fly at that wall.
+- In most trials the fly walked into the wall within 2-6 s and stayed against it, tilted 55 deg (up-vector 0.55-0.60), creeping along it at about 0.005 m/s until the window ended. Both networks did this.
+- Path per trial: 0.1-0.5 m, against about 2 m in a free 36 s window.
+- The learner's first trial also overlapped the caretaker's last feed (fixed since).
+
+Drosophila, releases clear of the walls (`fly_steer/trials_open`, `run_fly_open_trials.sh`): 12 places 0.26-0.32 m from the nearest fruit, heading 110-130 deg off its bearing, at least 0.37 m of floor ahead (`fly_places_open.txt`); otherwise identical:
+
+| Drosophila network (with learned steering) | trials reached | median | mean, misses = 36 s | approach | heading error | windows touching a wall / time in contact |
+|---|---|---|---|---|---|---|
+| learned, growth off | 4 of 12 | 5.4 s | 25.8 s | +0.015 m/s | 98 deg | 9 of 12 / 43 % |
+| naive (plasticity off) | **8 of 12** | 7.4 s | **16.5 s** | +0.025 m/s | 82 deg | 5 of 12 / 6 % |
+| growth, seed 7 | 4 of 12 | 5.9 s | 25.9 s | +0.015 m/s | 96 deg | 9 of 12 / 14 % |
+
+- **The fly shows no learned seeking; the naive fly did best.** The learners walked straight to a wall within 5-14 s of release in 9 of 12 trials, heading 110-150 deg from the fruit, and stayed there for 20-30 s. The naive fly wandered onto fruit in about 7 s.
+- **The fly's learned steering does not turn it.** Turn rate while hungry and moving, by the left-right cue difference (from the trial traces):
+  - fly learner: -3 to -28 deg/s (a constant rightward drift) at every cue difference, as in the naive fly;
+  - zebrafish learner: +43 deg/s with the left cue 0.3 stronger and -68 deg/s with the right cue 0.3 stronger, so it turns toward the food (the naive fish shows no relation).
+  - The fly's STEER output cuts its own side's coxa strides (-3 mV/ms per channel). The touch escape showed that cutting strides does not turn this fly body against a wall.
+- Forced-steering test (`target/qa/forage/wall/steer_test`): STEER_l held on, sated fly released at the arena centre in 8 headings, net turn rate per 10 s (+ = left):
+
+  | fly | net turn rate | path per release |
+  |---|---|---|
+  | control (steering off) | mean -24 deg/s (-37 to -3) | 0.53-0.82 m |
+  | STEER_l on, the trials' strength (cut 3 mV/ms) | mean -12 deg/s (-27 to +4) | 0.39-0.71 m |
+  | STEER_l on, 4x (cut 12 mV/ms) | **mean +11 deg/s (+1 to +16, all 8 releases)** | 0.33-0.38 m |
+
+  - At the trials' strength the learned steering shifts the heading by only 12 deg/s, half the fly's drift. At 4x it shifts it by 35 deg/s, enough to turn left against the drift in every release, but the fly walks at half speed. Hence `--forage-steer 12` for the fly.
+  - Every fly drifts right at about 25 deg/s, a full circle every 14 s. This predates the foraging and touch blocks. ARTR alternates fairly (each side leads about half of the 5 s blocks), so the drift is probably in the gait; open.
+
+**Touch escape: fish and fly get off walls (26 Nov).** Both animals got stuck at walls: the fish in a tank corner, sinking, and the fly rearing against the arena wall.
+
+Why. Both already had an innate turn away from what their range rays see (rays -> the hindbrain RS cells). Open loop (`target/qa/forage/wall/wall_openloop.py`, rays held at wall values), with a wall ahead:
+- RS_l and RS_r both ran at 19.4 Hz in the fish and 19.9 Hz in the fly, so the two turns cancelled.
+- Each side's drive (the rays plus the learned anticipation cells LT, about 10 mV/ms) exceeded the 6 mV/ms mutual inhibition that should let only one side win.
+- The fish's bends cancelled and it held its head on the wall. The fly shortened every stride, stalled, and its front legs climbed the wall.
+
+The reflex, `aarnn_circuit.add_touch_escape` (builders: `--touch-escape 1`):
+- Touch:
+  - each touch channel has a relay (`TCH_<side>_<k>`);
+  - the relays of a side converge on a saturating touch cell (`TOUCH_l` / `_r` / `_f`, head-on to both sides);
+  - fish: a surface within 3 cm of the snout (head rays >= 0.9, the near field of the head's lateral line and trigeminal touch);
+  - fly: within 4.4 cm of the thorax (front rays within 60 deg of ahead >= 0.45, about 1 cm beyond the head: the antennae and front legs) and the thorax's own touch sensors.
+- Escape cells `ESC_l` / `ESC_r`:
+  - bistable with 30 mV/ms mutual inhibition, so one side fires, like the paired Mauthner cells in fish and the paired escape descending neurons in insects;
+  - head-on, ARTR's standing bias picks the side.
+- Each escape:
+  - excites its own side's RS (turn away);
+  - silences the opposite RS and the learned steering;
+  - fish: bends the tail on its own side, a C-bend;
+  - fly: pivots. The inner legs of the turn step backwards through AND cells (`REV_<leg>_<phase>`, on only while the leg's swing or stance cell and the escape both fire), as the moonwalker descending neurons do (Bidaye et al. 2014), while the outer legs walk on.
+- Feeding (FEED) silences the escape, so the fly can stand at the solid fruit. The fish's prey is invisible to its rays.
+- The touch cells decay slowly (fish 400 ms, fly 1000 ms; `--touch-tau`), so the turn carries on after contact ends.
+- Layout: Mauthner cells in rhombomere 4, escape descending neurons in the GNG, touch relays in the trigeminal ganglion and the AMMC.
+- Off by default: the complexity ladder stimulates the fish's rays at 0.9. Without the flag both builders reproduce their earlier networks exactly.
+
+Open loop, after the fix (both bodies): one escape cell fires for every wall and corner, on the side of the nearer wall. No escape fires in open water, and the turn cells are on as often as without the block (fish RS_l 17 %, fly 7 %; `wall/open_water.py`).
+
+Closed loop (`target/qa/forage/wall/closed/run.sh`): 8 releases every 15 s, sated, facing a wall head-on, at 30 deg or into a corner. Report: `aarnn-mujoco --wall-report TRACE --half-m H --contact-m C` (Rust; contact is the root within 2 cm of the wall for the fish, 4 cm for the fly):
+
+| body | releases touching a wall | time in contact | farthest from the wall after release | most tilted (up-z) |
+|---|---|---|---|---|
+| zebrafish, no escape | 6 of 8 (1 cleared) | 38 % | stuck at the wall in 7 of 8 | 0.80 |
+| **zebrafish, touch escape** | **0 of 8** | **0 %** | turns away at 3 cm; ends 0.16-0.28 m away | 0.69 |
+| Drosophila, no escape | 8 of 8 (0 cleared) | 36 % | 0.04-0.06 m: pinned, path 0.2 m per release | 0.50 (rears) |
+| Drosophila, escape, touch 400 ms | 2 of 8 | 0 % | 0.08-0.09 m: follows the wall, path 0.5-0.6 m | 0.86 |
+| **Drosophila, escape, touch 1000 ms** | 3 of 8 (0.2-0.3 s each) | **1 %** | **0.25-0.48 m in 7 of 8**, path 0.8-1.2 m | 0.50 (once) |
+
+Tried and rejected:
+- **Wiring each relay straight to ESC.** The fly has 6 relays per side, which beat the mutual inhibition, so both escapes fired. Hence the saturating per-side touch cells.
+- **Turning by cutting the inner strides.** With its head on the wall, the outer legs' forward push pressed that side into the wall. Hence the backward-stepping pivot. The inner front and hind legs reverse; the inner middle leg kept stepping forward, although it is wired like the others.
+- **A short escape (touch decay 10 ms).** The fly let go as soon as its antennae cleared the wall, crept back and touched again, holding a fixed 37 deg angle: a 1.7 cm back-and-forth with no rotation.
+- **A more decisive turn decision (RS mutual inhibition 6 -> 20).** In open water it held RS_l on 75 % of the time in the fish (17 % before) and 32 % in the fly (7 %), so the body circled.
+- **A self-sustaining escape (a tonic inside ESC's bistable band).** At rest the escape cells leaked 1-2 Hz and their lead made it asymmetric, with the same circling bias.
+
+Foraging trials with the touch escape (`run_touch_trials.sh`, `target/qa/forage/{fish,fly}_touch/trials`): the steering trials' protocol and places, including the fly's original wall-adjacent releases. The fly's learned steering is 4x stronger (`--forage-steer 12`; see the forced-steering test above).
+
+Zebrafish (`fish_touch/trials`, touch decay 400 ms; the steering trials without the escape in brackets):
+
+| zebrafish network (learned steering + touch escape) | trials reached | median | mean, misses = 40 s | heading error | after care: arrivals, lowest / end reserve |
+|---|---|---|---|---|---|
+| learned, growth off | **12 of 12** (10) | **5.0 s** (4.3) | **5.5 s** (10.9) | **39 deg** (52) | 101, 0.25 / 0.86 |
+| naive (plasticity off) | 10 of 12 (5) | 16.8 s (6.2) | 19.8 s (28.8) | 73 deg (110) | 46, 0.10 / 0.73 |
+| growth, seed 7 | 9 of 12 (12) | 7.8 s (5.9) | 16.7 s (6.7) | 62 deg (55) | 79, 0.10 / 0.63 |
+
+- **No fish touched a wall in any of the 36 trials.** Without the escape the head rays read a wall (>= 0.9) for up to 86-99 % of a window; with it, for 0-2 % (learner and naive fish).
+- **The learned fish reached prey in every trial, 3.6x faster on average than the naive fish,** with its heading 34 deg closer to the prey. The naive fish's misses had mostly been wall trapping, so it now reached 10 of 12, but it still took 3x longer (median 16.8 s against 5.0 s).
+- **The growth fish got worse: 3 misses** (released at 400, 480 and 600 s).
+  - This fish lives on the tank floor: its root was below 5 cm for 62-88 % of every window, and for 58-89 % in the run without the escape. Floor-dwelling is a trait of the grown network, not of the escape.
+  - In its three misses it circled slowly (0.036-0.041 m/s, 30-60 deg/s) on the floor about 4 cm from a wall. There its head rays read the wall in 9-19 % of samples, against 0-9 % in the trials it reached, so repeated escapes may have turned it in place.
+  - Without the escape the same floor-bound fish had reached every trial. One seed, 12 trials per network; open.
+
+Drosophila (`fly_touch/trials`, touch decay 1000 ms, steering 12 mV/ms; the first set's places, 5 of 12 near a wall; first set in brackets):
+
+| Drosophila network (learned steering 4x + touch escape) | trials reached | median | mean, misses = 36 s | heading error | windows touching a wall / time in contact | walking speed before arrival |
+|---|---|---|---|---|---|---|
+| learned, growth off | 9 of 12 (3) | 14.7 s | 21.0 s (30.8) | **60 deg** | 3 of 12 / 0 % | 0.013-0.051 m/s |
+| naive (plasticity off) | **10 of 12** (1) | **8.3 s** | **15.9 s** (33.4) | 74 deg | 6 of 12 / 0 % | 0.024-0.077 m/s |
+| growth, seed 7 | 4 of 12 (3) | 11.6 s | 27.8 s (28.7) | 71 deg | 0 of 12 / 0 % | 0.009-0.039 m/s |
+
+- **The escape freed the fly from the walls.** The same places that pinned it in the first set (3, 1 and 3 of 12 reached) gave 9, 10 and 4 of 12. Wall touches were brief: time in contact rounds to 0 % in every run (36 % without the escape).
+- **The stronger learned steering now turns the fly toward food.** Turn rate while hungry and moving, by the left-right cue difference (-0.3 = right cue stronger):
+
+  | fly | cue -0.3 | cue 0 | cue +0.3 |
+  |---|---|---|---|
+  | learner, steering 12 | -13 deg/s | 0 deg/s | +5 deg/s |
+  | growth, seed 7, steering 12 | -9 deg/s | +7 deg/s | +2 deg/s |
+  | naive | -15 deg/s | -15 deg/s | -8 deg/s |
+  | learner, steering 3 (`trials_open`) | -9 deg/s | -13 deg/s | -9 deg/s |
+
+  The learner also loses its rightward drift (0 deg/s at equal cues).
+- **It still does not beat the naive fly.** Its heading is 14 deg closer to the fruit, but it walks at about half the naive fly's speed and takes longer on average (21.0 s against 15.9 s). Steering by cutting strides slows the fly (the forced-steering test), and the learner's lost drift at equal cues suggests both sides' steering is partly on while hungry. A turn without the speed loss needs a steering output that turns the fly without shortening its strides, such as the escape's backward-stepping pivot; open.
+- The growth fly walked slowest (0.009-0.039 m/s) and missed 8 of 12 trials away from any wall, its approach close to 0.
+
+**Fly food steering by the pivot (26 Nov evening).** The fly's learned steering now turns it the way the touch escape does (`--forage-steer-mode pivot`; `cut`, the default, keeps the stride cut):
+- STEER_l (odour stronger on the left) drives the left legs' reversal AND cells (`REV_<leg>_<phase>`, shared with the escape). Those legs step backwards while STEER_l and their phase cell both fire, and the right legs walk on, so the fly turns left.
+- Each reversing swing also silences that leg's forward protraction (`REV_<leg>_sw -> D_<leg>_sw`, `--pivot-protract` 30 mV/ms), which would otherwise cancel the backward swing.
+- `--forage-steer` is now the STEER -> REV weight (mV/ms). Cut-mode builds are unchanged: the rebuilt `fly_touch` and `fly_steer` networks match the old ones exactly.
+
+Forced-steering test, as above (`target/qa/forage/wall/pivot_test`; STEER_l held on, sated fly at the centre, 8 headings):
+
+| fly | net turn rate (+ = left) | path per 10 s |
+|---|---|---|
+| control (steering off) | -24 deg/s | 0.53-0.82 m |
+| stride cut 12 mV/ms | +11 deg/s | 0.33-0.38 m |
+| pivot, weight 10, STEER fully on | **+43 deg/s (all 8)** | 0.22-0.23 m |
+| pivot, weight 10, STEER partly on (tonic 6) | +45 deg/s | 0.29-0.30 m |
+| pivot, weight 20, partly on | +39 deg/s | 0.19-0.21 m |
+| pivot, weight 5, fully on | +42 deg/s | 0.29-0.30 m |
+
+- The pivot shifts the heading by about 67 deg/s, twice the 4x stride cut, and it saturates: weight and STEER level barely change it.
+- While it is held on, the fly turns nearly in place. In foraging, a turn this fast should leave STEER on only briefly, until the cues balance, after which the fly walks at full speed.
+
+Foraging trials (`run_touch_trials.sh fly pivot` and `fly pivot5`; `fly_pivot` weight 10, `fly_pivot5` weight 5; touch escape on; same places and protocol as `fly_touch`):
+
+| Drosophila network | trials reached | mean, misses = 36 s | turn rate at cue -0.3 / 0 / +0.3 | walking speed before arrival |
+|---|---|---|---|---|
+| learned, pivot weight 10 | **0 of 12** | 36.0 s | -12 / +4 / +46 deg/s | 0.006-0.043 m/s |
+| naive, pivot weight 10 | 2 of 12 | 35.2 s | +1 / +2 / +1 deg/s | 0.008-0.022 m/s |
+| learned, pivot weight 5 | **0 of 12** | 36.0 s | -22 / -1 / +42 deg/s | 0.004-0.014 m/s |
+| naive, pivot weight 5 | 10 of 12 | 13.4 s | -12 / -13 / -13 deg/s | 0.045-0.075 m/s |
+| learned, stride cut 12 (above) | 9 of 12 | 21.0 s | -13 / 0 / +5 deg/s | about 0.035 m/s |
+
+- **The pivot turns the learned fly toward food,** about 4x the stride cut's cue dependence, and with no drift at equal cues.
+- **But it stops the fly reaching food.** While STEER is on, the fly turns nearly in place (0.004-0.04 m/s), so no learned fly reached fruit at either weight. The forced test above showed the same thing: a pivot held on gives a path of 0.2-0.3 m per 10 s.
+- **The pivot also stalls the naive fly at weight 10** (2 of 12, 0.01-0.02 m/s). The AND cells open at STEER release of about 0.2, so even the untrained steering's small resting release pivots the legs. At weight 5 (threshold about 0.4) the naive fly walks normally and reaches 10 of 12.
+- **Conclusion:** the stride cut stays the better food steering for foraging. A useful pivot needs a short, bounded turn followed by forward walking, for example the pivot gated by a turn-bout cell, or driven only by large value differences. This is open.
+- Growth (seed 7) networks also fail with the pivot: 0 of 12 at weight 10 and 1 of 12 at weight 5, at 0.005-0.047 m/s.
+
+For foraging builds use `--touch-escape 1` (fish `--touch-tau 400`, fly `--touch-tau 1000`). It stays off by default because the complexity ladder stimulates the fish's rays at 0.9.
+
+**C. elegans: learning to seek food in the connectome (26 Nov).** The worm keeps its imported wiring. It already senses food through its own channels: soluble taste reaches ASE / ASG / ASI / ADF, and the lawns' odour reaches AWA / AWC. The changes:
+- The caretaker's feed now reaches those senses. While it feeds, the worm's attractant taste and odour fields read 1 (food at the nose, `celegans_sensors`). Before, the feed only refilled the reserve, and the worm never experienced being fed.
+- Plasticity only at the identified sensory-interneuron synapses. Only the synapses from AWA, AWC and ASE onto AIY, AIA, AIB and AIZ learn (26 synapses, `aarnn_plastic_cells` with `pre_hidden`). This is where C. elegans food-odour and salt learning sits; locomotion circuits stay fixed.
+- Gated by the dopamine pool. The worm's dopaminergic cells (CEP, ADE, PDE) sense bacteria mechanically, which the habitat does not model, and their rates do not follow food here. The neuromodulator pools do: food raises dopamine through the sensory drives (1.42 between feeds, 1.69 while fed).
+  - New runtime knobs `aarnn_modulator_pool` / `_threshold` / `_ref`: without marked modulatory cells, plasticity runs at (pool level - threshold) / ref, clamped 0-3.
+  - With threshold 1.5 the gate is open 99 % of the time while fed and 6 % between feeds.
+  - Unit test `pool_gated_plasticity_follows_the_pool_level`.
+- The rule is STDP. Oja collapsed the spiking connectome's weights: its equilibrium is P(pre spike | post spike), about 0.01 at 5-10 Hz with 1 ms steps, so 6 feeds cut all 26 synapses by 60-70 % (`worm/ol_oja`). Hebb only counts spikes in the same 1 ms step.
+
+Open loop (`scripts/qa/celegans_forage_openloop.py`, `target/qa/forage/worm/ol_stdp`; 3 caretaker feeds, then frozen odour ramps from the habitat background 0.33 to 1, three times):
+
+| | before | after 3 feeds |
+|---|---|---|
+| AWA / AWC / ASE -> AIY (sum of weights) | 1.649 | 2.019 (+22 %) |
+| -> AIZ / AIB / AIA | 0.486 / 0.730 / 0.432 | 0.608 / 0.833 / 0.471 |
+| AIY at background / high odour | 7.4 / 8.2 Hz | 7.5 / 8.9 Hz |
+| AVB (forward command) at background / high odour | 8.6 / **6.9** Hz | 7.0 / **8.4** Hz |
+| RIA at background / high odour | 9.6 / 10.6 Hz | 10.1 / 12.0 Hz |
+
+- 20 of the 26 synapses strengthened. The largest gains were AWCL -> AIBL (x4.3), AWCR -> AIYL (+53 %), AWAR -> AIZR (+32 %) and AWCL -> AIYL (+31 %).
+- After learning, strong odour raises the forward command AVB instead of lowering it, so the worm runs on in food odour.
+- The effects are small against the cells' 5-12 Hz spontaneous activity, and this is one run.
+- Closed-loop trials, learner vs naive connectome (`worm/trials`): care until 400 s, then 12 releases every 60 s, 0.11-0.16 m from the nearest lawn edge, at reserve 0.30:
+
+  | connectome | trials reached | median | mean, misses = 60 s | approach |
+  |---|---|---|---|---|
+  | learner (pool-gated STDP) | 8 of 12 | 20.8 s | 35.1 s | +0.020 m/s |
+  | naive (plasticity off) | 8 of 12 | 25.0 s | 37.5 s | +0.003 m/s |
+
+  - **No learned seeking is measurable in closed loop.** Each run has one trial that does not count: it started on a lawn and was "reached" at 0 s (learner 1060 s; naive 400 s, where the caretaker's last feed was still running: these runs predate the fix that ends a feed at a release). Without them, both connectomes reached 7 of 11.
+  - The learner's mean approach is pulled up by one trial (+0.19 m/s at 460 s, reached in 1 s from 0.24 m), which the worm cannot crawl. Without it the two connectomes approach alike, at 0.002-0.008 m/s.
+  - At 0.005 m/s a lawn 0.1 m away takes about 20 s even on a straight path. The open-loop change (AVB +1.5 Hz with strong odour) is too small against the 5-12 Hz spontaneous activity to bend the path in 60 s.
+  - Next: more feeds before the trials, a stronger learning rate or more plastic synapses (e.g. onto AIY's targets RIA / AIZ -> SMB), and more trials.
+
+Hexapod without the slalom posts (adapter knob `NM_MUJOCO_REMOVE_GEOMS=habitat_slalom_`, `Physics::remove_geoms`: 4 posts moved out of the world):
+- Growth off and naive roam the east half and from ~300 s stay against the east wall (x ~ 1.08). They never come within 0.75 m of the dock and are exhausted at 488 s.
+- The drain is identical with and without posts: walking keeps the effort term saturated, so the energy timeline does not depend on the path.
+- Hexapod closed-loop foraging is limited by its wall and post wedging, not by what it learned.
+- Report: `aarnn-mujoco --needs-report TRACE --from-s 400` (Rust):
+  - feeds, arrivals and energy taken in;
+  - each hunger episode timed to the source, the caretaker or exhaustion.
+
+### Neuromodulators in synaptic transmission: audit and plan (25 Nov)
+
+The user's requirements (25 Nov):
+- Dopamine and serotonin, among others, set how well stimuli cross the synapse.
+- They must act in the bouton -> synapse -> dendrite calculation in every AARNN network.
+- The UI and the simulator both need a graph of global dopamine, serotonin and stimuli against synapse energy.
+- Food, light, heat and activity each affect these levels.
+- Their use depends on the depth tier auto-selected at the time.
+
+**What exists (audit, 25 Nov).** The transmission path does not use them.
+
+Modulators:
+- **What there is:** three global scalars, `Runner.neuromod_dopamine`, `neuromod_ach` and `neuromod_serotonin` (`src/runner.rs:1585-1587`).
+- **Update:** an EMA toward baseline plus gain x signal, clamped 0..3 (`runner.rs:11120-11236`).
+- **Defaults:** baselines 1.0 and every signal gain 0.0, so the levels never move. Only `network_nao.json` sets gains.
+- **Missing transmitters:** no noradrenaline or octopamine. C. elegans has octopamine/tyramine cell types whose transmitter identity is ignored.
+
+Where they act today:
+- **Plasticity:** DA/5-HT scales the learning rate (`runner.rs:10716-10724`, used at 16493).
+- **ACh, GPU only:** dynamic ACh scales postsynaptic gain in the OpenCL kernels only. The CPU filter uses the static `bio.acetylcholine_gain` (`runner.rs:2464-2485`, `src/aarnn/dynamics.rs:165-169`), so the CPU and GPU paths diverge.
+- **Volume transmission:** active cells whose type name contains "neuromod" or "vip" scale the total hidden input current. It is off by default and on in the C. elegans and Drosophila networks (`dynamics.rs:417-503`, `runner.rs:3434-3497`, 12593).
+- **Learner networks:** the LC teaching cell is a separate mechanism (`modulated_plasticity_gate`, `runner.rs:10225-10263`) that only scales the learning rate. `apply_learner` switches `neuromodulation_enabled` off on every type (`scripts/aarnn_circuit.py:1025`).
+
+The transmission path itself:
+- Release, `should_release` (`runner.rs:2639` -> `src/aarnn/plasticity.rs:337-374`), uses a global `p_release_default`. The per-synapse `Synapse.p_release` is unused.
+- Delay and attenuation (`src/aarnn/transmission.rs:143-201`) and short-term plasticity (STP) have no modulator term.
+- The morphology route sums `w * atten * stp_scale` (`runner.rs:12333-12362`, 12182-12198, 14248-14690, 2653).
+
+Depth tiers and drivers:
+- Depth >= 1 enables synaptic filters, STP and the neuromod gains. Depth >= 2 adds homeostasis and the metabolic update; depth >= 3 adds ATP fatigue.
+- The neuromod EMA, volume transmission and the LC gate are not depth-gated. The UI slider tooltip ("3: Homeostasis/neuromod") is wrong.
+- Auto depth is in `src/distributed.rs:10951-10988`.
+- No environmental drivers exist. `external_reward` (`src/bridge.rs:177`) is None from the MuJoCo adapter. Food, light and heat exist only as scene stimuli read by sensors.
+
+Telemetry:
+- There are no plots of modulators or synapse energy: the egui UI shows a text line and sliders; the web UI a checkbox.
+- `EngineActivity` (`src/engine.rs:85-95`) and `NetworkActivityResponse` (`proto/distributed.proto:277-295`) carry spikes only.
+- Synapse "energy" is `Synapse.stimuli` (0..1, `src/morphology.rs:658`). It is aggregated only in an `NM_TRACE` log line (`morphology.rs:8366-8376`).
+
+**Implemented (25 Nov, after the audit).** Neuromodulators now act on transmission in every AARNN network, gated by depth.
+
+Mechanism (`src/aarnn/neuromodulation.rs`, tested; wired in `src/runner.rs`):
+- **Levels:** global pools of dopamine (DA), serotonin (5-HT), noradrenaline (NA, new; octopamine/tyramine in invertebrates) and acetylcholine (ACh). Each relaxes toward baseline plus its drives; with nothing driving it, it stays at baseline.
+- **Drives** (each a 100 ms population rate, at most 1). Sensory drives are relative to `aarnn_neuromod_sensory_ref_rate_hz` (250 Hz; transducers fire up to ~500 events/s). Motor and modulatory-cell drives are relative to `aarnn_neuromod_ref_rate_hz` (50 Hz). Each pool follows its drive with its own time constant: DA 200 ms, 5-HT 1 s, NA 300 ms, ACh 100 ms.
+
+  | input | modulator |
+  |---|---|
+  | food sensing (taste, attractant odour) | DA +0.5, 5-HT +0.5 |
+  | light | 5-HT +0.5 |
+  | energy reserve (satiety / battery) | 5-HT +0.5 |
+  | heat (deviation of the thermosensors from their adapted rate, 30 s adaptation as AFD-like cells), noxious input | NA +0.5 each |
+  | sensory novelty (change from a 2 s mean) | NA +0.5 |
+  | motor activity | DA +0.3 |
+  | external reward | DA +1 |
+  | the network's own modulatory cells (dopaminergic, serotonergic, noradrenergic/octopaminergic, cholinergic by type or region name; the learners' LC cell) | their pool |
+
+  - Each body's sensory channels are tagged from its IO contract (`aarnn_circuit.sensory_modality`, written as `aarnn_sensory_modalities`). Older snapshots are classified from their connectome channel names at load.
+- **Postsynaptic efficacy (depth >= 1):** each cell's chemical synaptic drive, applied after the AMPA/NMDA/GABA filter and before the gap junctions, is multiplied by `1 + rDA (DA - 1) + r5HT (5-HT - 1) + rNA (NA - 1)`, clamped to 0.25-3.
+  - Receptor sensitivities are bio params, default DA +0.4 (D1-like), 5-HT -0.25 (5-HT1-like), NA +0.3.
+  - At depth 1 every cell uses the network default; from depth 2 each cell type uses its own (D2-like or 5-HT2-like types can set the sign).
+  - On the CPU filter path the dynamic ACh level now scales excitability, as the OpenCL filter already did; the CPU/GPU mismatch is closed.
+- **Presynaptic release (depth >= 2):** the bouton release probability is multiplied by the same form with DA +0.3, 5-HT -0.3 (5-HT1B autoreceptors), NA +0.2.
+- **Depth 0** (the minimal kernel all designed robot circuits use) has no neuromodulation.
+  - A no-growth Keenon learner rerun with the new probe reproduces last night's 60 s series exactly: 1200 / 1200 samples identical, both seeds.
+- **Learners:** `apply_learner` and the hexapod and NAO learner builders no longer switch neuromodulation off. It has no effect at depth 0; from depth 1, DA and 5-HT scale their learning rate.
+
+Telemetry and graphs:
+- **Sample:** `NeuromodSample`, recorded every 50 steps. It holds:
+  - the four levels;
+  - stimuli (sensory drive);
+  - synapse energy (chemical drive delivered per cell, after modulation);
+  - mean axon/dendrite ATP and the synapse activity trace when morphology exists;
+  - efficacy and release factor;
+  - the drives.
+- **Where it is published:**
+  - `EngineActivity.neuromod`;
+  - gRPC `NetworkActivityResponse.neuromod` (`NeuromodState`);
+  - web `/api/activity` field `neuromod`.
+- **Desktop UI (egui):** a "Neuromodulators" graph at the top right of the network view (checkbox "Neuromodulator graph"), for local, managed and cluster networks.
+- **Web UI:** a "Neuromodulators" panel next to the oscilloscope.
+- **Simulators:** `run_sim.sh` sets `NM_NEUROMOD_TRACE_DIR` (default `logs/sim_cluster_<pid>/neuromod`), so every MuJoCo, Webots, Unity, Unreal and Isaac run writes `<network>.neuromod.jsonl` beside its physics trace. `scripts/qa/plot_neuromod.py` draws:
+  - the levels;
+  - stimuli against synapse energy;
+  - the drives.
+  - No physics viewer draws it live: the physics service has no brain state, and that would need a protocol change.
+
+C. elegans (connectome, depth 5), open loop, 6 s blocks, all sensors at 0 except the block's modality at 0.9 (`scripts/qa/neuromod_stimulus_probe.py`, `target/qa/neuromod/celegans_bbc5`, plot `neuromod.png`):
+
+| block | DA | 5-HT | NA | efficacy | release | hidden rate with / without modulation |
+|---|---|---|---|---|---|---|
+| baseline | 1.18 | 1.07 | 1.08 | 1.08 | 1.05 | 5.06 / 4.62 Hz (+10 %) |
+| food (taste, attractant) | **1.67** | **1.57** | 1.14 | 1.17 | 1.06 | 5.79 / 4.83 Hz (+20 %) |
+| light | 1.18 | **1.57** | 1.10 | 0.96 | 0.90 | 4.69 / 4.86 Hz (-3 %) |
+| heat | 1.24 | 1.07 | **1.65** | 1.27 | 1.18 | 6.89 / 4.95 Hz (+39 %) |
+| noxious (repellents) | 1.18 | 1.12 | **1.69** | 1.25 | 1.16 | 6.74 / 4.92 Hz (+37 %) |
+
+- Food raises DA and 5-HT, light raises 5-HT and damps transmission, heat and noxious input raise NA and arousal.
+- The worm's own dopaminergic and serotonergic cells (CEP/ADE/PDE, NSM/ADF/HSN by type) and its motor activity hold DA near 1.18 even at baseline, so the network runs about 10 % more active than before at depth >= 1.
+- Motor output was silent in both runs under this open-loop input (all other channels at 0).
+- The table above is from the first build: one fast relaxation (about 20 ms per step), absolute heat and a 50 Hz reference for every drive.
+
+First closed-loop check, C. elegans in its MuJoCo habitat, 30 s, frozen anatomy (`target/qa/neuromod/celegans_cl`). The worm sat in the dark at its adapted temperature (heat channels about 0.53), with attractant odour at 0.35-0.38 and occasional taste:
+- All pools were pinned high (DA 1.80, 5-HT 1.60, NA 1.80; efficacy 1.41).
+  - The 50 Hz reference saturated the food drive.
+  - The heat channel's mid-range temperature reading was taken as heat.
+- With modulation the worm moved 2.3x as far (path 0.52 m against 0.23 m; net 0.117 against 0.067 m) on 1.7x the muscle activation.
+
+Fixes:
+- **Sensory reference:** 250 Hz for sensory drives.
+- **Heat:** driven by the thermosensors' deviation from their adapted rate.
+- **Dynamics:** per-pool time constants.
+- **Telemetry:** raw rates (`rates_hz`) added.
+
+After the fixes, the same 30 s closed-loop worm. Heat now uses the deviation from the temperature the body was born into, adapted over 30 s.
+
+| run | DA | 5-HT | NA | efficacy | release | net displacement | path | mean muscle activation |
+|---|---|---|---|---|---|---|---|---|
+| modulation off | 1 | 1 | 1 | 1 | 1 | 0.074 m | 0.252 m | 0.142 |
+| modulation on (first build, saturated) | 1.80 | 1.60 | 1.80 | 1.41 | 1.22 | 0.117 m | 0.519 m | 0.251 |
+| modulation on (calibrated) | 1.34 | 1.21 | 1.23 | 1.15 | 1.09 | 0.164 m | 0.388 m | 0.181 |
+
+- Calibrated drives: food 0.25, falling from 0.45 to 0.2 over the run as the worm moves down the odour gradient; activity 0.36; heat 0.15 (small temperature changes as it moves); novelty 0.05; light 0 (dark habitat).
+- Raw rates are in the trace (`rates_hz`): attractant cells ~62 Hz, thermosensors ~280 Hz, dopaminergic / serotonergic / octopaminergic-tyraminergic cells 5-7 Hz.
+- Neuromodulation makes this worm more active and travel about twice as far.
+- It does not yet steer it toward food: the food drive falls during the run. Learning to use the modulators (food -> DA as the teacher) is the learned-foraging work (F2).
+- Plots: `target/qa/neuromod/celegans_cl/neuromod_mod_v3.png` (closed loop), `target/qa/neuromod/celegans_bbc5_v2/neuromod.png` (open loop).
+- Desktop UI graph, captured by replaying the calibrated closed-loop worm trace into the UI on Xvfb (glow renderer): `target/qa/neuromod/ui_capture/frames/frame_000009.png` (panel crop `neuromod_panel_crop.png`).
+  - The UI snapshot carries the runner's last 64 samples, and the managed/replay path appends every new sample, so the curve stays complete when the UI renders slower than samples arrive.
+
+### Rust trace-replay videos and two new showcase videos (25 Nov)
+
+`aarnn-mujoco --replay TRACE --video OUT.mp4` (`adapters/mujoco/src/replay.rs`, viewer feature) renders a recorded lock-step trace in Rust. It replaces the Python `render_trace_video.py` for new videos.
+
+How it works:
+- **Posing:** each frame poses the body at the recorded `qpos` (new `Physics::set_qpos`) and renders through the native viewer at the requested size, on a virtual display (Xvfb).
+- **Overlays** use MuJoCo's own text and figures (`mjr_overlay` / `mjr_figure`, added to the bindgen allowlist):
+  - title, simulated time, and the energy needs (reserve, refill, caretaker feeding, source);
+  - `--neuromod FILE`: the runtime's `NM_NEUROMOD_TRACE`, drawn as DA / 5-HT / NA / ACh in percent above baseline. The brain clock is placed proportionally on the body's time axis.
+  - `--plot-sensor NAME,LABEL,A,B`: `A + B x` of a sensor channel;
+  - `--plot-near ...,THRESHOLD,WINDOW_S`: the running share of time below a threshold.
+- **Output:** raw RGB frames are piped into ffmpeg, with no intermediate images. 1280x720 renders at ~75 frames/s.
+- **Range gotcha:** MuJoCo widens a figure's y-range outward to the order of magnitude of its span (0.8-2.2 becomes 0-3), so the renderer picks ranges whose ends are multiples of it.
+
+New videos in `target/showcase-videos/` (README updated; `target/qa/showcase_v4/make_v4.sh neuromod|learning [capture]`):
+- **`neuromodulators_celegans.mp4`** (30 s): the C. elegans connectome closed loop with neuromodulation on and off, side by side, plus the Rust UI with its Neuromodulators panel.
+  - With modulation: DA about +35 %, 5-HT +20 %, NA +15 to +35 %, efficacy +15 %; the worm travels 0.16 m against 0.07 m.
+- **`hexapod_learns_with_growth.mp4`** (300 s at 5x): the hexapod on the fixed gait with growth (seed 7), re-recorded with energy needs. The trajectory is identical to the run without needs.
+  - Time within 0.4 m falls 15.4 -> 3.9 -> 0.1 % per 100 s, with three caretaker recharges.
+  - Growth-off on the same gait is still to be compared over 600 s pairs.
+
+### Spatial-mode calibration tool, 24 Nov
+
+`scripts/calibrate_spatial_network.py`:
+- `gains`: per-synapse route attenuation, delay and release probability, from the runtime;
+- `route`: divide each weight by its route gain;
+- `compare`: per-cell activity, point cells vs spatial, on a recorded trace;
+- `fit`: route correction plus per-cell tonic correction.
+
+Get-up network:
+- route gains: excitatory median 1.088, inhibitory 0.989 (routes explain an E/I ratio of ~1.1; the rest is compartment integration);
+- uncalibrated spatial vs point cells: mean difference 0.34 Hz, 11 of 304 cells off by more than 2 Hz (sensory relays and traces run 2-3 Hz hotter).
 
 ### Engine launch notes
 

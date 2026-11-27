@@ -476,6 +476,16 @@ impl BiologicalGrowthSpace {
             .iter()
             .find(|area| area.area_id == source_area_id)
             .ok_or(BiologicalSpaceError::UnknownArea(source_area_id))?;
+        // A newborn whose point lies inside its parent's own area stays in
+        // it, whatever other areas overlap there: neighbouring nuclei
+        // overlap at their margins, and checking the other areas first made
+        // every newborn of a compact nucleus ambiguous and refused it (the
+        // Freenove hexapod's mushroom-body learning cells, 24 Nov).
+        if source.volume.contains_with_margin(point, soma_radius) {
+            return Ok(BiologicalGrowthDecision::WithinArea {
+                area_id: source_area_id,
+            });
+        }
         let destination_areas = self
             .areas
             .iter()
@@ -489,11 +499,6 @@ impl BiologicalGrowthSpace {
             return Ok(BiologicalGrowthDecision::MigrateToArea {
                 from_area_id: source_area_id,
                 to_area_id: destination.area_id,
-            });
-        }
-        if source.volume.contains_with_margin(point, soma_radius) {
-            return Ok(BiologicalGrowthDecision::WithinArea {
-                area_id: source_area_id,
             });
         }
 

@@ -13,13 +13,16 @@
 // and speed limits. Self-collision is off, as in the reference.
 //
 // Sensor channels (250 at the default 8×6 retina; this body's legacy layout):
-//   [00-01]   2 sonar (L, R): SphereCast from chest, max 2.55 m
+//   [00-01]   2 sonar (L, R): NAO V6 chest transducers, 60 deg cone of
+//             91 rays, 0.20-0.80 m, specular loss above 22.5 deg incidence
+//             (the record's legacy-range contract)
 //   [02-04]   3 accelerometer XYZ
 //   [05-06]   2 gyro XY
 //   [07-09]   3 GPS XYZ (world position, metre-scale, normalised per axis)
 //   [10-12]   3 inertial (roll, pitch, yaw) normalised to [0,1]
 //   [13-20]   8 foot pressure (L4 + R4 sole corners: toe L/R, heel L/R)
-//   [21-22]   2 bumpers (chest L, chest R)
+//   [21-22]   2 bumpers (L foot, R foot): the NAO V6 toe switches, never
+//             pressed by standing on the floor
 //   [23-48]   26 joint positions, (q - lo)/(hi - lo), legacy joint order
 //             (see LegacySensorJoints; Hand = Phalanx1)
 //   [49-57]    9 joint-velocity channels (first nine of the above)
@@ -91,7 +94,13 @@ namespace NeuralMimicry
 
         [Header("Sonar")]
         [SerializeField, Tooltip("Max sonar range in metres.")]
-        private float _sonarMaxDist = 2.55f;
+        private float _sonarMaxDist = 0.80f;   // NAO V6: 0.20-0.80 m
+        private const float SonarMinDist = 0.20f;
+        private const float SonarIncidenceMaxDeg = 22.5f;
+        // MuJoCo torso frame (x fwd, y left, z up), Webots V5 Nao.proto.
+        private static readonly double[] SonarPosLeft = { 0.0477, 0.0416, 0.0509 };
+        private static readonly double[] SonarAxisLeft = { 0.8754, 0.4226, -0.2346 };
+        private const double SonarApertureRad = 1.04;
         [SerializeField] private LayerMask _sonarLayerMask = Physics.DefaultRaycastLayers;
 
         [Header("GPS Normalisation")]
@@ -138,8 +147,11 @@ namespace NeuralMimicry
         private Vector3          _prevVelocity;
         private float[]          _prevJointNorm;
 
-        // Bumper flags.
+        // Bumper flags (toe switches) and their probes [foot, left/right].
         private float _bumperL, _bumperR;
+        private Transform[,] _toeBumpers;
+        private const float ToeBumperRadius = 0.012f;
+        private static Vector3[] _sonarConeLeft;
 
         private bool _bodyBuilt;
 
@@ -213,22 +225,29 @@ namespace NeuralMimicry
             if (_readbackTex != null) UnityEngine.Object.Destroy(_readbackTex);
         }
 
-        private void OnCollisionEnter(Collision col) => HandleBumper(col);
-        private void OnCollisionStay(Collision col)  => HandleBumper(col);
-
-        private void HandleBumper(Collision col)
+        /// The record's sonar cone (scripts/embodiment_neural.py cone_rays):
+        /// the axis plus 5 rings to half the aperture, ring k with 6k rays,
+        /// in Unity torso-local axes (left sonar; the right one mirrors x).
+        private static Vector3[] SonarCone()
         {
-            // Chest-level bumper: a contact on the front of the torso box.
-            float halfHeight = (float)NmNaoOem.TorsoBoxHalfM[2];
-            foreach (ContactPoint cp in col.contacts)
+            if (_sonarConeLeft != null) return _sonarConeLeft;
+            var a = U(SonarAxisLeft).normalized;
+            var r = Mathf.Abs(a.y) < 0.9f ? Vector3.up : Vector3.right;
+            var u = Vector3.Cross(r, a).normalized;
+            var w = Vector3.Cross(a, u);
+            var rays = new List<Vector3> { a };
+            for (int ring = 1; ring <= 5; ring++)
             {
-                Vector3 local = transform.InverseTransformPoint(cp.point);
-                if (local.z > 0f && Mathf.Abs(local.y - (float)NmNaoOem.TorsoBoxPositionM[2]) < halfHeight * 0.6f)
+                float t = (float)(SonarApertureRad / 2 * ring / 5);
+                int per = 6 * ring;
+                for (int j = 0; j < per; j++)
                 {
-                    _bumperL = local.x < 0f ? 1f : _bumperL;
-                    _bumperR = local.x >= 0f ? 1f : _bumperR;
+                    float phi = 2f * Mathf.PI * (j + 0.5f * (ring % 2)) / per;
+                    rays.Add((Mathf.Cos(t) * a + Mathf.Sin(t) * (Mathf.Cos(phi) * u + Mathf.Sin(phi) * w)).normalized);
                 }
             }
+            _sonarConeLeft = rays.ToArray();
+            return _sonarConeLeft;
         }
 
         // ------------------------------------------------------------------ //
@@ -418,6 +437,24 @@ namespace NeuralMimicry
                 corner.transform.localPosition = U(corners[i]);
                 _footCorners[foot, i] = corner.transform;
             }
+            // Toe bumper switches (NAO V6: two at each toe, URDF y +0.019 /
+            // -0.014 on the left foot, mirrored): probes just ahead of the toe
+            // face, 6 mm and more above the sole.
+            if (_toeBumpers == null) _toeBumpers = new Transform[2, 2];
+            double sole = c[2] - h[2];
+            double inner = foot == 0 ? -0.014 : 0.014, outer = foot == 0 ? 0.019 : -0.019;
+            double[][] toes =
+            {
+                new[] { c[0] + h[0] + 0.004, foot == 0 ? outer : inner, sole + 0.018 },
+                new[] { c[0] + h[0] + 0.004, foot == 0 ? inner : outer, sole + 0.018 },
+            };
+            for (int b = 0; b < 2; b++)
+            {
+                var probe = new GameObject($"ToeBumper{b}");
+                probe.transform.SetParent(ankle, false);
+                probe.transform.localPosition = U(toes[b]);
+                _toeBumpers[foot, b] = probe.transform;
+            }
         }
 
         private void SetupHeadCamera(Transform headTransform)
@@ -455,11 +492,13 @@ namespace NeuralMimicry
             var sensors  = new float[BaseSensors + 4 * pixCount];
 
             // --- Sonar [00-01].
-            Vector3 chestPos = transform.position;
-            sensors[0] = SonarReading(chestPos + transform.TransformDirection(-0.03f, 0.04f, 0.05f),
-                                       transform.forward);
-            sensors[1] = SonarReading(chestPos + transform.TransformDirection( 0.03f, 0.04f, 0.05f),
-                                       transform.forward);
+            for (int side = 0; side < 2; side++)
+            {
+                float mirror = side == 0 ? 1f : -1f;   // Unity x = -MuJoCo y
+                Vector3 local = U(SonarPosLeft);
+                local.x *= mirror;
+                sensors[side] = SonarReading(transform.TransformPoint(local), mirror);
+            }
 
             // --- Accelerometer [02-04].
             float dt   = Time.fixedDeltaTime > 0f ? Time.fixedDeltaTime : 0.02f;
@@ -495,11 +534,19 @@ namespace NeuralMimicry
                     sensors[13 + foot * 4 + c] = corner != null && Touching(corner.position) ? 1f : 0f;
                 }
 
-            // --- Bumpers [21-22].
+            // --- Bumpers [21-22]: either toe switch of each foot.
+            for (int foot = 0; foot < 2; foot++)
+            {
+                bool pressed = false;
+                for (int b = 0; b < 2 && _toeBumpers != null; b++)
+                {
+                    Transform probe = _toeBumpers[foot, b];
+                    pressed |= probe != null && Touching(probe.position, ToeBumperRadius);
+                }
+                if (foot == 0) _bumperL = pressed ? 1f : 0f; else _bumperR = pressed ? 1f : 0f;
+            }
             sensors[21] = _bumperL;
             sensors[22] = _bumperR;
-            _bumperL    = Mathf.Max(0f, _bumperL - Time.fixedDeltaTime * 5f);
-            _bumperR    = Mathf.Max(0f, _bumperR - Time.fixedDeltaTime * 5f);
 
             // --- Joint positions [23..48]: (q - lo)/(hi - lo), q in radians.
             if (_prevJointNorm == null || _prevJointNorm.Length != NumJointPositionSensors)
@@ -530,9 +577,11 @@ namespace NeuralMimicry
             return sensors;
         }
 
-        private bool Touching(Vector3 point)
+        private bool Touching(Vector3 point) => Touching(point, _footContactRadius);
+
+        private bool Touching(Vector3 point, float radius)
         {
-            int n = Physics.OverlapSphereNonAlloc(point, _footContactRadius, _overlap, _footLayerMask,
+            int n = Physics.OverlapSphereNonAlloc(point, radius, _overlap, _footLayerMask,
                                                   QueryTriggerInteraction.Ignore);
             for (int i = 0; i < n; i++)
                 if (!_ownColliders.Contains(_overlap[i]))
@@ -540,13 +589,23 @@ namespace NeuralMimicry
             return false;
         }
 
-        private float SonarReading(Vector3 origin, Vector3 dir)
+        /// Nearest echo over the cone; a ray striking a surface more than
+        /// 22.5 deg from its normal is reflected away (no echo).
+        private float SonarReading(Vector3 origin, float mirror)
         {
             float d = _sonarMaxDist;
-            foreach (var hit in Physics.SphereCastAll(origin, 0.05f, dir.normalized, _sonarMaxDist,
-                                                     _sonarLayerMask, QueryTriggerInteraction.Ignore))
-                if (!_ownColliders.Contains(hit.collider) && hit.distance < d)
+            foreach (Vector3 ray in SonarCone())
+            {
+                Vector3 dir = transform.TransformDirection(new Vector3(ray.x * mirror, ray.y, ray.z));
+                foreach (var hit in Physics.RaycastAll(origin, dir, _sonarMaxDist, _sonarLayerMask,
+                                                       QueryTriggerInteraction.Ignore))
+                {
+                    if (_ownColliders.Contains(hit.collider) || hit.distance >= d) continue;
+                    if (Vector3.Angle(-dir, hit.normal) > SonarIncidenceMaxDeg) continue;
                     d = hit.distance;
+                }
+            }
+            d = Mathf.Max(d, SonarMinDist);
             return 1f - Mathf.Clamp01(d / _sonarMaxDist);
         }
 

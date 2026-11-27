@@ -319,9 +319,15 @@ fn vec_from_history_frames(history: &VecDeque<Array1<i8>>) -> Vec<Vec<i8>> {
 /// proposal: absent synapses cannot be created by plasticity and innate
 /// cells keep their weights. `terms(row, col)` returns
 /// `(pre, post, pre_trace, post_trace)`.
+/// Largest point-only connectome (connections) whose anatomy is
+/// reconstructed on import by default; `NM_POINT_RECONSTRUCTION_MAX_CONNECTIONS`
+/// overrides it (0 = no limit).
+const POINT_RECONSTRUCTION_DEFAULT_MAX_CONNECTIONS: usize = 50_000;
+
 fn matrix_plasticity_proposals(
     mat: &Array2<f64>,
     row_learns: impl Fn(usize) -> bool,
+    col_learns: impl Fn(usize) -> bool,
     terms: impl Fn(usize, usize) -> (f64, f64, f64, f64),
     rule: PlasticityRule,
     eta: f64,
@@ -332,7 +338,7 @@ fn matrix_plasticity_proposals(
             continue;
         }
         for (col, &current) in weights.iter().enumerate() {
-            if current == 0.0 {
+            if current == 0.0 || !col_learns(col) {
                 continue;
             }
             let (pre, post, pre_trace, post_trace) = terms(row, col);
@@ -393,6 +399,9 @@ pub struct SnapshotRuntimeState {
     pub neuromod_dopamine: f32,
     pub neuromod_ach: f32,
     pub neuromod_serotonin: f32,
+    /// Noradrenaline level; absent in snapshots written before 25 Nov 2026
+    /// (restored at baseline).
+    pub neuromod_noradrenaline: Option<f32>,
     pub resonance_level: f32,
     pub external_reward: f32,
     /// Explicit field values admitted at a logical boundary.  Defaults keep
@@ -696,6 +705,61 @@ pub fn decode_snapshot_metadata_with_profile_backfill(
     decode_snapshot_metadata_from_reader(&mut Cursor::new(payload.as_bytes()))
 }
 
+/// Stream a snapshot file's configuration and matrix dimensions without
+/// reading the (possibly multi-GB) payload into memory.
+pub fn decode_snapshot_metadata_from_path(
+    path: &std::path::Path,
+) -> anyhow::Result<SnapshotMetadata> {
+    let file = std::fs::File::open(path)?;
+    decode_snapshot_metadata_from_reader(std::io::BufReader::with_capacity(1 << 20, file))
+}
+
+/// Conservative estimate (bytes) of the memory a Runner built from this
+/// snapshot needs, for admission control before loading it. Dense f64
+/// matrices dominate: per hidden layer of n cells the recurrent and gap
+/// matrices (n^2 each, plus one more each for conduction delays and
+/// plasticity traces when enabled), the inter-layer forward/backward pairs,
+/// input and output projections; plus the transient decode of the payload
+/// (~3x its size) and anatomy (~4x the payload) when morphology is on.
+pub fn estimate_runner_bytes(meta: &SnapshotMetadata, payload_bytes: u64) -> u64 {
+    let mut sizes: Vec<u64> = Vec::new();
+    let first = if meta.input_rows > 0 {
+        meta.input_rows
+    } else {
+        meta.net.num_hidden_per_layer_initial
+    } as u64;
+    sizes.push(first.max(1));
+    for (rows, _cols) in &meta.hidden_weight_shapes {
+        sizes.push((*rows as u64).max(1));
+    }
+    let square_copies =
+        2 + u64::from(meta.net.use_aarnn_delays) + u64::from(meta.net.aarnn_plasticity_enabled);
+    let mut cells: u64 = 0;
+    for n in &sizes {
+        cells = cells.saturating_add(n.saturating_mul(*n).saturating_mul(square_copies));
+    }
+    for pair in sizes.windows(2) {
+        cells = cells.saturating_add(pair[0].saturating_mul(pair[1]).saturating_mul(2));
+    }
+    let sensory = meta.net.num_sensory_neurons as u64;
+    let outputs = meta.net.num_output_neurons.max(meta.output_rows) as u64;
+    cells = cells
+        .saturating_add(sizes[0].saturating_mul(sensory))
+        .saturating_add(sizes.last().copied().unwrap_or(0).saturating_mul(outputs));
+    let neurons: u64 = sizes.iter().sum();
+    let anatomy = if meta.net.use_morphology {
+        payload_bytes.saturating_mul(4)
+    } else {
+        0
+    };
+    cells
+        .saturating_mul(8)
+        .saturating_add(neurons.saturating_mul(4096))
+        .saturating_add(payload_bytes.saturating_mul(3))
+        .saturating_add(anatomy)
+        .saturating_add(64 * 1024 * 1024)
+}
+
 fn decode_snapshot_metadata_from_reader<R: Read>(reader: R) -> anyhow::Result<SnapshotMetadata> {
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
     let raw = SnapshotMetadataRaw::deserialize(&mut deserializer)?;
@@ -721,6 +785,31 @@ fn decode_snapshot_metadata_from_reader<R: Read>(reader: R) -> anyhow::Result<Sn
     if let Some(profile) = infer_snapshot_biomimicry_profile(&profile_source) {
         backfill_aarnn_biomimicry_profile_missing_fields(&mut net, profile, &present_net_fields);
     }
+    // Snapshots without explicit sensory modality tags: classify the
+    // connectome's sensory channel names (e.g. `celegans_s_08_light_left`)
+    // for the neuromodulator drives.
+    if net.aarnn_sensory_modalities.is_empty() {
+        if let Some(names) = profile_source
+            .get("connectome_labels")
+            .and_then(|labels| labels.get("sensory_nodes"))
+            .and_then(serde_json::Value::as_array)
+        {
+            if names.len() == net.num_sensory_neurons
+                && names.iter().all(serde_json::Value::is_string)
+            {
+                net.aarnn_sensory_modalities = names
+                    .iter()
+                    .map(|name| {
+                        crate::aarnn::neuromodulation::classify_sensory_modality(
+                            name.as_str().unwrap_or(""),
+                        )
+                        .tag()
+                        .to_owned()
+                    })
+                    .collect();
+            }
+        }
+    }
 
     Ok(SnapshotMetadata {
         net,
@@ -739,6 +828,22 @@ fn decode_snapshot_metadata_from_reader<R: Read>(reader: R) -> anyhow::Result<Sn
 #[cfg(test)]
 mod snapshot_payload_tests {
     use super::*;
+
+    #[test]
+    fn admission_estimate_scales_with_dense_layers() {
+        let mut meta = SnapshotMetadata::default();
+        meta.input_rows = 20_048; // FAFB-sized single hidden layer
+        meta.net.use_aarnn_delays = true;
+        meta.net.aarnn_plasticity_enabled = true;
+        let big = estimate_runner_bytes(&meta, 700 << 20);
+        // four dense 20k x 20k f64 matrices alone are ~12.9 GB
+        assert!(big > 12 * (1u64 << 30), "estimate {big}");
+        meta.input_rows = 78; // the NAO learning circuit
+        meta.net.use_aarnn_delays = false;
+        meta.net.aarnn_plasticity_enabled = false;
+        let small = estimate_runner_bytes(&meta, 2 << 20);
+        assert!(small < 256 * (1u64 << 20), "estimate {small}");
+    }
 
     #[test]
     fn owned_matrix_import_reuses_snapshot_buffer() {
@@ -1507,6 +1612,40 @@ pub struct Runner {
     pub neuromod_dopamine: f32,
     pub neuromod_ach: f32,
     pub neuromod_serotonin: f32,
+    /// Noradrenaline (octopamine/tyramine in invertebrates) level.
+    pub neuromod_noradrenaline: f32,
+    /// Slow mean of the sensory activity fraction (novelty reference).
+    pub neuromod_novelty_mean: f32,
+    /// Presynaptic release-probability factor of this step (1 below depth 2).
+    pub neuromod_release_factor: f64,
+    /// Drives of the most recent neuromodulator update.
+    pub neuromod_drives: crate::aarnn::neuromodulation::ModulatorDrives,
+    /// Latest telemetry sample and a bounded history for the UI graph.
+    pub neuromod_sample: crate::aarnn::neuromodulation::NeuromodSample,
+    pub neuromod_history: VecDeque<crate::aarnn::neuromodulation::NeuromodSample>,
+    /// Chemical synaptic drive delivered since the last sample (sum of |I|, cells).
+    neuromod_drive_sum: f64,
+    neuromod_drive_cells: usize,
+    /// Cached sensory modalities and modulatory-cell pools (rebuilt when sizes change).
+    neuromod_sensory_modalities: Vec<crate::aarnn::neuromodulation::SensoryModality>,
+    /// Number of `aarnn_sensory_modalities` tags the modality cache was built
+    /// from, so tags assigned after the cache was first built (a config
+    /// update, or after construction-time development steps) take effect.
+    neuromod_sensory_modality_tags: usize,
+    neuromod_cell_pools: Vec<Vec<Option<crate::aarnn::neuromodulation::ModulatorKind>>>,
+    /// `NM_NEUROMOD_TRACE` writer (jsonl of samples).
+    neuromod_trace: Option<std::io::BufWriter<std::fs::File>>,
+    neuromod_trace_checked: bool,
+    /// Name of this runner's neuromodulator trace under `NM_NEUROMOD_TRACE_DIR`
+    /// (set by the distributed worker to the network id).
+    pub neuromod_trace_label: Option<String>,
+    /// Smoothed (100 ms) population rates in Hz per cell: food, light, heat,
+    /// noxious, energy, all sensory, output, DA / 5-HT / NA / ACh cells.
+    neuromod_rate_ema: [f64; 11],
+    /// Drive increments followed with each pool's time constant.
+    neuromod_inc_ema: crate::aarnn::neuromodulation::ModulatorLevels,
+    /// Slow adapted thermosensory rate (Hz per cell).
+    neuromod_thermal_mean: f64,
     // Resonance state (AARNN)
     pub resonance_level: f32,
     // External reward channel (AARNN)
@@ -2435,6 +2574,445 @@ impl Runner {
         )
     }
 
+    /// Baseline modulator levels.
+    fn neuromod_baselines(&self) -> crate::aarnn::neuromodulation::ModulatorLevels {
+        crate::aarnn::neuromodulation::ModulatorLevels {
+            dopamine: self.net.aarnn_neuromod_baseline_dopamine.max(0.0) as f64,
+            serotonin: self.net.aarnn_neuromod_baseline_serotonin.max(0.0) as f64,
+            noradrenaline: self.net.aarnn_neuromod_baseline_noradrenaline.max(0.0) as f64,
+            acetylcholine: self.net.aarnn_neuromod_baseline_ach.max(0.0) as f64,
+        }
+    }
+
+    /// Current global modulator levels.
+    pub fn neuromod_levels(&self) -> crate::aarnn::neuromodulation::ModulatorLevels {
+        crate::aarnn::neuromodulation::ModulatorLevels {
+            dopamine: self.neuromod_dopamine.max(0.0) as f64,
+            serotonin: self.neuromod_serotonin.max(0.0) as f64,
+            noradrenaline: self.neuromod_noradrenaline.max(0.0) as f64,
+            acetylcholine: self.neuromod_ach.max(0.0) as f64,
+        }
+    }
+
+    fn neuromod_receptor_profile(
+        bio: &crate::config::AarnnBioParams,
+    ) -> crate::aarnn::neuromodulation::ReceptorProfile {
+        crate::aarnn::neuromodulation::ReceptorProfile {
+            dopamine: bio.dopamine_receptor_gain,
+            serotonin: bio.serotonin_receptor_gain,
+            noradrenaline: bio.noradrenaline_receptor_gain,
+        }
+    }
+
+    /// Rebuild the sensory-modality and modulatory-pool caches when the
+    /// population sizes change (load, growth, pruning).
+    fn rebuild_neuromod_caches(&mut self) {
+        #[allow(unused_imports)]
+        use crate::aarnn::neuromodulation::{
+            SensoryModality, classify_modulatory_cell, classify_sensory_modality,
+        };
+        let ns = self.net.num_sensory_neurons;
+        if self.neuromod_sensory_modalities.len() != ns
+            || self.neuromod_sensory_modality_tags != self.net.aarnn_sensory_modalities.len()
+        {
+            self.neuromod_sensory_modality_tags = self.net.aarnn_sensory_modalities.len();
+            let tags = &self.net.aarnn_sensory_modalities;
+            self.neuromod_sensory_modalities = (0..ns)
+                .map(|i| {
+                    if tags.len() == ns {
+                        return classify_sensory_modality(&tags[i]);
+                    }
+                    #[cfg(feature = "growth3d")]
+                    if let Some(node) = self.topo.sensory_nodes.get(i) {
+                        let label = format!(
+                            "{} {}",
+                            node.region_name.as_deref().unwrap_or(""),
+                            node.type_name.as_deref().unwrap_or("")
+                        );
+                        return classify_sensory_modality(&label);
+                    }
+                    SensoryModality::Other
+                })
+                .collect();
+        }
+        let stale = self.neuromod_cell_pools.len() != self.last_spk_h.len()
+            || self
+                .neuromod_cell_pools
+                .iter()
+                .zip(self.last_spk_h.iter())
+                .any(|(p, s)| p.len() != s.len());
+        if stale {
+            #[allow(unused_variables)]
+            let pool_of =
+                |l: usize, j: usize| -> Option<crate::aarnn::neuromodulation::ModulatorKind> {
+                    #[cfg(feature = "growth3d")]
+                    if let Some(node) = self.topo.layers.get(l).and_then(|layer| layer.get(j)) {
+                        return classify_modulatory_cell(
+                            node.type_name.as_deref().unwrap_or(""),
+                            node.region_name.as_deref().unwrap_or(""),
+                        );
+                    }
+                    None
+                };
+            let pools: Vec<Vec<_>> = self
+                .last_spk_h
+                .iter()
+                .enumerate()
+                .map(|(l, spikes)| (0..spikes.len()).map(|j| pool_of(l, j)).collect())
+                .collect();
+            self.neuromod_cell_pools = pools;
+        }
+    }
+
+    /// Environmental and cellular drives of the modulators for this step:
+    /// smoothed population rates of food / light / heat / noxious / energy
+    /// sensory cells, motor output, sensory novelty and the modulatory cells,
+    /// each relative to `aarnn_neuromod_ref_rate_hz`. Returns the level
+    /// increments over baseline.
+    fn update_neuromod_drives(
+        &mut self,
+        active_s: &[usize],
+        active_h: &[Vec<usize>],
+        output_active: usize,
+        reward: f32,
+    ) -> crate::aarnn::neuromodulation::ModulatorLevels {
+        use crate::aarnn::neuromodulation::{
+            DriveGains, ModulatorDrives, ModulatorKind, ModulatorLevels, SensoryModality,
+            drive_increments,
+        };
+        self.rebuild_neuromod_caches();
+        let dt_ms = self.lif.dt.max(1e-6);
+        let k = (dt_ms / 100.0).clamp(0.0, 1.0);
+        let to_hz = 1000.0 / dt_ms;
+        let ref_hz = f64::from(self.net.aarnn_neuromod_ref_rate_hz.max(1e-3));
+        let m_idx = |m: SensoryModality| match m {
+            SensoryModality::Food => Some(0),
+            SensoryModality::Light => Some(1),
+            SensoryModality::Heat => Some(2),
+            SensoryModality::Noxious => Some(3),
+            SensoryModality::Energy => Some(4),
+            SensoryModality::Other => None,
+        };
+        let p_idx = |p: ModulatorKind| match p {
+            ModulatorKind::Dopamine => 0,
+            ModulatorKind::Serotonin => 1,
+            ModulatorKind::Noradrenaline => 2,
+            ModulatorKind::Acetylcholine => 3,
+        };
+        let (mut tot, mut act) = ([0usize; 5], [0usize; 5]);
+        for m in &self.neuromod_sensory_modalities {
+            if let Some(i) = m_idx(*m) {
+                tot[i] += 1;
+            }
+        }
+        for &i in active_s {
+            if let Some(i) = self
+                .neuromod_sensory_modalities
+                .get(i)
+                .and_then(|m| m_idx(*m))
+            {
+                act[i] += 1;
+            }
+        }
+        let (mut ptot, mut pact) = ([0usize; 4], [0usize; 4]);
+        for (l, pools) in self.neuromod_cell_pools.iter().enumerate() {
+            for p in pools.iter().flatten() {
+                ptot[p_idx(*p)] += 1;
+            }
+            for &j in active_h.get(l).map(|a| a.as_slice()).unwrap_or(&[]) {
+                if let Some(Some(p)) = pools.get(j) {
+                    pact[p_idx(*p)] += 1;
+                }
+            }
+        }
+        let frac = |a: usize, t: usize| if t > 0 { a as f64 / t as f64 } else { 0.0 };
+        let n_out = self.net.num_output_neurons;
+        let inst = [
+            frac(act[0], tot[0]),
+            frac(act[1], tot[1]),
+            frac(act[2], tot[2]),
+            frac(act[3], tot[3]),
+            frac(act[4], tot[4]),
+            frac(active_s.len(), self.neuromod_sensory_modalities.len()),
+            frac(output_active, n_out),
+            frac(pact[0], ptot[0]),
+            frac(pact[1], ptot[1]),
+            frac(pact[2], ptot[2]),
+            frac(pact[3], ptot[3]),
+        ];
+        for (ema, x) in self.neuromod_rate_ema.iter_mut().zip(inst) {
+            *ema += k * (x * to_hz - *ema);
+        }
+        let r = self.neuromod_rate_ema;
+        let norm = |hz: f64| (hz / ref_hz).clamp(0.0, 1.0);
+        let s_ref = f64::from(self.net.aarnn_neuromod_sensory_ref_rate_hz.max(1e-3));
+        let s_norm = |hz: f64| (hz / s_ref).clamp(0.0, 1.0);
+        let k_slow =
+            (dt_ms / f64::from(self.net.aarnn_neuromod_novelty_tau_ms.max(1.0))).clamp(0.0, 1.0);
+        let mean = f64::from(self.neuromod_novelty_mean);
+        let novelty = s_norm((r[5] - mean).abs());
+        self.neuromod_novelty_mean = (mean + k_slow * (r[5] - mean)) as f32;
+        // Thermosensation adapts: heat is the deviation from the adapted temperature.
+        let k_therm = (dt_ms / f64::from(self.net.aarnn_neuromod_thermal_adapt_tau_ms.max(1.0)))
+            .clamp(0.0, 1.0);
+        // The body starts adapted to the temperature it is born into.
+        if !self.neuromod_thermal_mean.is_finite() || self.t_ms < 500.0 {
+            self.neuromod_thermal_mean = r[2];
+        }
+        let heat = s_norm((r[2] - self.neuromod_thermal_mean).abs());
+        self.neuromod_thermal_mean += k_therm * (r[2] - self.neuromod_thermal_mean);
+        let drives = ModulatorDrives {
+            reward: f64::from(reward),
+            food: s_norm(r[0]),
+            light: s_norm(r[1]),
+            heat,
+            noxious: s_norm(r[3]),
+            energy: s_norm(r[4]),
+            activity: norm(r[6]),
+            novelty,
+            cells: ModulatorLevels {
+                dopamine: norm(r[7]),
+                serotonin: norm(r[8]),
+                noradrenaline: norm(r[9]),
+                acetylcholine: norm(r[10]),
+            },
+        };
+        self.neuromod_drives = drives;
+        let n = &self.net;
+        let follow = |tau: f32| (dt_ms / f64::from(tau.max(1.0))).clamp(0.0, 1.0);
+        let k_pool = ModulatorLevels {
+            dopamine: follow(n.aarnn_neuromod_tau_dopamine_ms),
+            serotonin: follow(n.aarnn_neuromod_tau_serotonin_ms),
+            noradrenaline: follow(n.aarnn_neuromod_tau_noradrenaline_ms),
+            acetylcholine: follow(n.aarnn_neuromod_tau_acetylcholine_ms),
+        };
+        let gains = DriveGains {
+            reward_dopamine: f64::from(n.aarnn_neuromod_reward_dopamine_gain),
+            food_dopamine: f64::from(n.aarnn_neuromod_food_dopamine_gain),
+            food_serotonin: f64::from(n.aarnn_neuromod_food_serotonin_gain),
+            energy_serotonin: f64::from(n.aarnn_neuromod_energy_serotonin_gain),
+            light_serotonin: f64::from(n.aarnn_neuromod_light_serotonin_gain),
+            heat_noradrenaline: f64::from(n.aarnn_neuromod_heat_noradrenaline_gain),
+            noxious_noradrenaline: f64::from(n.aarnn_neuromod_noxious_noradrenaline_gain),
+            activity_dopamine: f64::from(n.aarnn_neuromod_activity_dopamine_gain),
+            novelty_noradrenaline: f64::from(n.aarnn_neuromod_novelty_noradrenaline_gain),
+            cell_release: f64::from(n.aarnn_neuromod_cell_release_gain),
+        };
+        let inc = drive_increments(&drives, &gains);
+        let e = &mut self.neuromod_inc_ema;
+        e.dopamine += k_pool.dopamine * (inc.dopamine - e.dopamine);
+        e.serotonin += k_pool.serotonin * (inc.serotonin - e.serotonin);
+        e.noradrenaline += k_pool.noradrenaline * (inc.noradrenaline - e.noradrenaline);
+        e.acetylcholine += k_pool.acetylcholine * (inc.acetylcholine - e.acetylcholine);
+        *e
+    }
+
+    /// Neuromodulated chemical transmission onto one postsynaptic population
+    /// (`layer` = hidden layer, `None` = output layer): each cell's synaptic
+    /// drive is scaled by its receptor-mediated efficacy at the current
+    /// DA / 5-HT / NA levels (the network default receptors at depth 1, the
+    /// cell type's from depth 2) and, on the CPU filter path, by the dynamic
+    /// ACh level (as the OpenCL filter already did). Exactly 1 at baseline.
+    /// Returns the summed |drive| delivered (telemetry: synapse drive).
+    fn neuromod_transmission(
+        &self,
+        layer: Option<usize>,
+        curr: &mut Array1<f64>,
+        depth: usize,
+        include_ach: bool,
+    ) -> f64 {
+        use crate::aarnn::neuromodulation::transmission_gain;
+        let enabled = self.net.aarnn_neuromod_transmission_enabled
+            && depth >= 1
+            && matches!(self.neuron_model, NeuronModel::Aarnn);
+        if !enabled {
+            return curr.iter().map(|v| v.abs()).sum();
+        }
+        let levels = self.neuromod_levels();
+        let base = self.neuromod_baselines();
+        let (lo, hi) = (
+            f64::from(self.net.aarnn_neuromod_efficacy_min),
+            f64::from(self.net.aarnn_neuromod_efficacy_max),
+        );
+        let g_default = transmission_gain(
+            &levels,
+            &base,
+            &Self::neuromod_receptor_profile(&self.net.aarnn_bio),
+            lo,
+            hi,
+        );
+        let ach = f64::from(self.neuromod_ach.max(0.0));
+        let mut sum = 0.0;
+        for (j, v) in curr.iter_mut().enumerate() {
+            let bio = match layer {
+                Some(l) => self.hidden_bio_params(l, j),
+                None => self.output_bio_params(j),
+            };
+            let mut g = if depth >= 2 {
+                transmission_gain(
+                    &levels,
+                    &base,
+                    &Self::neuromod_receptor_profile(bio),
+                    lo,
+                    hi,
+                )
+            } else {
+                g_default
+            };
+            if include_ach && bio.neuromodulation_enabled {
+                g *= ach;
+            }
+            *v *= g;
+            sum += v.abs();
+        }
+        sum
+    }
+
+    #[inline]
+    #[allow(unused_variables)]
+    fn output_bio_params(&self, neuron: usize) -> &crate::config::AarnnBioParams {
+        #[cfg(feature = "growth3d")]
+        {
+            if let Some(b) = self.bio_o.get(neuron) {
+                return b;
+            }
+        }
+        &self.net.aarnn_bio
+    }
+
+    /// Record one neuromodulator telemetry sample every `NM_NEUROMOD_SAMPLE_EVERY`
+    /// steps (default 50): levels, stimuli, synaptic drive and (with
+    /// morphology) synapse energy; kept in a bounded history for the UI graph
+    /// and appended to the `NM_NEUROMOD_TRACE` jsonl file when that is set.
+    fn record_neuromod_sample(&mut self, depth: usize) {
+        use crate::aarnn::neuromodulation::{NeuromodSample, transmission_gain};
+        static EVERY: OnceLock<u64> = OnceLock::new();
+        let every = *EVERY.get_or_init(|| {
+            std::env::var("NM_NEUROMOD_SAMPLE_EVERY")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(50)
+                .max(1)
+        });
+        if (self.t as u64) % every != 0 {
+            return;
+        }
+        let levels = self.neuromod_levels();
+        let base = self.neuromod_baselines();
+        let efficacy = if self.net.aarnn_neuromod_transmission_enabled && depth >= 1 {
+            transmission_gain(
+                &levels,
+                &base,
+                &Self::neuromod_receptor_profile(&self.net.aarnn_bio),
+                f64::from(self.net.aarnn_neuromod_efficacy_min),
+                f64::from(self.net.aarnn_neuromod_efficacy_max),
+            )
+        } else {
+            1.0
+        };
+        let synapse_drive = if self.neuromod_drive_cells > 0 {
+            self.neuromod_drive_sum / self.neuromod_drive_cells as f64
+        } else {
+            0.0
+        };
+        self.neuromod_drive_sum = 0.0;
+        self.neuromod_drive_cells = 0;
+        #[allow(unused_mut)]
+        let (mut synapse_energy, mut synapse_stimuli) = (None, None);
+        #[cfg(all(feature = "morpho", feature = "growth3d"))]
+        {
+            let m = &self.morph;
+            let (mut sum, mut n) = (0.0f64, 0usize);
+            for a in m.axons.iter().flatten() {
+                sum += f64::from(a.atp);
+                n += 1;
+            }
+            for d in m.dendrites.iter().flatten() {
+                sum += f64::from(d.atp);
+                n += 1;
+            }
+            if n > 0 {
+                synapse_energy = Some(sum / n as f64);
+            }
+            if !m.synapses.is_empty() {
+                synapse_stimuli = Some(
+                    m.synapses.iter().map(|s| f64::from(s.stimuli)).sum::<f64>()
+                        / m.synapses.len() as f64,
+                );
+            }
+        }
+        let sample = NeuromodSample {
+            t_ms: self.t_ms,
+            depth,
+            dopamine: levels.dopamine,
+            serotonin: levels.serotonin,
+            noradrenaline: levels.noradrenaline,
+            acetylcholine: levels.acetylcholine,
+            stimuli: (self.neuromod_rate_ema[5]
+                / f64::from(self.net.aarnn_neuromod_sensory_ref_rate_hz.max(1e-3)))
+            .clamp(0.0, 1.0),
+            synapse_drive,
+            synapse_energy,
+            synapse_stimuli,
+            efficacy,
+            release_factor: self.neuromod_release_factor,
+            drives: self.neuromod_drives,
+            rates_hz: self.neuromod_rate_ema,
+        };
+        self.neuromod_sample = sample;
+        self.neuromod_history.push_back(sample);
+        while self.neuromod_history.len() > 1200 {
+            self.neuromod_history.pop_front();
+        }
+        if !self.neuromod_trace_checked {
+            // NM_NEUROMOD_TRACE names one file; NM_NEUROMOD_TRACE_DIR holds one
+            // file per labelled runner (`<network id>.neuromod.jsonl`, the
+            // simulator harness sets it beside each run's physics trace).
+            let path = if let Ok(path) = std::env::var("NM_NEUROMOD_TRACE") {
+                Some(std::path::PathBuf::from(path))
+            } else if let Ok(dir) = std::env::var("NM_NEUROMOD_TRACE_DIR") {
+                self.neuromod_trace_label.as_ref().map(|label| {
+                    let safe: String = label
+                        .chars()
+                        .map(|c| {
+                            if c.is_ascii_alphanumeric() || "-_.".contains(c) {
+                                c
+                            } else {
+                                '_'
+                            }
+                        })
+                        .collect();
+                    std::path::Path::new(&dir).join(format!("{safe}.neuromod.jsonl"))
+                })
+            } else {
+                None
+            };
+            let waiting_for_label =
+                path.is_none() && std::env::var_os("NM_NEUROMOD_TRACE_DIR").is_some();
+            self.neuromod_trace_checked = !waiting_for_label;
+            if let Some(path) = path {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                {
+                    Ok(f) => self.neuromod_trace = Some(std::io::BufWriter::new(f)),
+                    Err(e) => nm_log!("neuromod trace {}: {e}", path.display()),
+                }
+            }
+        }
+        if let Some(w) = self.neuromod_trace.as_mut() {
+            use std::io::Write;
+            if let Ok(line) = serde_json::to_string(&sample) {
+                let _ = writeln!(w, "{line}");
+                let _ = w.flush();
+            }
+        }
+    }
+
     #[inline]
     #[allow(unused_variables)]
     fn hidden_bio_params(&self, layer: usize, neuron: usize) -> &crate::config::AarnnBioParams {
@@ -2565,8 +3143,9 @@ impl Runner {
                 return *decision != 0;
             }
         }
+        // Presynaptic neuromodulation of the bouton (depth >= 2; exactly 1 otherwise).
         should_release_ref(
-            self.net.p_release_default,
+            self.net.p_release_default * self.neuromod_release_factor as f32,
             self.net.aarnn_release_prob_heterogeneity,
             syn_idx,
             self.t as u64,
@@ -5940,6 +6519,23 @@ impl Runner {
             neuromod_dopamine: net.aarnn_neuromod_baseline_dopamine.max(0.0),
             neuromod_ach: net.aarnn_neuromod_baseline_ach.max(0.0),
             neuromod_serotonin: net.aarnn_neuromod_baseline_serotonin.max(0.0),
+            neuromod_noradrenaline: net.aarnn_neuromod_baseline_noradrenaline.max(0.0),
+            neuromod_novelty_mean: 0.0,
+            neuromod_release_factor: 1.0,
+            neuromod_drives: Default::default(),
+            neuromod_sample: Default::default(),
+            neuromod_history: VecDeque::new(),
+            neuromod_drive_sum: 0.0,
+            neuromod_drive_cells: 0,
+            neuromod_sensory_modalities: Vec::new(),
+            neuromod_sensory_modality_tags: 0,
+            neuromod_cell_pools: Vec::new(),
+            neuromod_trace: None,
+            neuromod_trace_checked: false,
+            neuromod_trace_label: None,
+            neuromod_rate_ema: [0.0; 11],
+            neuromod_inc_ema: crate::aarnn::neuromodulation::ModulatorLevels::zero(),
+            neuromod_thermal_mean: f64::NAN,
             resonance_level: 0.0,
             external_reward: 0.0,
             ambient_field_drive: 0.0,
@@ -6389,6 +6985,7 @@ impl Runner {
             neuromod_dopamine: self.neuromod_dopamine,
             neuromod_ach: self.neuromod_ach,
             neuromod_serotonin: self.neuromod_serotonin,
+            neuromod_noradrenaline: Some(self.neuromod_noradrenaline),
             resonance_level: self.resonance_level,
             external_reward: self.external_reward,
             ambient_field_drive: self.ambient_field_drive,
@@ -6583,6 +7180,9 @@ impl Runner {
         self.neuromod_dopamine = state.neuromod_dopamine;
         self.neuromod_ach = state.neuromod_ach;
         self.neuromod_serotonin = state.neuromod_serotonin;
+        self.neuromod_noradrenaline = state
+            .neuromod_noradrenaline
+            .unwrap_or(self.net.aarnn_neuromod_baseline_noradrenaline.max(0.0));
         self.resonance_level = state.resonance_level;
         self.external_reward = state.external_reward;
         self.ambient_field_drive = state.ambient_field_drive;
@@ -7575,6 +8175,13 @@ impl Runner {
         self.neuromod_dopamine = self.net.aarnn_neuromod_baseline_dopamine.max(0.0);
         self.neuromod_ach = self.net.aarnn_neuromod_baseline_ach.max(0.0);
         self.neuromod_serotonin = self.net.aarnn_neuromod_baseline_serotonin.max(0.0);
+        self.neuromod_noradrenaline = self.net.aarnn_neuromod_baseline_noradrenaline.max(0.0);
+        self.neuromod_novelty_mean = 0.0;
+        self.neuromod_release_factor = 1.0;
+        self.neuromod_history.clear();
+        self.neuromod_rate_ema = [0.0; 11];
+        self.neuromod_inc_ema = crate::aarnn::neuromodulation::ModulatorLevels::zero();
+        self.neuromod_thermal_mean = f64::NAN;
         self.resonance_level = 0.0;
         self.external_reward = 0.0;
         self.ambient_field_drive = 0.0;
@@ -8015,26 +8622,80 @@ impl Runner {
         point: [f32; 3],
     ) -> Option<(NeuronId, [f32; 3], String)> {
         self.ensure_biological_growth_state();
-        let parent_id = *self
+        let trace = std::env::var("NM_TRACE").ok().as_deref() == Some("1");
+        let Some(parent_id) = self
             .biological_neuron_ids
-            .get(source_layer)?
-            .get(source_index)?;
-        let ownership = self.biological_ownership.as_ref()?.clone();
-        let parent_owner = ownership.owner(parent_id)?.clone();
-        let space = self.biological_growth_space.as_ref()?.clone();
+            .get(source_layer)
+            .and_then(|ids| ids.get(source_index))
+            .copied()
+        else {
+            if trace {
+                nm_err!(
+                    "[growth-admit] parent {}:{} has no biological id",
+                    source_layer,
+                    source_index
+                );
+            }
+            return None;
+        };
+        let Some(ownership) = self.biological_ownership.as_ref().cloned() else {
+            if trace {
+                nm_err!("[growth-admit] no biological ownership");
+            }
+            return None;
+        };
+        let Some(parent_owner) = ownership.owner(parent_id).cloned() else {
+            if trace {
+                nm_err!(
+                    "[growth-admit] parent {}:{} has no owning area",
+                    source_layer,
+                    source_index
+                );
+            }
+            return None;
+        };
+        let Some(space) = self.biological_growth_space.as_ref().cloned() else {
+            if trace {
+                nm_err!("[growth-admit] no biological growth space");
+            }
+            return None;
+        };
         let pressure = self
             .biological_pressure_samples
             .get(&parent_owner.area_id)
             .copied()
             .unwrap_or_default();
-        let decision = space
-            .assess_growth(
+        let decision = match space.assess_growth(
+            parent_owner.area_id,
+            point,
+            (self.net.min_node_sep * 0.5).max(0.01),
+            pressure,
+        ) {
+            Ok(decision) => decision,
+            Err(error) => {
+                if trace {
+                    nm_err!(
+                        "[growth-admit] parent {}:{} assessment failed: {:?}",
+                        source_layer,
+                        source_index,
+                        error
+                    );
+                }
+                return None;
+            }
+        };
+        if trace {
+            nm_err!(
+                "[growth-admit] parent {}:{} area {} point ({:.3},{:.3},{:.3}) -> {:?}",
+                source_layer,
+                source_index,
                 parent_owner.area_id,
-                point,
-                (self.net.min_node_sep * 0.5).max(0.01),
-                pressure,
-            )
-            .ok()?;
+                point[0],
+                point[1],
+                point[2],
+                decision
+            );
+        }
         let mut admitted_point = point;
         let proposed_space = match &decision {
             BiologicalGrowthDecision::AwaitingMembranePressure { .. } => {
@@ -8391,6 +9052,23 @@ impl Runner {
                 kind,
             })
             .collect::<Vec<_>>();
+        // Route checks against every routed path and soma scale with the
+        // number of connections squared: a 915k-connection FAFB import spent
+        // hours here and never reached the simulator. Above the budget the
+        // import stays executable without derived anatomy (the error path
+        // below logs it), as for any other unavailable reconstruction.
+        let budget = std::env::var("NM_POINT_RECONSTRUCTION_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(POINT_RECONSTRUCTION_DEFAULT_MAX_CONNECTIONS);
+        if budget > 0 && connections.len() > budget {
+            return Err(
+                crate::morphology_contract::MorphologyError::ReconstructionBudgetExceeded {
+                    connections: connections.len(),
+                    budget,
+                },
+            );
+        }
         let mut connectome = PointOnlyConnectome {
             neurons,
             connections,
@@ -10080,11 +10758,23 @@ impl Runner {
     /// modulator from the modulatory cells' activity and return the factor
     /// on the learning rate (1 when no cells are marked). The level relaxes
     /// toward the marked cells' mean release rate with the clearance time
-    /// constant; the gate is level / reference rate, at most 3.
+    /// constant; the gate is level / reference rate, at most 3. Without
+    /// marked cells, `aarnn_modulator_pool` gates by a global pool level.
     fn modulated_plasticity_gate(&mut self) -> f64 {
         let mask = &self.net.aarnn_modulatory_cells;
         if !mask.enabled {
-            return 1.0;
+            let level = match self.net.aarnn_modulator_pool.as_str() {
+                "" => return 1.0,
+                "dopamine" => self.neuromod_dopamine,
+                "serotonin" => self.neuromod_serotonin,
+                "noradrenaline" => self.neuromod_noradrenaline,
+                "acetylcholine" => self.neuromod_ach,
+                _ => return 1.0,
+            } as f64;
+            let threshold = self.net.aarnn_modulator_pool_threshold as f64;
+            let reference = (self.net.aarnn_modulator_pool_ref as f64).max(1.0e-6);
+            self.modulator_level = level;
+            return ((level - threshold) / reference).clamp(0.0, 3.0);
         }
         let (act_h, act_o) = self.plasticity_activity();
         let mut sum = 0.0;
@@ -10220,7 +10910,7 @@ impl Runner {
                 })
             })
             .collect();
-        let w_max = self.stdp.w_max;
+        let w_max = self.plastic_w_max();
         let scale = |mat: &mut Array2<f64>, e: Option<&Vec<f64>>| {
             if let Some(e) = e {
                 if e.len() == mat.nrows() {
@@ -10246,6 +10936,59 @@ impl Runner {
         self.mark_all_weights_dirty();
     }
 
+    /// Whether hidden cell `j` of layer `l` lies in the neurogenic niche
+    /// (`growth_parent_cells`; empty = every cell).
+    #[cfg(feature = "growth3d")]
+    fn growth_parent_allowed(&self, l: usize, j: usize) -> bool {
+        if self.net.growth_parent_cells.is_empty() {
+            return true;
+        }
+        self.net
+            .growth_parent_cells
+            .get(l)
+            .and_then(|layer| layer.get(j))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Scale of synapses into a newborn (`growth_new_input_synapse_scale`,
+    /// falling back to `growth_new_synapse_scale`).
+    #[cfg(feature = "growth3d")]
+    fn growth_input_scale(&self) -> f64 {
+        if self.net.growth_new_input_synapse_scale >= 0.0 {
+            self.net.growth_new_input_synapse_scale
+        } else {
+            self.net.growth_new_synapse_scale
+        }
+    }
+
+    /// Matrix-synapse rule: the network's own choice when it names one
+    /// (`aarnn_matrix_plasticity_rule`), else the learning mode's.
+    fn matrix_plasticity_rule(&self) -> PlasticityRule {
+        match self
+            .net
+            .aarnn_matrix_plasticity_rule
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "hebb" => PlasticityRule::Hebb,
+            "oja" => PlasticityRule::Oja,
+            "stdp" => PlasticityRule::Stdp,
+            _ => runner_plasticity_rule(self.learning),
+        }
+    }
+
+    /// Clamp of learning synapses: the network's own cap when it sets one
+    /// (`aarnn_plasticity_w_max`), never above the runtime's STDP clamp.
+    fn plastic_w_max(&self) -> f64 {
+        let cap = self.net.aarnn_plasticity_w_max;
+        if cap > 0.0 {
+            cap.min(self.stdp.w_max)
+        } else {
+            self.stdp.w_max
+        }
+    }
+
     /// Long-term plasticity proposals for hidden layer `l`'s recurrent
     /// synapses (pre and post in the same layer), honouring the plastic-cell
     /// mask. Shared by the CPU reference path and the accelerator path.
@@ -10266,6 +11009,7 @@ impl Runner {
         matrix_plasticity_proposals(
             mat,
             |row| mask.hidden_learns(l, row),
+            |col| mask.hidden_pre_learns(l, col),
             |row, col| {
                 (
                     act(col),
@@ -10288,9 +11032,9 @@ impl Runner {
         num_hidden_layers: usize,
         is_aarnn: bool,
     ) {
-        let rule = runner_plasticity_rule(self.learning);
+        let rule = self.matrix_plasticity_rule();
         let w_min = self.stdp.w_min;
-        let w_max = self.stdp.w_max;
+        let w_max = self.plastic_w_max();
         let (act_h, act_o) = self.plasticity_activity();
 
         let mask = self.net.aarnn_plastic_cells.clone();
@@ -10305,6 +11049,7 @@ impl Runner {
             let proposals = matrix_plasticity_proposals(
                 &self.w_in,
                 |row| mask.hidden_learns(0, row),
+                |_| true,
                 |row, col| {
                     let pre = if sensory_spikes.get(col).copied().unwrap_or(0) != 0 {
                         1.0
@@ -10333,6 +11078,7 @@ impl Runner {
                 let fwd = matrix_plasticity_proposals(
                     &self.w_hh_fwd[l],
                     |row| mask.hidden_learns(l + 1, row),
+                    |col| mask.hidden_pre_learns(l, col),
                     |row, col| {
                         (
                             act(l, col),
@@ -10349,6 +11095,7 @@ impl Runner {
                 let bwd = matrix_plasticity_proposals(
                     &self.w_hh_bwd[l],
                     |row| mask.hidden_learns(l, row),
+                    |col| mask.hidden_pre_learns(l + 1, col),
                     |row, col| {
                         (
                             act(l + 1, col),
@@ -10386,6 +11133,7 @@ impl Runner {
             let proposals = matrix_plasticity_proposals(
                 &self.w_out,
                 |row| mask.output_learns(row),
+                |col| mask.hidden_pre_learns(out_l, col),
                 |row, col| {
                     (
                         act(out_l, col),
@@ -10990,18 +11738,39 @@ impl Runner {
                     NeuromodSignal::Stability => stability,
                 }
             };
+            // Environmental (food, light, heat, noxious, energy, activity,
+            // novelty, reward) and modulatory-cell drive, added to the
+            // signal-driven targets; zero when nothing drives the pools.
+            let env_inc = if self.net.aarnn_neuromod_env_enabled {
+                let out_active = self.last_spk_o.iter().filter(|&&s| s != 0).count();
+                self.update_neuromod_drives(
+                    &active_s_indices,
+                    &active_h_indices,
+                    out_active,
+                    reward_proxy,
+                )
+            } else {
+                self.neuromod_drives = Default::default();
+                crate::aarnn::neuromodulation::ModulatorLevels::zero()
+            };
             let target_d = (base_d
                 + self.net.aarnn_neuromod_error_gain.max(0.0)
-                    * signal_value(self.net.aarnn_neuromod_dopamine_signal))
-            .clamp(0.0, 3.0);
+                    * signal_value(self.net.aarnn_neuromod_dopamine_signal)
+                + env_inc.dopamine as f32)
+                .clamp(0.0, 3.0);
             let target_a = (base_a
                 + self.net.aarnn_neuromod_activity_gain.max(0.0)
-                    * signal_value(self.net.aarnn_neuromod_ach_signal))
-            .clamp(0.0, 3.0);
+                    * signal_value(self.net.aarnn_neuromod_ach_signal)
+                + env_inc.acetylcholine as f32)
+                .clamp(0.0, 3.0);
             let target_s = (base_s
                 + self.net.aarnn_neuromod_stability_gain.max(0.0)
-                    * signal_value(self.net.aarnn_neuromod_serotonin_signal))
-            .clamp(0.0, 3.0);
+                    * signal_value(self.net.aarnn_neuromod_serotonin_signal)
+                + env_inc.serotonin as f32)
+                .clamp(0.0, 3.0);
+            let target_n = (self.net.aarnn_neuromod_baseline_noradrenaline.max(0.0)
+                + env_inc.noradrenaline as f32)
+                .clamp(0.0, 3.0);
             let r_decay = self.net.aarnn_resonance_decay.clamp(0.0, 1.0);
             let r_target = hidden_rate.clamp(0.0, 1.0);
             let mut state = [
@@ -11039,6 +11808,26 @@ impl Runner {
             self.neuromod_ach = state[1] as f32;
             self.neuromod_serotonin = state[2] as f32;
             self.resonance_level = state[3] as f32;
+            self.neuromod_noradrenaline = self.neuromod_noradrenaline * retain + target_n * decay;
+            // Presynaptic (bouton) release modulation is a depth >= 2 feature.
+            self.neuromod_release_factor =
+                if self.net.aarnn_neuromod_transmission_enabled && depth >= 2 {
+                    let presyn = crate::aarnn::neuromodulation::ReceptorProfile {
+                        dopamine: f64::from(self.net.aarnn_neuromod_presynaptic_dopamine),
+                        serotonin: f64::from(self.net.aarnn_neuromod_presynaptic_serotonin),
+                        noradrenaline: f64::from(self.net.aarnn_neuromod_presynaptic_noradrenaline),
+                    };
+                    crate::aarnn::neuromodulation::transmission_gain(
+                        &self.neuromod_levels(),
+                        &self.neuromod_baselines(),
+                        &presyn,
+                        f64::from(self.net.aarnn_neuromod_efficacy_min),
+                        f64::from(self.net.aarnn_neuromod_efficacy_max),
+                    )
+                } else {
+                    1.0
+                };
+            self.record_neuromod_sample(depth);
         }
         let volume_transmission_factors = if is_aarnn {
             self.compute_volume_transmission_factors(&active_h_indices)
@@ -12389,6 +13178,13 @@ impl Runner {
             }
             if let Some(g) = graded_h0_post {
                 i_h0 += &g;
+            }
+            if is_aarnn && num_hidden_0_neurons > 0 {
+                // Neuromodulated chemical transmission (before electrical coupling).
+                let cpu_filter = use_synaptic_filter && !gpu_filtered_h0;
+                let sum = self.neuromod_transmission(Some(0), &mut i_h0, depth, cpu_filter);
+                self.neuromod_drive_sum += sum;
+                self.neuromod_drive_cells += num_hidden_0_neurons;
             }
             self.apply_connectome_gap_currents(0, &mut i_h0);
             if is_aarnn && num_hidden_0_neurons > 1 {
@@ -14607,6 +15403,12 @@ impl Runner {
                 if let Some(g) = graded_l_post {
                     i_f += &g;
                 }
+                if is_aarnn && num_current_hidden_neurons > 0 {
+                    let cpu_filter = use_synaptic_filter && !gpu_filtered;
+                    let sum = self.neuromod_transmission(Some(l), &mut i_f, depth, cpu_filter);
+                    self.neuromod_drive_sum += sum;
+                    self.neuromod_drive_cells += num_current_hidden_neurons;
+                }
                 self.apply_connectome_gap_currents(l, &mut i_f);
                 if is_aarnn && num_current_hidden_neurons > 1 {
                     let g_gap = self.net.aarnn_gap_junction_strength.max(0.0) as f64;
@@ -15944,6 +16746,12 @@ impl Runner {
         if let Some(g) = graded_o_post {
             i_o += &g;
         }
+        if is_aarnn && num_output_neurons > 0 {
+            let cpu_filter = use_synaptic_filter && !gpu_filtered_o;
+            let sum = self.neuromod_transmission(None, &mut i_o, depth, cpu_filter);
+            self.neuromod_drive_sum += sum;
+            self.neuromod_drive_cells += num_output_neurons;
+        }
         // Morphology-driven compact profiles (e.g. C. elegans / insect robots) can
         // produce very small post-filter output currents despite active hidden
         // spiking, especially when output fan-in is sparse. Apply a bounded gain
@@ -17278,7 +18086,7 @@ impl Runner {
                 {
                     true
                 }
-            };
+            } && !crate::monitor::shed_optional_work(); // memory pressure: no new cells
             if self.net.growth_enabled && growth_allowed {
                 did_spawn = false;
                 // Keep growth/plastic structural updates on a slower cadence than spike traversal.
@@ -17303,9 +18111,12 @@ impl Runner {
                         && self.last_global_growth_ms >= self.net.spontaneous_neuron_interval_ms
                     {
                         let l = 0; // default to layer 0 for spontaneous spawns
-                        let n = self.layer_size(l);
+                        let allowed: Vec<usize> = (0..self.layer_size(l))
+                            .filter(|&j| self.growth_parent_allowed(l, j))
+                            .collect();
+                        let n = allowed.len();
                         if n > 0 {
-                            let pj = fastrand::usize(..n);
+                            let pj = allowed[fastrand::usize(..n)];
                             if self.early_cell_lifecycle_enabled() {
                                 did_growth_event =
                                     self.create_early_cell_from_action(GrowthAction {
@@ -18135,6 +18946,9 @@ impl Runner {
             let mut best_pos: Option<(f32, f32, f32)> = None;
             let mut best_score = f32::NEG_INFINITY;
             let mut best_tie = f32::INFINITY;
+            // All free candidates with their energy, for the placement modes
+            // other than "high" (growth_placement_mode).
+            let mut scored: Vec<((f32, f32, f32), f32, f32)> = Vec::new();
             for ix in 0..samples_per_axis {
                 let ux = (-1.0 + step * ix as f32).clamp(-1.0, 1.0);
                 for iy in 0..samples_per_axis {
@@ -18159,6 +18973,7 @@ impl Runner {
                         );
                         let tie =
                             Self::dist3(cand, (layer_band_x, column_anchor.0, column_anchor.1));
+                        scored.push((cand, score, tie));
                         if score > best_score + 1.0e-6
                             || ((score - best_score).abs() <= 1.0e-6 && tie < best_tie)
                         {
@@ -18168,6 +18983,45 @@ impl Runner {
                         }
                     }
                 }
+            }
+            match self.net.growth_placement_mode.as_str() {
+                // Lowest-energy free location (a quiet area that may later
+                // rise in energy).
+                "low" => {
+                    if let Some((pos, _, _)) = scored.iter().copied().min_by(|a, b| {
+                        a.1.partial_cmp(&b.1)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                            .then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+                    }) {
+                        return pos;
+                    }
+                }
+                // Midway between the highest- and lowest-energy locations:
+                // the free candidate nearest their geometric midpoint.
+                "mid" => {
+                    let cmp = |a: &((f32, f32, f32), f32, f32), b: &((f32, f32, f32), f32, f32)| {
+                        a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                    };
+                    if let (Some(hi), Some(lo)) = (
+                        scored.iter().copied().max_by(cmp),
+                        scored.iter().copied().min_by(cmp),
+                    ) {
+                        let m = (
+                            (hi.0.0 + lo.0.0) * 0.5,
+                            (hi.0.1 + lo.0.1) * 0.5,
+                            (hi.0.2 + lo.0.2) * 0.5,
+                        );
+                        if let Some((pos, _, _)) = scored.iter().copied().min_by(|a, b| {
+                            Self::dist3(a.0, m)
+                                .partial_cmp(&Self::dist3(b.0, m))
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        }) {
+                            return pos;
+                        }
+                    }
+                }
+                // "high" (default): the highest-energy free location.
+                _ => {}
             }
             if let Some(pos) = best_pos {
                 return pos;
@@ -19046,23 +19900,32 @@ impl Runner {
     fn apply_morpho_evolution_result(&mut self, res: EvolutionResult) {
         let mut changed = false;
         let (in_l, out_l) = self.get_io_layers();
-        // Handle new connections
+        // Handle new connections. A contact between cells that are already
+        // connected adds a contact site, not a new efficacy: the existing
+        // synapse keeps its weight. Writing the contact's weight over it
+        // replaced the designed Freenove hexapod CPG's synapses (3765 contacts
+        // on 38 cells in 120 s) and silenced or saturated its motor drive
+        // (24 Nov).
         for (pre_l, pre_id, post_l, post_id, weight) in res.new_connections {
             if pre_l == -1 {
                 if post_l == in_l as isize
                     && post_id < self.w_in.nrows()
                     && pre_id < self.w_in.ncols()
                 {
-                    self.w_in[(post_id, pre_id)] = weight;
-                    changed = true;
+                    if self.w_in[(post_id, pre_id)] == 0.0 {
+                        self.w_in[(post_id, pre_id)] = weight;
+                        changed = true;
+                    }
                 }
             } else if post_l == self.net.num_hidden_layers as isize {
                 if pre_l == out_l as isize
                     && post_id < self.w_out.nrows()
                     && pre_id < self.w_out.ncols()
                 {
-                    self.w_out[(post_id, pre_id)] = weight;
-                    changed = true;
+                    if self.w_out[(post_id, pre_id)] == 0.0 {
+                        self.w_out[(post_id, pre_id)] = weight;
+                        changed = true;
+                    }
                 }
             } else if post_l == pre_l + 1 {
                 let l = pre_l as usize;
@@ -19070,8 +19933,10 @@ impl Runner {
                     && post_id < self.w_hh_fwd[l].nrows()
                     && pre_id < self.w_hh_fwd[l].ncols()
                 {
-                    self.w_hh_fwd[l][(post_id, pre_id)] = weight;
-                    changed = true;
+                    if self.w_hh_fwd[l][(post_id, pre_id)] == 0.0 {
+                        self.w_hh_fwd[l][(post_id, pre_id)] = weight;
+                        changed = true;
+                    }
                 }
             } else if pre_l == post_l + 1 {
                 let l = post_l as usize;
@@ -19079,8 +19944,10 @@ impl Runner {
                     && pre_id < self.w_hh_bwd[l].ncols()
                     && post_id < self.w_hh_bwd[l].nrows()
                 {
-                    self.w_hh_bwd[l][(post_id, pre_id)] = weight;
-                    changed = true;
+                    if self.w_hh_bwd[l][(post_id, pre_id)] == 0.0 {
+                        self.w_hh_bwd[l][(post_id, pre_id)] = weight;
+                        changed = true;
+                    }
                 }
             } else if pre_l == post_l {
                 let l = pre_l as usize;
@@ -19088,8 +19955,10 @@ impl Runner {
                     && post_id < self.w_hh_rec[l].nrows()
                     && pre_id < self.w_hh_rec[l].ncols()
                 {
-                    self.w_hh_rec[l][(post_id, pre_id)] = weight;
-                    changed = true;
+                    if self.w_hh_rec[l][(post_id, pre_id)] == 0.0 {
+                        self.w_hh_rec[l][(post_id, pre_id)] = weight;
+                        changed = true;
+                    }
                 }
             }
         }
@@ -19622,7 +20491,7 @@ impl Runner {
             return;
         }
         let w_min = self.stdp.w_min;
-        let w_max = self.stdp.w_max;
+        let w_max = self.plastic_w_max();
         let hebb_gain = self.net.aarnn_bouton_hebbian_gain.max(0.0) as f64;
         let nonhebb_gain = self.net.aarnn_bouton_non_hebbian_gain.max(0.0) as f64;
         if hebb_gain <= 0.0 && nonhebb_gain <= 0.0 {
@@ -19642,7 +20511,8 @@ impl Runner {
                 _ => {
                     syn.post_layer >= 0 && mask.hidden_learns(syn.post_layer as usize, syn.post_id)
                 }
-            };
+            } && (syn.pre_layer < 0
+                || mask.hidden_pre_learns(syn.pre_layer as usize, syn.pre_id));
             if !learns {
                 continue;
             }
@@ -20209,6 +21079,18 @@ impl Runner {
                         *cell = val;
                     }
                 }
+                if self.net.growth_inherit_sensory_inputs {
+                    let in_scale = self.growth_input_scale();
+                    for i in 0..num_sensory_neurons {
+                        let w_par = self.w_in.get((parent_j, i)).copied().unwrap_or(0.0);
+                        if w_par != 0.0 {
+                            let jitter = 0.5 + fastrand::f64();
+                            if let Some(cell) = new_w_in.get_mut((j_new, i)) {
+                                *cell = w_par * in_scale * jitter;
+                            }
+                        }
+                    }
+                }
                 let (hx, hy, hz) = if let Some(layer0) = self.topo.layers.get(0) {
                     if j_new < layer0.len() {
                         (layer0[j_new].x, layer0[j_new].y, layer0[j_new].z)
@@ -20262,8 +21144,21 @@ impl Runner {
                         best_i_free = Some(i);
                     }
                 }
-                if let Some(pick) = best_i_free.or(best_i_any) {
-                    let w = (fastrand::f64() * 0.3 + 0.1).clamp(self.stdp.w_min, self.stdp.w_max);
+                // A newborn that inherits its parent's sensory inputs needs no
+                // bootstrap contact: at an inherited input scale of 1.0 this
+                // random 0.1-0.4 contact (a constant body channel) held every
+                // niche newborn of the hexapod at full release (24 Nov).
+                let attach = if self.net.growth_inherit_sensory_inputs {
+                    None
+                } else {
+                    best_i_free.or(best_i_any)
+                };
+                if let Some(pick) = attach {
+                    // Like every newborn synapse, scaled by growth_new_synapse_scale:
+                    // unscaled (0.1-0.4) this single sensory contact held each
+                    // newborn of the hexapod CPG at -13 mV, at full release (24 Nov).
+                    let w = ((fastrand::f64() * 0.3 + 0.1) * self.growth_input_scale())
+                        .clamp(self.stdp.w_min, self.stdp.w_max);
                     if let Some(cell) = new_w_in.get_mut((j_new, pick)) {
                         *cell = w;
                     }
@@ -20304,7 +21199,7 @@ impl Runner {
                         migrated += 1;
                     } else {
                         let val = if current_count < 6 && fastrand::f32() < self.net.p_in as f32 {
-                            fastrand::f64() * 0.2 + 0.05
+                            (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                         } else {
                             0.0
                         };
@@ -20363,7 +21258,7 @@ impl Runner {
                     }
                     // small random init
                     let val = if fastrand::f32() < self.net.p_out as f32 {
-                        fastrand::f64() * 0.2 + 0.05
+                        (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                     } else {
                         0.0
                     };
@@ -20417,7 +21312,7 @@ impl Runner {
                         *cell = w_old;
                     }
                     let val = if fastrand::f32() < self.net.p_hidden as f32 {
-                        fastrand::f64() * 0.2 + 0.05
+                        (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                     } else {
                         0.0
                     };
@@ -20457,9 +21352,15 @@ impl Runner {
         }
         let aarnn_active = matches!(self.neuron_model, NeuronModel::Aarnn);
         let rec_p = self.net.p_hidden.clamp(0.0, 1.0) as f32;
+        // The newborn inherits its parent's recurrent wiring (lineage-like
+        // connectivity) scaled by growth_new_synapse_scale: at full strength
+        // every newborn was a clone doubling its parent's drive, and a
+        // designed hexapod CPG's outputs saturated (24 Nov).
+        let inherit = self.net.growth_new_synapse_scale;
+        let inherit_in = self.growth_input_scale();
         for i in 0..old_h_size {
-            let v1 = self.w_hh_rec[0].get((parent_j, i)).copied().unwrap_or(0.0);
-            let v2 = self.w_hh_rec[0].get((i, parent_j)).copied().unwrap_or(0.0);
+            let v1 = self.w_hh_rec[0].get((parent_j, i)).copied().unwrap_or(0.0) * inherit_in;
+            let v2 = self.w_hh_rec[0].get((i, parent_j)).copied().unwrap_or(0.0) * inherit;
             if let Some(cell) = new_rec.get_mut((j_new, i)) {
                 *cell = if aarnn_active && fastrand::f32() >= rec_p {
                     0.0
@@ -20479,7 +21380,8 @@ impl Runner {
             let v3 = self.w_hh_rec[0]
                 .get((parent_j, parent_j))
                 .copied()
-                .unwrap_or(0.0);
+                .unwrap_or(0.0)
+                * inherit;
             *cell = if aarnn_active && fastrand::f32() >= rec_p {
                 0.0
             } else {
@@ -21439,6 +22341,15 @@ impl Runner {
         }
 
         let mut changed = self.ensure_aarnn_l23_to_l4_projection_floor();
+        // Designed circuits keep exactly their connectome's sensory and
+        // output wiring (`growth_io_floor_enabled = false`).
+        if !self.net.growth_io_floor_enabled {
+            #[cfg(feature = "opencl")]
+            if changed {
+                self.mark_all_weights_dirty();
+            }
+            return;
+        }
         let sensory_min_required = 1usize;
         let output_min_required = match infer_biomimicry_profile(&self.net) {
             // Keep NAO output fan-in above the degenerate minimum.
@@ -21753,8 +22664,19 @@ impl Runner {
 
         let start = self.growth_parent_position(act.layer, act.parent);
         let target = self.place_node_near(act.target_layer, start);
-        let (region_name, target_type_name) =
+        let (region_name, mut target_type_name) =
             self.allocate_region_and_type(target.0, target.1, target.2, act.target_layer);
+        if self.net.growth_newborn_inherit_type {
+            if let Some(parent_type) = self
+                .topo
+                .layers
+                .get(act.layer)
+                .and_then(|nodes| nodes.get(act.parent))
+                .and_then(|node| node.type_name.clone())
+            {
+                target_type_name = Some(parent_type);
+            }
+        }
         let maturation_ms = self.early_cell_maturation_ms(act.target_layer, start, target);
         let early_id = self.next_early_cell_id();
 
@@ -21969,6 +22891,19 @@ impl Runner {
                 type_name: cell.target_type_name.clone(),
             });
             let before_total = self.total_neurons();
+            if std::env::var("NM_TRACE").ok().as_deref() == Some("1") {
+                nm_err!(
+                    "[growth-mature] parent {}:{} -> layer {} at ({:.3},{:.3},{:.3}) total {} max {}",
+                    cell.source_layer,
+                    cell.source_parent,
+                    cell.target_layer,
+                    cell.target_x,
+                    cell.target_y,
+                    cell.target_z,
+                    before_total,
+                    self.net.max_total_neurons
+                );
+            }
             if cell.target_layer == cell.source_layer {
                 self.spawn_neuron_in_layer(cell.source_layer, cell.source_parent);
             } else {
@@ -22093,7 +23028,10 @@ impl Runner {
             }
             // one spawn per layer per step
             let num_current_layer_neurons = self.layer_size(l);
+            // The most active eligible cell of the niche spawns (the first in
+            // index order did before, so the circuit built first always won).
             let mut candidate: Option<usize> = None;
+            let mut best_rate = f32::MIN;
             for j in 0..num_current_layer_neurons {
                 let eligible = gpu_candidate_masks
                     .get(l)
@@ -22101,9 +23039,12 @@ impl Runner {
                     .and_then(|mask| mask.get(j))
                     .map(|value| *value != 0)
                     .unwrap_or(self.rate_h[l][j] >= thr && self.since_growth_ms[l][j] >= cooldown);
-                if eligible {
-                    candidate = Some(j);
-                    break;
+                if eligible && self.growth_parent_allowed(l, j) {
+                    let r = self.rate_h[l][j] as f32;
+                    if r > best_rate {
+                        best_rate = r;
+                        candidate = Some(j);
+                    }
                 }
             }
             if let Some(pj) = candidate {
@@ -22353,6 +23294,16 @@ impl Runner {
             None
         };
 
+        if type_name.is_none()
+            && !self.net.growth_newborn_type.is_empty()
+            && self
+                .net
+                .neuron_types
+                .iter()
+                .any(|t| t.name == self.net.growth_newborn_type)
+        {
+            type_name = Some(self.net.growth_newborn_type.clone());
+        }
         if type_name.is_none() && matches!(self.neuron_model, NeuronModel::Aarnn) {
             let canonical = match layer {
                 0 => "L2_3_Pyramidal",
@@ -22520,7 +23471,7 @@ impl Runner {
                             *cell = orig;
                         }
                         let val = if current_count < 6 && fastrand::f32() < self.net.p_in as f32 {
-                            fastrand::f64() * 0.2 + 0.05
+                            (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                         } else {
                             0.0
                         };
@@ -22595,7 +23546,7 @@ impl Runner {
                         .unwrap_or(0.0);
                 }
                 let val = if fastrand::f32() < self.net.p_hidden as f32 {
-                    fastrand::f64() * 0.2 + 0.05
+                    (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                 } else {
                     0.0
                 };
@@ -22688,7 +23639,7 @@ impl Runner {
                             *cell = orig;
                         }
                         let val = if fastrand::f32() < self.net.p_out as f32 {
-                            fastrand::f64() * 0.2 + 0.05
+                            (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                         } else {
                             0.0
                         };
@@ -22806,7 +23757,7 @@ impl Runner {
                         *cell = self.w_hh_fwd[l].get((j, parent_j)).copied().unwrap_or(0.0);
                     }
                     let val = if fastrand::f32() < self.net.p_hidden as f32 {
-                        fastrand::f64() * 0.2 + 0.05
+                        (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                     } else {
                         0.0
                     };
@@ -22876,7 +23827,7 @@ impl Runner {
                     let fwd_val = fwd.get((j_new, i)).copied().unwrap_or(0.0);
                     if fwd_val.abs() < 1e-12 {
                         let val = if fastrand::f32() < self.net.p_hidden as f32 {
-                            fastrand::f64() * 0.2 + 0.05
+                            (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                         } else {
                             0.0
                         };
@@ -23158,7 +24109,7 @@ impl Runner {
             for i in 0..num_sensory_neurons {
                 let current_count = self.sensory_connection_count(i);
                 let val = if current_count < 6 && fastrand::f32() < self.net.p_in as f32 {
-                    fastrand::f64() * 0.2 + 0.05
+                    (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                 } else {
                     0.0
                 };
@@ -23227,7 +24178,7 @@ impl Runner {
                     migrated_in += 1;
                 } else {
                     let val = if fastrand::f32() < self.net.p_hidden as f32 {
-                        fastrand::f64() * 0.2 + 0.05
+                        (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                     } else {
                         0.0
                     };
@@ -23237,7 +24188,7 @@ impl Runner {
             } else {
                 // No existing target rows yet; initialize from small random
                 let val = if fastrand::f32() < self.net.p_hidden as f32 {
-                    fastrand::f64() * 0.2 + 0.05
+                    (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                 } else {
                     0.0
                 };
@@ -23288,7 +24239,7 @@ impl Runner {
                     } else {
                         new_fwd_next[(j, num_new - 1)] =
                             if fastrand::f32() < self.net.p_hidden as f32 {
-                                fastrand::f64() * 0.2 + 0.05
+                                (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                             } else {
                                 0.0
                             };
@@ -23297,7 +24248,7 @@ impl Runner {
             } else {
                 for j in 0..num_next {
                     new_fwd_next[(j, num_new - 1)] = if fastrand::f32() < self.net.p_hidden as f32 {
-                        fastrand::f64() * 0.2 + 0.05
+                        (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                     } else {
                         0.0
                     };
@@ -23321,7 +24272,7 @@ impl Runner {
             } else {
                 for j in 0..num_next {
                     new_bwd_next[(num_new - 1, j)] = if fastrand::f32() < self.net.p_hidden as f32 {
-                        fastrand::f64() * 0.2 + 0.05
+                        (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                     } else {
                         0.0
                     };
@@ -23349,7 +24300,7 @@ impl Runner {
                 let mut added_out = 0;
                 for k in 0..num_output_neurons {
                     let val = if fastrand::f32() < self.net.p_out as f32 {
-                        fastrand::f64() * 0.2 + 0.05
+                        (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                     } else {
                         0.0
                     };
@@ -23425,7 +24376,7 @@ impl Runner {
             if fastrand::f32() < self.net.new_edge_prob {
                 if fwd[(j_new, i)].abs() < 1e-12 {
                     let val = if fastrand::f32() < self.net.p_hidden as f32 {
-                        fastrand::f64() * 0.2 + 0.05
+                        (fastrand::f64() * 0.2 + 0.05) * self.net.growth_new_synapse_scale
                     } else {
                         0.0
                     };
@@ -27295,6 +28246,43 @@ mod tests {
     }
 
     #[test]
+    fn test_aarnn_io_connectivity_floor_disabled_keeps_designed_io() {
+        // Designed circuits (growth on, `growth_io_floor_enabled = false`)
+        // keep exactly their connectome's sensory and output wiring: the
+        // floor's random wires saturated the Freenove hexapod CPG (24 Nov).
+        let mut net = NetworkConfig::default();
+        net.growth_enabled = true;
+        net.growth_io_floor_enabled = false;
+        net.use_morphology = false;
+        net.num_hidden_layers = 1;
+        net.num_hidden_per_layer_initial = 4;
+        net.num_sensory_neurons = 3;
+        net.num_output_neurons = 2;
+        let mut r = Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        );
+        r.w_in.fill(0.0);
+        r.w_out.fill(0.0);
+        r.w_in[(0, 0)] = 0.5;
+        r.ensure_sparse_io_connectivity_floor();
+        let nz = |m: &Array2<f64>| m.iter().filter(|w| w.abs() > 1e-12).count();
+        assert_eq!(nz(&r.w_in), 1, "no sensory wires added");
+        assert_eq!(nz(&r.w_out), 0, "no output wires added");
+
+        r.net.growth_io_floor_enabled = true;
+        r.ensure_sparse_io_connectivity_floor();
+        assert!(
+            nz(&r.w_in) >= 3,
+            "floor wires every sensory channel when enabled"
+        );
+        assert!(nz(&r.w_out) >= 2, "floor wires every output when enabled");
+    }
+
+    #[test]
     fn test_aarnn_l4_receives_l23_local_and_distant_column_input() {
         let lif = LIFParams::default();
         let stdp = STDPParams::default();
@@ -29862,6 +30850,9 @@ mod tests {
             enabled: true,
             hidden: vec![vec![false, false, true]],
             outputs: vec![false; 2],
+            newborns: false,
+            pre_hidden: Vec::new(),
+            newborn_outputs: false,
         };
         r.net.aarnn_modulator_tau_ms = 100.0;
         r.net.aarnn_modulator_ref_hz = 10.0;
@@ -29903,6 +30894,28 @@ mod tests {
             gate < 0.25,
             "gate closes as the modulator clears ({gate} after 4 tau)"
         );
+    }
+
+    /// Pool-gated plasticity: without modulatory cells, a named pool gates
+    /// learning by its level above the threshold (0 below, capped at 3).
+    #[test]
+    fn pool_gated_plasticity_follows_the_pool_level() {
+        let mut r = graded_test_runner();
+        r.net.aarnn_modulator_pool = "dopamine".into();
+        r.net.aarnn_modulator_pool_threshold = 1.3;
+        r.net.aarnn_modulator_pool_ref = 0.3;
+        r.neuromod_dopamine = 1.17;
+        assert_eq!(r.modulated_plasticity_gate(), 0.0, "resting pool: closed");
+        r.neuromod_dopamine = 1.6;
+        let gate = r.modulated_plasticity_gate();
+        assert!(
+            (gate - 1.0).abs() < 1e-5,
+            "raised pool opens the gate ({gate})"
+        );
+        r.neuromod_dopamine = 5.0;
+        assert_eq!(r.modulated_plasticity_gate(), 3.0, "capped at 3");
+        r.net.aarnn_modulator_pool = String::new();
+        assert_eq!(r.modulated_plasticity_gate(), 1.0, "no pool: ungated");
     }
 
     /// Driven graded cells depolarise without ever spiking; graded outputs
@@ -30001,9 +31014,10 @@ mod tests {
         let v_inf = (p.v_rest + g * p.e_exc) / (1.0 + g);
         // The tonic current moves the cells 8.75 mV; a missing or doubled
         // bias would be several mV off. The default test network adds a
-        // small stochastic term (observed <= 0.05 mV, source not identified).
+        // small stochastic term (observed <= 0.05 mV with default features,
+        // up to 0.15 mV with --all-features; source not identified).
         for v in r.v_h[0].iter().chain(r.v_o.iter()) {
-            assert!((v - v_inf).abs() < 0.1, "{v} vs {v_inf}");
+            assert!((v - v_inf).abs() < 0.3, "{v} vs {v_inf}");
         }
         // A spiking cell under the same bias plus 8 mV/ms fires tonically.
         let mut s = graded_test_runner();
@@ -30100,5 +31114,162 @@ mod tests {
             r.rebuild_gap_routes().is_err(),
             "asymmetric conductance rejected"
         );
+    }
+}
+
+#[cfg(test)]
+mod neuromod_transmission_tests {
+    use super::*;
+
+    fn runner(depth: usize) -> Runner {
+        let mut net = NetworkConfig::default();
+        net.aarnn_layer_depth = depth;
+        net.num_sensory_neurons = net.num_sensory_neurons.max(8);
+        net.num_output_neurons = net.num_output_neurons.max(4);
+        Runner::new(
+            LIFParams::default(),
+            STDPParams::default(),
+            net,
+            NeuronModel::Aarnn,
+            Learning::Aarnn,
+        )
+    }
+
+    #[test]
+    fn transmission_is_neutral_at_baseline_and_gated_by_depth() {
+        let mut r = runner(1);
+        let base = Array1::from_vec(vec![1.0, -2.0, 0.5]);
+        let mut c = base.clone();
+        r.neuromod_transmission(Some(0), &mut c, 1, false);
+        assert_eq!(c, base, "baseline levels leave transmission unchanged");
+        // Dopamine one unit above baseline: default D1-like receptors (+0.4) give x1.4.
+        r.neuromod_dopamine = 2.0;
+        let mut c = base.clone();
+        r.neuromod_transmission(Some(0), &mut c, 1, false);
+        assert!(
+            (c[0] - 1.4).abs() < 1e-12 && (c[1] + 2.8).abs() < 1e-12,
+            "{c:?}"
+        );
+        // Depth 0 is the minimal kernel: no neuromodulation.
+        let mut c = base.clone();
+        r.neuromod_transmission(Some(0), &mut c, 0, false);
+        assert_eq!(c, base);
+        // Serotonin two units above baseline: 5-HT1-like (-0.25) halves output-layer drive.
+        r.neuromod_dopamine = 1.0;
+        r.neuromod_serotonin = 3.0;
+        let mut c = base.clone();
+        r.neuromod_transmission(None, &mut c, 1, false);
+        assert!((c[0] - 0.5).abs() < 1e-12, "{c:?}");
+        // Dynamic ACh scales the CPU synaptic filter path (as the OpenCL filter does).
+        r.neuromod_serotonin = 1.0;
+        r.neuromod_ach = 2.0;
+        let mut c = base.clone();
+        r.neuromod_transmission(Some(0), &mut c, 1, true);
+        let expect = if r.net.aarnn_bio.neuromodulation_enabled {
+            2.0
+        } else {
+            1.0
+        };
+        assert!((c[0] - expect).abs() < 1e-12, "{c:?}");
+        // The switch turns it off at every depth.
+        r.net.aarnn_neuromod_transmission_enabled = false;
+        r.neuromod_dopamine = 2.0;
+        let mut c = base.clone();
+        r.neuromod_transmission(Some(0), &mut c, 2, true);
+        assert_eq!(c, base);
+    }
+
+    #[cfg(feature = "growth3d")]
+    #[test]
+    fn depth_two_uses_the_cell_types_receptors() {
+        let mut r = runner(2);
+        if r.bio_h.first().map_or(true, |v| v.is_empty()) {
+            return;
+        }
+        r.bio_h[0][0].dopamine_receptor_gain = -0.4; // D2-like
+        r.neuromod_dopamine = 2.0;
+        let mut c = Array1::from_elem(r.bio_h[0].len().min(2).max(1), 1.0);
+        r.neuromod_transmission(Some(0), &mut c, 2, false);
+        assert!((c[0] - 0.6).abs() < 1e-12, "D2-like cell depressed: {c:?}");
+        if c.len() > 1 {
+            assert!(
+                (c[1] - 1.4).abs() < 1e-12,
+                "default D1-like cell facilitated: {c:?}"
+            );
+        }
+        let mut c1 = Array1::from_elem(1, 1.0);
+        r.neuromod_transmission(Some(0), &mut c1, 1, false);
+        assert!(
+            (c1[0] - 1.4).abs() < 1e-12,
+            "depth 1 uses the network default receptors"
+        );
+    }
+
+    #[cfg(not(feature = "superdense_executor"))]
+    fn drive(tag: &str, depth: usize, steps: usize) -> Runner {
+        let mut r = runner(depth);
+        let ns = r.net.num_sensory_neurons;
+        r.net.aarnn_sensory_modalities = vec![tag.to_string(); ns];
+        r.net.aarnn_neuromod_novelty_noradrenaline_gain = 0.0;
+        r.net.aarnn_neuromod_activity_dopamine_gain = 0.0;
+        r.net.aarnn_neuromod_cell_release_gain = 0.0;
+        // A quiet second first (the thermal reference adapts during the first 0.5 s).
+        let quiet = vec![0i8; ns];
+        for _ in 0..1000 {
+            r.step(Some(&quiet));
+        }
+        let input = vec![1i8; ns];
+        for _ in 0..steps {
+            r.step(Some(&input));
+        }
+        r
+    }
+
+    // The environmental drives are applied in the Runner's own neuromodulator
+    // update. The opt-in superdense executor derives the global levels as
+    // causal field events (derive_next_global_field_events) and does not yet
+    // carry the environmental drives, so these tests cover the default path.
+    #[cfg(not(feature = "superdense_executor"))]
+    #[test]
+    fn food_raises_dopamine_and_serotonin_light_raises_serotonin() {
+        let food = drive("food", 1, 2500);
+        let light = drive("light", 1, 2500);
+        let other = drive("other", 1, 2500);
+        assert!(
+            food.neuromod_dopamine > 1.3 && food.neuromod_serotonin > 1.3,
+            "food: {:?}",
+            food.neuromod_levels()
+        );
+        assert!(
+            light.neuromod_serotonin > 1.3 && light.neuromod_dopamine < 1.05,
+            "light: {:?}",
+            light.neuromod_levels()
+        );
+        assert!(
+            (other.neuromod_dopamine - 1.0).abs() < 1e-3
+                && (other.neuromod_serotonin - 1.0).abs() < 1e-3
+        );
+        assert!(food.neuromod_drives.food > 0.9 && other.neuromod_drives.food == 0.0);
+        let heat = drive("heat", 1, 2500);
+        assert!(
+            heat.neuromod_noradrenaline > 1.3,
+            "heat: {:?}",
+            heat.neuromod_levels()
+        );
+        // Telemetry history is recorded.
+        assert!(!food.neuromod_history.is_empty());
+    }
+
+    #[cfg(not(feature = "superdense_executor"))]
+    #[test]
+    fn serotonin_depresses_bouton_release_from_depth_two() {
+        let d2 = drive("light", 2, 2500);
+        assert!(
+            d2.neuromod_release_factor < 0.95,
+            "release factor {}",
+            d2.neuromod_release_factor
+        );
+        let d1 = drive("light", 1, 2500);
+        assert_eq!(d1.neuromod_release_factor, 1.0);
     }
 }

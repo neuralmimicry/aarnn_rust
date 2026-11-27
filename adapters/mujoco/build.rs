@@ -22,9 +22,9 @@ fn main() {
             .clang_arg(format!("-I{}",sdk.join("include").display()))
             .allowlist_function("mj_(loadXML|makeData|deleteData|deleteModel|step|forward|resetData|name2id|id2name|stateSize|getState|setState|applyFT|objectVelocity|objectAcceleration|rnePostConstraint|contactForce|ray|version|versionString)")
             .allowlist_type("mjModel|mjData|mjtObj|mjtState|mjtJoint")
-            .allowlist_function("mjv_(defaultCamera|defaultOption|defaultScene|makeScene|freeScene|updateScene|moveCamera)")
-            .allowlist_function("mjr_(defaultContext|makeContext|freeContext|render|readPixels)")
-            .allowlist_type("mjvCamera|mjvOption|mjvScene|mjrContext|mjrRect|mjtCatBit|mjtMouse|mjtFontScale")
+            .allowlist_function("mjv_(defaultCamera|defaultOption|defaultScene|makeScene|freeScene|updateScene|moveCamera|defaultFigure)")
+            .allowlist_function("mjr_(defaultContext|makeContext|freeContext|render|readPixels|overlay|figure|rectangle)")
+            .allowlist_type("mjvCamera|mjvOption|mjvScene|mjrContext|mjrRect|mjtCatBit|mjtMouse|mjtFontScale|mjvFigure|mjtGridPos|mjtFont")
             .derive_default(false).layout_tests(false).generate().expect("generate MuJoCo 3.17 bindings");
         bindings
             .write_to_file(
