@@ -191,6 +191,9 @@ pub mod runtime_api;
 pub mod shared_fs;
 /// Bounded-frame transfer for complete network snapshots.
 pub mod snapshot_transfer;
+/// Hosted tenancy: subscription entitlements and quota decisions for
+/// customer-owned runtime workspaces.
+pub mod tenancy;
 
 #[cfg(feature = "growth3d")]
 /// Topological and spatial layout definitions for 3D neural growth.

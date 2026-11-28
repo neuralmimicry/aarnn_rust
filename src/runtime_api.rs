@@ -258,6 +258,64 @@ pub struct WorkspaceControlRequest {
     pub action: WorkspaceControlAction,
 }
 
+/// One sensory frame for a runtime workspace. Either list the sensory neuron
+/// indices that spike, or send an AER1 payload (hex) whose addresses start at
+/// `aer_base`; both may be combined.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct WorkspaceAerInjectRequest {
+    #[serde(default)]
+    pub spike_indices: Option<Vec<u32>>,
+    #[serde(default)]
+    pub aer_payload_hex: Option<String>,
+    #[serde(default)]
+    pub aer_base: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct WorkspaceAerInjectResponse {
+    pub workspace_id: String,
+    pub owner_id: String,
+    /// Sensory neurons set in the accepted frame.
+    pub accepted_spikes: usize,
+    /// Frames waiting for the scheduler, including this one.
+    pub queued_frames: usize,
+    pub num_sensory_neurons: usize,
+    /// The workspace step when the frame was queued; it is applied on a later
+    /// step.
+    pub step: u64,
+    pub running: bool,
+}
+
+/// Output spikes of a runtime workspace since a step, for a device that polls.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct WorkspaceAerOutputResponse {
+    pub workspace_id: String,
+    pub owner_id: String,
+    pub step: u64,
+    pub sim_time_ms: f64,
+    pub running: bool,
+    pub num_output_neurons: usize,
+    /// Output neurons that fired on the latest step.
+    pub output: Vec<usize>,
+    /// Bounded recent history, filtered to steps after `since_step`.
+    pub output_history: Vec<crate::engine::EngineSpikeHistoryFrame>,
+    pub pending_input_frames: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct WorkspacePeripheralGrantRequest {
+    /// The principal (Customers username of a device service account) allowed
+    /// to send AER input to, and read AER output from, this workspace.
+    pub principal: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct WorkspacePeripheralGrantsResponse {
+    pub workspace_id: String,
+    pub owner_id: String,
+    pub principals: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 struct AuthModeResponse {
     mode: String,

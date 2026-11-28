@@ -8,15 +8,16 @@ use crate::distributed::proto::{
 use crate::engine::{EnginePayloadKind, EngineSpec, RunnerEngine};
 use crate::morphology_contract::{AxisAlignedBox, DisplayMode, DisplaySnapshot};
 use crate::runtime_api::{
-    AutoscalerReport, RuntimeStatusResponse, WorkspaceActivityResponse, WorkspaceControlAction,
-    WorkspaceCreateRequest, WorkspaceDetailResponse, WorkspaceImportRequest,
+    AutoscalerReport, RuntimeStatusResponse, WorkspaceActivityResponse, WorkspaceAerInjectResponse,
+    WorkspaceAerOutputResponse, WorkspaceControlAction, WorkspaceCreateRequest,
+    WorkspaceDetailResponse, WorkspaceImportRequest, WorkspacePeripheralGrantsResponse,
     WorkspaceSnapshotResponse, WorkspaceSummary, WorkspaceTopologyResponse,
 };
 use crate::shared_fs::{FileLease, acquire_lease_with_timeout, try_acquire_lease};
 use anyhow::{Context, anyhow};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -1033,7 +1034,24 @@ struct WorkspaceManifest {
     desired_running: bool,
     autosave_steps: u64,
     engine: EngineSpec,
+    /// Principals (device service accounts) the owner allowed to send AER
+    /// input to, and read AER output from, this workspace.
+    #[serde(default)]
+    peripheral_principals: Vec<String>,
 }
+
+/// Limits a hosted plan places on one workspace.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorkspaceLimits {
+    /// Upper bound on total neurons, including neurons grown later. Zero
+    /// leaves the network's own limit unchanged.
+    pub max_total_neurons: u64,
+}
+
+/// Sensory frames queued for a workspace beyond this are refused, so a
+/// device that sends faster than the network steps gets back-pressure instead
+/// of unbounded memory growth.
+pub const MAX_PENDING_SENSORY_FRAMES: usize = 256;
 
 impl WorkspaceManifest {
     fn summary(&self, status: &crate::engine::EngineStatus, running: bool) -> WorkspaceSummary {
@@ -1071,9 +1089,25 @@ struct WorkspaceHandle {
     avg_step_time_micros: AtomicU64,
     status_cache: RwLock<crate::engine::EngineStatus>,
     activity_cache: RwLock<crate::engine::EngineActivity>,
+    /// AER input frames waiting for the scheduler, applied one per step.
+    pending_sensory: Mutex<VecDeque<Vec<i8>>>,
 }
 
 impl WorkspaceHandle {
+    fn take_pending_sensory(&self) -> Option<Vec<i8>> {
+        self.pending_sensory
+            .lock()
+            .ok()
+            .and_then(|mut queue| queue.pop_front())
+    }
+
+    fn pending_sensory_len(&self) -> usize {
+        self.pending_sensory
+            .lock()
+            .map(|queue| queue.len())
+            .unwrap_or(0)
+    }
+
     fn manifest_path(&self) -> PathBuf {
         self.dir.join(MANIFEST_FILE)
     }
@@ -1351,6 +1385,19 @@ impl RuntimeManager {
         user_id: &str,
         req: WorkspaceCreateRequest,
     ) -> anyhow::Result<WorkspaceDetailResponse> {
+        self.create_workspace_with_limits(user_id, req, WorkspaceLimits::default())
+            .await
+    }
+
+    /// Create a workspace whose network is bounded by a hosted plan. The
+    /// request is refused before anything is persisted when the initial
+    /// network already exceeds the plan's neuron cap.
+    pub async fn create_workspace_with_limits(
+        &self,
+        user_id: &str,
+        req: WorkspaceCreateRequest,
+        limits: WorkspaceLimits,
+    ) -> anyhow::Result<WorkspaceDetailResponse> {
         let sanitized_user = sanitize_segment(user_id, "anonymous");
         let requested_id = req
             .workspace_id
@@ -1384,6 +1431,11 @@ impl RuntimeManager {
             ));
         }
 
+        // Refuse an oversized hosted brain before allocating it.
+        if let Some(config_json) = req.config_json.as_deref() {
+            crate::engine::check_config_neuron_cap(config_json, limits.max_total_neurons)?;
+        }
+
         let mut spec = EngineSpec::default();
         if let Some(model) = req.neuron_model.as_deref() {
             spec.neuron_model = model.to_string();
@@ -1399,6 +1451,7 @@ impl RuntimeManager {
         if let Some(snapshot_json) = req.snapshot_json.as_deref() {
             engine.import_snapshot_json(snapshot_json)?;
         }
+        engine.apply_neuron_cap(limits.max_total_neurons)?;
 
         let status = engine.status();
         let activity = engine.activity();
@@ -1415,6 +1468,7 @@ impl RuntimeManager {
             desired_running: req.auto_start.unwrap_or(false),
             autosave_steps: self.config.autosave_steps.max(1),
             engine: engine.spec().clone(),
+            peripheral_principals: Vec::new(),
         };
 
         let handle = Arc::new(WorkspaceHandle {
@@ -1428,6 +1482,7 @@ impl RuntimeManager {
             avg_step_time_micros: AtomicU64::new(0),
             status_cache: RwLock::new(status),
             activity_cache: RwLock::new(activity),
+            pending_sensory: Mutex::new(VecDeque::new()),
         });
 
         self.persist_workspace_files(&handle, &snapshot_json, true)
@@ -1461,12 +1516,35 @@ impl RuntimeManager {
         }
         handle.running.store(false, Ordering::SeqCst);
         self.persist_manifest_only(&handle).await?;
-        let _lease = self
+        let lease = self
             .acquire_workspace_lease(&handle, Duration::from_secs(5))
             .await?;
         self.workspaces.write().await.remove(&key);
-        std::fs::remove_dir_all(&handle.dir)
+        // The lease is an open, locked file inside the workspace directory.
+        // Removing the directory while it is open fails on NFS (the client
+        // keeps a silly-renamed .nfs file, so the directory is never empty).
+        // Move the workspace out of the namespace under the lease, release
+        // it, then remove the moved directory; anything NFS still holds is
+        // left in trash, which is not a workspace and is safe to sweep later.
+        let trash_dir = self.config.root_dir.join("trash");
+        std::fs::create_dir_all(&trash_dir)
+            .with_context(|| format!("failed to create '{}'", trash_dir.display()))?;
+        let tombstone = trash_dir.join(format!(
+            "{}--{}--{}",
+            key.user_id,
+            key.workspace_id,
+            now_ms()
+        ));
+        std::fs::rename(&handle.dir, &tombstone)
             .with_context(|| format!("failed to delete '{}'", handle.dir.display()))?;
+        drop(lease);
+        if let Err(err) = std::fs::remove_dir_all(&tombstone) {
+            nm_err!(
+                "[warn] deleted workspace left in '{}' for a later sweep: {}",
+                tombstone.display(),
+                err
+            );
+        }
         Ok(serde_json::json!({ "ok": true, "workspace_id": workspace_id }))
     }
 
@@ -1649,6 +1727,211 @@ impl RuntimeManager {
         })
     }
 
+    /// Number of sensory neurons a frame for this workspace must address.
+    pub async fn workspace_sensory_len(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+    ) -> anyhow::Result<usize> {
+        let handle = self.workspace_handle(user_id, workspace_id).await?;
+        self.maybe_refresh_workspace_from_disk(&handle).await?;
+        Ok(handle.status_cache.read().await.num_sensory_neurons)
+    }
+
+    /// Queue one sensory frame (one value per sensory neuron, non-zero
+    /// spikes). The scheduler applies queued frames one per step, in order;
+    /// a stopped workspace applies them when it is started or stepped.
+    pub async fn queue_workspace_sensory(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+        frame: Vec<i8>,
+    ) -> anyhow::Result<WorkspaceAerInjectResponse> {
+        let handle = self.workspace_handle(user_id, workspace_id).await?;
+        self.maybe_refresh_workspace_from_disk(&handle).await?;
+        let status = handle.status_cache.read().await.clone();
+        anyhow::ensure!(
+            status.num_sensory_neurons > 0,
+            "workspace '{}' has no sensory neurons to receive input",
+            workspace_id
+        );
+        anyhow::ensure!(
+            frame.len() == status.num_sensory_neurons,
+            "frame addresses {} sensory neurons; workspace '{}' has {}",
+            frame.len(),
+            workspace_id,
+            status.num_sensory_neurons
+        );
+        let accepted_spikes = frame.iter().filter(|value| **value != 0).count();
+        let queued_frames = {
+            let mut queue = handle
+                .pending_sensory
+                .lock()
+                .map_err(|_| anyhow!("workspace input queue lock poisoned"))?;
+            anyhow::ensure!(
+                queue.len() < MAX_PENDING_SENSORY_FRAMES,
+                "workspace '{}' input queue is full ({} frames); slow down or start the workspace",
+                workspace_id,
+                MAX_PENDING_SENSORY_FRAMES
+            );
+            queue.push_back(frame);
+            queue.len()
+        };
+        Ok(WorkspaceAerInjectResponse {
+            workspace_id: handle.key.workspace_id.clone(),
+            owner_id: handle.key.user_id.clone(),
+            accepted_spikes,
+            queued_frames,
+            num_sensory_neurons: status.num_sensory_neurons,
+            step: status.step,
+            running: handle.running.load(Ordering::SeqCst),
+        })
+    }
+
+    /// Output spikes for a polling device: the latest step's output and the
+    /// bounded history after `since_step`.
+    pub async fn workspace_aer_output(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+        since_step: Option<u64>,
+    ) -> anyhow::Result<WorkspaceAerOutputResponse> {
+        let handle = self.workspace_handle(user_id, workspace_id).await?;
+        self.maybe_refresh_workspace_from_disk(&handle).await?;
+        let status = handle.status_cache.read().await.clone();
+        let activity = handle.activity_cache.read().await.clone();
+        let output_history = activity
+            .output_history
+            .into_iter()
+            .filter(|frame| since_step.is_none_or(|since| frame.step > since))
+            .collect();
+        Ok(WorkspaceAerOutputResponse {
+            workspace_id: handle.key.workspace_id.clone(),
+            owner_id: handle.key.user_id.clone(),
+            step: activity.step,
+            sim_time_ms: activity.sim_time_ms,
+            running: handle.running.load(Ordering::SeqCst),
+            num_output_neurons: status.num_output_neurons,
+            output: activity.output,
+            output_history,
+            pending_input_frames: handle.pending_sensory_len(),
+        })
+    }
+
+    pub async fn workspace_peripheral_principals(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+    ) -> anyhow::Result<WorkspacePeripheralGrantsResponse> {
+        let handle = self.workspace_handle(user_id, workspace_id).await?;
+        self.maybe_refresh_workspace_from_disk(&handle).await?;
+        let manifest = handle.manifest.read().await;
+        Ok(WorkspacePeripheralGrantsResponse {
+            workspace_id: handle.key.workspace_id.clone(),
+            owner_id: handle.key.user_id.clone(),
+            principals: manifest.peripheral_principals.clone(),
+        })
+    }
+
+    /// Allow `principal` to send AER input to, and read AER output from, the
+    /// owner's workspace. Granting twice is harmless.
+    pub async fn grant_workspace_principal(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+        principal: &str,
+    ) -> anyhow::Result<WorkspacePeripheralGrantsResponse> {
+        let principal = normalize_principal(principal)?;
+        let handle = self.workspace_handle(user_id, workspace_id).await?;
+        self.maybe_refresh_workspace_from_disk(&handle).await?;
+        {
+            let mut manifest = handle.manifest.write().await;
+            if !manifest
+                .peripheral_principals
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(&principal))
+            {
+                manifest.peripheral_principals.push(principal);
+                manifest.peripheral_principals.sort();
+            }
+            manifest.updated_at_ms = now_ms();
+        }
+        self.persist_manifest_only(&handle).await?;
+        self.workspace_peripheral_principals(user_id, workspace_id)
+            .await
+    }
+
+    pub async fn revoke_workspace_principal(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+        principal: &str,
+    ) -> anyhow::Result<WorkspacePeripheralGrantsResponse> {
+        let principal = normalize_principal(principal)?;
+        let handle = self.workspace_handle(user_id, workspace_id).await?;
+        self.maybe_refresh_workspace_from_disk(&handle).await?;
+        {
+            let mut manifest = handle.manifest.write().await;
+            manifest
+                .peripheral_principals
+                .retain(|existing| !existing.eq_ignore_ascii_case(&principal));
+            manifest.updated_at_ms = now_ms();
+        }
+        self.persist_manifest_only(&handle).await?;
+        self.workspace_peripheral_principals(user_id, workspace_id)
+            .await
+    }
+
+    /// True when the owner granted `principal` access to the workspace.
+    pub async fn workspace_grants_principal(
+        &self,
+        owner_id: &str,
+        workspace_id: &str,
+        principal: &str,
+    ) -> bool {
+        let Ok(principal) = normalize_principal(principal) else {
+            return false;
+        };
+        match self
+            .workspace_peripheral_principals(owner_id, workspace_id)
+            .await
+        {
+            Ok(grants) => grants
+                .principals
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(&principal)),
+            Err(_) => false,
+        }
+    }
+
+    /// Distinct principals the owner granted across all their workspaces.
+    pub async fn owner_peripheral_principals(&self, owner_id: &str) -> anyhow::Result<Vec<String>> {
+        self.load_existing_workspaces().await?;
+        let owner = sanitize_segment(owner_id, "anonymous");
+        let handles = {
+            let guard = self.workspaces.read().await;
+            guard
+                .iter()
+                .filter(|(key, _)| key.user_id == owner)
+                .map(|(_, handle)| handle.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut principals = Vec::new();
+        for handle in handles {
+            self.maybe_refresh_workspace_from_disk(&handle).await?;
+            for principal in handle.manifest.read().await.peripheral_principals.iter() {
+                if !principals
+                    .iter()
+                    .any(|existing: &String| existing.eq_ignore_ascii_case(principal))
+                {
+                    principals.push(principal.clone());
+                }
+            }
+        }
+        principals.sort();
+        Ok(principals)
+    }
+
     pub async fn workspace_topology(
         &self,
         user_id: &str,
@@ -1681,6 +1964,27 @@ impl RuntimeManager {
         workspace_id: &str,
         req: WorkspaceImportRequest,
     ) -> anyhow::Result<WorkspaceDetailResponse> {
+        self.import_workspace_json_with_limits(
+            user_id,
+            workspace_id,
+            req,
+            WorkspaceLimits::default(),
+        )
+        .await
+    }
+
+    /// Import a config or snapshot, keeping the network within a hosted
+    /// plan's neuron cap. A refused import restores the last persisted state.
+    pub async fn import_workspace_json_with_limits(
+        &self,
+        user_id: &str,
+        workspace_id: &str,
+        req: WorkspaceImportRequest,
+        limits: WorkspaceLimits,
+    ) -> anyhow::Result<WorkspaceDetailResponse> {
+        if req.kind != Some(EnginePayloadKind::Snapshot) {
+            crate::engine::check_config_neuron_cap(&req.payload_json, limits.max_total_neurons)?;
+        }
         let handle = self.workspace_handle(user_id, workspace_id).await?;
         let _lease = self
             .acquire_workspace_lease(&handle, Duration::from_secs(2))
@@ -1691,6 +1995,7 @@ impl RuntimeManager {
                 .engine
                 .lock()
                 .map_err(|_| anyhow!("workspace engine lock poisoned"))?;
+            let previous_spec = engine.spec().clone();
             if let Some(model) = req.neuron_model.as_deref() {
                 engine.set_neuron_model_name(model)?;
             }
@@ -1701,6 +2006,10 @@ impl RuntimeManager {
                 &req.payload_json,
                 req.kind.unwrap_or(EnginePayloadKind::Auto),
             )?;
+            if let Err(err) = engine.apply_neuron_cap(limits.max_total_neurons) {
+                *engine = restore_persisted_engine(&handle_for_import, previous_spec)?;
+                return Err(err);
+            }
 
             let snapshot_json = engine.export_snapshot_json()?;
             {
@@ -2046,7 +2355,8 @@ impl RuntimeManager {
                         .engine
                         .lock()
                         .map_err(|_| anyhow!("workspace engine lock poisoned"))?;
-                    engine.step(None);
+                    let sensory = handle_for_worker.take_pending_sensory();
+                    engine.step(sensory.as_deref());
                     let activity = engine.activity();
                     let status = engine.status();
                     handle_for_worker.record_step_time(step_started.elapsed());
@@ -2098,7 +2408,8 @@ impl RuntimeManager {
                 .engine
                 .lock()
                 .map_err(|_| anyhow!("workspace engine lock poisoned"))?;
-            engine.step(None);
+            let sensory = handle_for_step.take_pending_sensory();
+            engine.step(sensory.as_deref());
             let activity = engine.activity();
             let status = engine.status();
             handle_for_step.record_step_time(step_started.elapsed());
@@ -2201,7 +2512,7 @@ impl RuntimeManager {
             return Ok(());
         };
 
-        let (current_manifest_snapshot_ms, manifest_changed) = {
+        let (current_manifest_snapshot_ms, manifest_changed, memory_updated_at_ms) = {
             let manifest = handle.manifest.read().await;
             (
                 manifest
@@ -2212,6 +2523,7 @@ impl RuntimeManager {
                     || manifest.last_saved_at_ms != disk_manifest.last_saved_at_ms
                     || manifest.desired_running != disk_manifest.desired_running
                     || manifest.name != disk_manifest.name,
+                manifest.updated_at_ms,
             )
         };
         let snapshot_path = handle.latest_snapshot_path();
@@ -2222,23 +2534,35 @@ impl RuntimeManager {
         .await
         .context("workspace refresh stat task failed")??;
 
+        // The disk manifest was read without holding the manifest lock. If the
+        // in-memory manifest changed meanwhile (a device grant, a rename, a
+        // start), it is newer than what was read: replacing it would lose
+        // that update, and the next persist would write the loss to disk.
         let Some(snapshot_mtime) = snapshot_mtime else {
-            *handle.manifest.write().await = disk_manifest.clone();
-            handle.running.store(
-                disk_manifest.desired_running && !handle.resume_suppressed.load(Ordering::SeqCst),
-                Ordering::SeqCst,
-            );
+            let mut manifest = handle.manifest.write().await;
+            if manifest.updated_at_ms == memory_updated_at_ms {
+                *manifest = disk_manifest.clone();
+                handle.running.store(
+                    disk_manifest.desired_running
+                        && !handle.resume_suppressed.load(Ordering::SeqCst),
+                    Ordering::SeqCst,
+                );
+            }
             return Ok(());
         };
         if snapshot_mtime <= current_manifest_snapshot_ms && !manifest_changed {
             return Ok(());
         }
         if snapshot_mtime <= current_manifest_snapshot_ms {
-            *handle.manifest.write().await = disk_manifest.clone();
-            handle.running.store(
-                disk_manifest.desired_running && !handle.resume_suppressed.load(Ordering::SeqCst),
-                Ordering::SeqCst,
-            );
+            let mut manifest = handle.manifest.write().await;
+            if manifest.updated_at_ms == memory_updated_at_ms {
+                *manifest = disk_manifest.clone();
+                handle.running.store(
+                    disk_manifest.desired_running
+                        && !handle.resume_suppressed.load(Ordering::SeqCst),
+                    Ordering::SeqCst,
+                );
+            }
             return Ok(());
         }
 
@@ -2260,16 +2584,19 @@ impl RuntimeManager {
             *handle_for_refresh.activity_cache.blocking_write() = activity;
             {
                 let mut manifest = handle_for_refresh.manifest.blocking_write();
-                *manifest = disk_manifest.clone();
-                manifest.updated_at_ms = manifest.updated_at_ms.max(snapshot_mtime);
+                if manifest.updated_at_ms == memory_updated_at_ms {
+                    *manifest = disk_manifest.clone();
+                    manifest.updated_at_ms = manifest.updated_at_ms.max(snapshot_mtime);
+                    handle_for_refresh.running.store(
+                        disk_manifest.desired_running
+                            && !handle_for_refresh.resume_suppressed.load(Ordering::SeqCst),
+                        Ordering::SeqCst,
+                    );
+                }
+                // Either way the snapshot on disk is now the loaded state.
                 manifest.last_saved_at_ms = Some(snapshot_mtime);
                 manifest.engine = engine.spec().clone();
             }
-            handle_for_refresh.running.store(
-                disk_manifest.desired_running
-                    && !handle_for_refresh.resume_suppressed.load(Ordering::SeqCst),
-                Ordering::SeqCst,
-            );
             Ok(())
         })
         .await
@@ -2492,6 +2819,7 @@ impl RuntimeManager {
                     avg_step_time_micros: AtomicU64::new(0),
                     status_cache: RwLock::new(status),
                     activity_cache: RwLock::new(activity),
+                    pending_sensory: Mutex::new(VecDeque::new()),
                 });
                 if let Some(snapshot_json) = migrated_snapshot_json {
                     let handle_for_persist = handle.clone();
@@ -2522,6 +2850,41 @@ impl Drop for RuntimeManager {
     fn drop(&mut self) {
         let _ = self.stop_tx.send(true);
     }
+}
+
+/// A principal is a Customers username: bounded, without whitespace or path
+/// separators.
+fn normalize_principal(principal: &str) -> anyhow::Result<String> {
+    let principal = principal.trim();
+    anyhow::ensure!(!principal.is_empty(), "principal is required");
+    anyhow::ensure!(principal.len() <= 128, "principal is too long");
+    anyhow::ensure!(
+        principal
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '@' | '+')),
+        "principal contains unsupported characters"
+    );
+    Ok(principal.to_string())
+}
+
+/// Rebuild a workspace engine from its last persisted snapshot, used when an
+/// import has to be rolled back.
+fn restore_persisted_engine(
+    handle: &WorkspaceHandle,
+    spec: EngineSpec,
+) -> anyhow::Result<RunnerEngine> {
+    let mut engine = RunnerEngine::new(spec)?;
+    let latest = handle.latest_snapshot_path();
+    let path = if latest.exists() {
+        latest
+    } else {
+        handle.baseline_snapshot_path()
+    };
+    let file = std::fs::File::open(&path)
+        .with_context(|| format!("failed to reopen '{}' for rollback", path.display()))?;
+    let mut reader = std::io::BufReader::new(file);
+    engine.import_snapshot_reader(&mut reader)?;
+    Ok(engine)
 }
 
 fn persist_manifest(handle: &WorkspaceHandle) -> anyhow::Result<()> {
@@ -2555,6 +2918,58 @@ fn persist_handle_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn queued_sensory_frames_reach_the_engine_in_order() {
+        let root =
+            std::env::temp_dir().join(format!("aarnn-runtime-aer-queue-{:08x}", fastrand::u32(..)));
+        let runtime = RuntimeManager::new(RuntimeConfig {
+            root_dir: root.clone(),
+            initial_reconcile_delay_ms: 0,
+            continuum: None,
+            ..RuntimeConfig::default()
+        })
+        .await
+        .unwrap();
+        let config = crate::config::NetworkConfig {
+            num_sensory_neurons: 4,
+            num_hidden_layers: 1,
+            num_hidden_per_layer_initial: 4,
+            num_output_neurons: 2,
+            ..crate::config::NetworkConfig::default()
+        };
+        runtime
+            .create_workspace(
+                "alice",
+                WorkspaceCreateRequest {
+                    workspace_id: Some("robot".to_string()),
+                    config_json: Some(serde_json::to_string(&config).unwrap()),
+                    ..WorkspaceCreateRequest::default()
+                },
+            )
+            .await
+            .unwrap();
+        runtime
+            .queue_workspace_sensory("alice", "robot", vec![1, 0, 1, 0])
+            .await
+            .unwrap();
+        runtime
+            .queue_workspace_sensory("alice", "robot", vec![0, 1, 0, 0])
+            .await
+            .unwrap();
+        let handle = runtime.workspace_handle("alice", "robot").await.unwrap();
+
+        runtime.step_workspace_once(handle.clone()).await.unwrap();
+        assert_eq!(handle.activity_cache.read().await.sensory, vec![0, 2]);
+        runtime.step_workspace_once(handle.clone()).await.unwrap();
+        assert_eq!(handle.activity_cache.read().await.sensory, vec![1]);
+        runtime.step_workspace_once(handle.clone()).await.unwrap();
+        assert!(handle.activity_cache.read().await.sensory.is_empty());
+        assert_eq!(handle.pending_sensory_len(), 0);
+
+        runtime.shutdown().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn startup_reconciliation_waits_for_service_startup_delay() {

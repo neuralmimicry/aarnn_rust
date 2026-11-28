@@ -3,10 +3,13 @@
 //
 // Licensed under the MIT License. See LICENSE in the project root.
 use aarnn_rust::config::NetworkConfig;
+use aarnn_rust::engine::NeuronCapExceeded;
 use aarnn_rust::morphology_contract::DisplayMode;
-use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager};
+use aarnn_rust::runtime::{
+    MAX_PENDING_SENSORY_FRAMES, RuntimeConfig, RuntimeManager, WorkspaceLimits,
+};
 use aarnn_rust::runtime_api::{
-    WorkspaceControlAction, WorkspaceCreateRequest, WorkspaceDetailResponse,
+    WorkspaceControlAction, WorkspaceCreateRequest, WorkspaceDetailResponse, WorkspaceImportRequest,
 };
 use std::path::PathBuf;
 use tokio::time::{Duration, Instant};
@@ -397,6 +400,324 @@ async fn runtime_manager_enforces_loaded_workspace_cap_on_create_and_restart() {
     .await
     .unwrap();
     assert_eq!(restarted.list_workspaces("alice").await.unwrap().len(), 1);
+    restarted.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn hosted_runtime_config(root: &std::path::Path) -> RuntimeConfig {
+    RuntimeConfig {
+        root_dir: root.to_path_buf(),
+        tick_interval_ms: 10,
+        initial_reconcile_delay_ms: 0,
+        local_worker_limit: 1,
+        max_loaded_workspaces: usize::MAX,
+        resume_existing_workspaces: false,
+        autosave_steps: 10,
+        continuum: None,
+        reconcile_interval_ms: 10,
+        autoscaler_interval_ms: 50,
+        orchestrator_addr: None,
+    }
+}
+
+fn small_io_config(sensory: usize, hidden: usize, outputs: usize) -> String {
+    let config = NetworkConfig {
+        num_sensory_neurons: sensory,
+        num_hidden_layers: 1,
+        num_hidden_per_layer_initial: hidden,
+        num_output_neurons: outputs,
+        ..NetworkConfig::default()
+    };
+    serde_json::to_string(&config).unwrap()
+}
+
+#[tokio::test]
+async fn hosted_neuron_cap_refuses_oversized_brains_and_rolls_back_imports() {
+    let root = temp_runtime_dir();
+    let runtime = RuntimeManager::new(hosted_runtime_config(&root))
+        .await
+        .unwrap();
+
+    let refused = runtime
+        .create_workspace_with_limits(
+            "alice",
+            WorkspaceCreateRequest {
+                workspace_id: Some("too-big".to_string()),
+                config_json: Some(small_io_config(4, 32, 2)),
+                ..WorkspaceCreateRequest::default()
+            },
+            WorkspaceLimits {
+                max_total_neurons: 8,
+            },
+        )
+        .await
+        .unwrap_err();
+    let exceeded = refused
+        .downcast_ref::<NeuronCapExceeded>()
+        .expect("a neuron cap error");
+    assert_eq!(exceeded.cap, 8);
+    assert!(exceeded.total > 8);
+    assert!(runtime.list_workspaces("alice").await.unwrap().is_empty());
+
+    // A huge config is refused from its declared size, before allocation.
+    let huge = runtime
+        .create_workspace_with_limits(
+            "alice",
+            WorkspaceCreateRequest {
+                workspace_id: Some("huge".to_string()),
+                config_json: Some(small_io_config(4, 50_000_000, 2)),
+                ..WorkspaceCreateRequest::default()
+            },
+            WorkspaceLimits {
+                max_total_neurons: 64,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        huge.downcast_ref::<NeuronCapExceeded>()
+            .map(|err| err.total),
+        Some(50_000_006)
+    );
+
+    let created = runtime
+        .create_workspace_with_limits(
+            "alice",
+            WorkspaceCreateRequest {
+                workspace_id: Some("brain".to_string()),
+                config_json: Some(small_io_config(4, 4, 2)),
+                ..WorkspaceCreateRequest::default()
+            },
+            WorkspaceLimits {
+                max_total_neurons: 64,
+            },
+        )
+        .await
+        .unwrap();
+    let initial_total = created.summary.total_neurons;
+    assert!(initial_total > 0 && initial_total <= 64);
+
+    let import_error = runtime
+        .import_workspace_json_with_limits(
+            "alice",
+            "brain",
+            WorkspaceImportRequest {
+                payload_json: small_io_config(4, 200, 2),
+                kind: None,
+                replace_baseline: None,
+                auto_start: None,
+                neuron_model: None,
+                learning_rule: None,
+            },
+            WorkspaceLimits {
+                max_total_neurons: 64,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(import_error.downcast_ref::<NeuronCapExceeded>().is_some());
+    let detail = runtime.workspace_detail("alice", "brain").await.unwrap();
+    assert_eq!(detail.summary.total_neurons, initial_total);
+
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn aer_frames_queue_in_order_and_apply_on_the_next_step() {
+    let root = temp_runtime_dir();
+    let runtime = RuntimeManager::new(hosted_runtime_config(&root))
+        .await
+        .unwrap();
+    runtime
+        .create_workspace(
+            "alice",
+            WorkspaceCreateRequest {
+                workspace_id: Some("robot".to_string()),
+                config_json: Some(small_io_config(4, 4, 2)),
+                ..WorkspaceCreateRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime
+            .workspace_sensory_len("alice", "robot")
+            .await
+            .unwrap(),
+        4
+    );
+    assert!(
+        runtime
+            .queue_workspace_sensory("alice", "robot", vec![1, 0])
+            .await
+            .is_err(),
+        "a frame must address every sensory neuron"
+    );
+    let queued = runtime
+        .queue_workspace_sensory("alice", "robot", vec![1, 0, 1, 0])
+        .await
+        .unwrap();
+    assert_eq!(queued.accepted_spikes, 2);
+    assert_eq!(queued.queued_frames, 1);
+    runtime
+        .queue_workspace_sensory("alice", "robot", vec![0, 1, 0, 0])
+        .await
+        .unwrap();
+
+    // Frame contents reaching the engine are checked in the runtime unit
+    // tests; here the public API must drain the queue one frame per step.
+    runtime
+        .control_workspace("alice", "robot", WorkspaceControlAction::Step)
+        .await
+        .unwrap();
+    let output = runtime
+        .workspace_aer_output("alice", "robot", None)
+        .await
+        .unwrap();
+    assert_eq!(output.pending_input_frames, 1);
+    assert_eq!(output.num_output_neurons, 2);
+
+    runtime
+        .control_workspace("alice", "robot", WorkspaceControlAction::Step)
+        .await
+        .unwrap();
+    let drained = runtime
+        .workspace_aer_output("alice", "robot", None)
+        .await
+        .unwrap();
+    assert_eq!(drained.pending_input_frames, 0);
+    let later = runtime
+        .workspace_aer_output("alice", "robot", Some(u64::MAX - 1))
+        .await
+        .unwrap();
+    assert!(later.output_history.is_empty());
+
+    for _ in 0..MAX_PENDING_SENSORY_FRAMES {
+        runtime
+            .queue_workspace_sensory("alice", "robot", vec![0, 0, 0, 1])
+            .await
+            .unwrap();
+    }
+    assert!(
+        runtime
+            .queue_workspace_sensory("alice", "robot", vec![0, 0, 0, 1])
+            .await
+            .is_err(),
+        "a full input queue must push back"
+    );
+
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn peripheral_grants_persist_and_count_distinct_devices_per_owner() {
+    let root = temp_runtime_dir();
+    let runtime = RuntimeManager::new(hosted_runtime_config(&root))
+        .await
+        .unwrap();
+    for workspace_id in ["left", "right"] {
+        runtime
+            .create_workspace(
+                "alice",
+                WorkspaceCreateRequest {
+                    workspace_id: Some(workspace_id.to_string()),
+                    config_json: Some(small_io_config(2, 2, 1)),
+                    ..WorkspaceCreateRequest::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+    runtime
+        .grant_workspace_principal("alice", "left", "svc_robot")
+        .await
+        .unwrap();
+    runtime
+        .grant_workspace_principal("alice", "right", "svc_robot")
+        .await
+        .unwrap();
+    let grants = runtime
+        .grant_workspace_principal("alice", "left", "svc_arm")
+        .await
+        .unwrap();
+    assert_eq!(grants.principals, vec!["svc_arm", "svc_robot"]);
+    assert!(
+        runtime
+            .grant_workspace_principal("alice", "left", "bad principal/../x")
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        runtime.owner_peripheral_principals("alice").await.unwrap(),
+        vec!["svc_arm", "svc_robot"]
+    );
+    assert!(
+        runtime
+            .workspace_grants_principal("alice", "right", "SVC_ROBOT")
+            .await
+    );
+    assert!(
+        !runtime
+            .workspace_grants_principal("alice", "right", "svc_arm")
+            .await
+    );
+    assert!(
+        !runtime
+            .workspace_grants_principal("bob", "left", "svc_robot")
+            .await
+    );
+    runtime
+        .revoke_workspace_principal("alice", "left", "svc_arm")
+        .await
+        .unwrap();
+    runtime.shutdown().await;
+
+    let restarted = RuntimeManager::new(hosted_runtime_config(&root))
+        .await
+        .unwrap();
+    assert_eq!(
+        restarted
+            .owner_peripheral_principals("alice")
+            .await
+            .unwrap(),
+        vec!["svc_robot"]
+    );
+    restarted.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn deleting_a_workspace_removes_it_without_leaving_it_loadable() {
+    let root = temp_runtime_dir();
+    let runtime = RuntimeManager::new(hosted_runtime_config(&root))
+        .await
+        .unwrap();
+    runtime
+        .create_workspace(
+            "alice",
+            WorkspaceCreateRequest {
+                workspace_id: Some("gone".to_string()),
+                config_json: Some(small_io_config(2, 2, 1)),
+                ..WorkspaceCreateRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+    runtime.delete_workspace("alice", "gone").await.unwrap();
+    assert!(runtime.list_workspaces("alice").await.unwrap().is_empty());
+    assert!(!root.join("users/alice/workspaces/gone").exists());
+    let trash_left = std::fs::read_dir(root.join("trash"))
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    assert_eq!(trash_left, 0, "a local filesystem leaves nothing in trash");
+    runtime.shutdown().await;
+
+    let restarted = RuntimeManager::new(hosted_runtime_config(&root))
+        .await
+        .unwrap();
+    assert!(restarted.list_workspaces("alice").await.unwrap().is_empty());
     restarted.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }

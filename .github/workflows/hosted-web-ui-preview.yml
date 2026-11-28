@@ -1,0 +1,81 @@
+name: Hosted web-ui preview image
+
+# A reviewable branch's web_ui as a small image for an isolated sandbox,
+# built on GitHub-hosted runners so it does not depend on (or load) the
+# self-hosted runners on the AARNN hosts. Only on demand or on preview
+# branches; never main, never latest or environment tracks.
+#
+# Feature set: engine_runtime without opencl (hosted brains run on CPU
+# nodes); the binary is cross-compiled for arm64, so no emulation.
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feat/hosted-tenancy', 'preview/**']
+    paths:
+      - 'src/**'
+      - 'web_ui/**'
+      - 'proto/**'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Containerfile.hosted-preview'
+      - '.github/workflows/hosted-web-ui-preview.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-web-ui-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FEATURES: parallel,sysinfo,obs,shmem,growth3d,morpho
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross protobuf-compiler cmake
+          rustup show active-toolchain
+          rustup target add aarch64-unknown-linux-gnu
+      - name: Build web_ui for arm64
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+          CARGO_INCREMENTAL: "0"
+        run: |
+          cargo build --release --locked --target aarch64-unknown-linux-gnu \
+            --no-default-features --features "${FEATURES}" --bin web_ui
+          mkdir -p dist/hosted-preview
+          cp target/aarch64-unknown-linux-gnu/release/web_ui dist/hosted-preview/web_ui
+          aarch64-linux-gnu-strip dist/hosted-preview/web_ui
+          cp Containerfile.hosted-preview dist/hosted-preview/Containerfile
+          cp /etc/ssl/certs/ca-certificates.crt dist/hosted-preview/ca-certificates.crt
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: dist/hosted-preview
+          file: dist/hosted-preview/Containerfile
+          platforms: linux/arm64
+          push: true
+          tags: ghcr.io/neuralmimicry/aarnn_rust:hosted-preview-web-ui-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/neuralmimicry/aarnn_rust
+            org.opencontainers.image.revision=${{ github.sha }}

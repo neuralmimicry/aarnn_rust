@@ -23,7 +23,7 @@ use aarnn_rust::distributed::proto::{
     StatusRequest, control_update, distributed_neuromorphic_client::DistributedNeuromorphicClient,
     network_update_request,
 };
-use aarnn_rust::engine::{EngineSpec, RunnerEngine};
+use aarnn_rust::engine::{EngineSpec, NeuronCapExceeded, RunnerEngine};
 use aarnn_rust::fpv_render_jobs::{self as fpv_jobs, FpvRenderError, FpvRenderRequest};
 use aarnn_rust::management::{
     Capability as ManagementCapability, ManagementError, MutationContext, Operation, OperationKind,
@@ -44,9 +44,12 @@ use aarnn_rust::peripheral::{
 use aarnn_rust::runner::{
     decode_snapshot_metadata_with_profile_backfill, decode_snapshot_with_profile_backfill,
 };
-use aarnn_rust::runtime::{RuntimeConfig, RuntimeManager, WorkspaceDisplayProjectionBusy};
+use aarnn_rust::runtime::{
+    RuntimeConfig, RuntimeManager, WorkspaceDisplayProjectionBusy, WorkspaceLimits,
+};
 use aarnn_rust::runtime_api::{
-    WorkspaceControlAction, WorkspaceControlRequest, WorkspaceCreateRequest, WorkspaceImportRequest,
+    WorkspaceAerInjectRequest, WorkspaceControlAction, WorkspaceControlRequest,
+    WorkspaceCreateRequest, WorkspaceImportRequest, WorkspacePeripheralGrantRequest,
 };
 use aarnn_rust::service_access::{
     ResolvedServiceAccess, SERVICE_ACCESS_CONTROL, SERVICE_ACCESS_OBSERVE, SERVICE_ACCESS_REQUEST,
@@ -58,6 +61,10 @@ use aarnn_rust::spike_io::encoding::TemporalEncodingContext;
 use aarnn_rust::spike_io::profiles::{SpikeIoConfig, encode_network_inputs_with};
 use aarnn_rust::spike_io::transport::{
     decode_hex_payload as decode_spike_hex_payload, encode_exchange, spikes_from_transport,
+};
+use aarnn_rust::tenancy::{
+    Entitlement, EntitlementClient, QuotaDecision, TenantUsage, check_create, check_device_grant,
+    check_start, neuron_cap,
 };
 use anyhow::Context;
 use argon2::password_hash::rand_core::OsRng;
@@ -384,6 +391,9 @@ struct AppState {
     commerce: CommerceConfig,
     llm_output_vocab: Arc<RwLock<DynamicOutputDecoder>>,
     fpv_job_root: PathBuf,
+    /// Hosted tenancy: when set, runtime workspaces are bounded by each
+    /// owner's subscription entitlement from Billing.
+    tenancy: Option<Arc<EntitlementClient>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -590,6 +600,20 @@ fn api_access_requirement(method: &Method, path: &str) -> Option<AccessRequireme
         ("GET", ["api", "runtime", "workspaces", _, "export"]) => {
             Some(AccessRequirement::aarnn_observe())
         }
+        ("POST", ["api", "runtime", "workspaces", _, "aer", "inject"]) => {
+            Some(AccessRequirement::aarnn_use())
+        }
+        ("GET", ["api", "runtime", "workspaces", _, "aer", "output"]) => {
+            Some(AccessRequirement::aarnn_observe())
+        }
+        ("GET", ["api", "runtime", "workspaces", _, "peripheral-grants"]) => {
+            Some(AccessRequirement::aarnn_observe())
+        }
+        ("POST", ["api", "runtime", "workspaces", _, "peripheral-grants"])
+        | ("DELETE", ["api", "runtime", "workspaces", _, "peripheral-grants", _]) => {
+            Some(AccessRequirement::aarnn_use())
+        }
+        ("GET", ["api", "runtime", "tenancy"]) => Some(AccessRequirement::aarnn_request()),
         ("GET", ["api", "management", "status"]) => Some(AccessRequirement::aarnn_observe()),
         ("POST", ["api", "management", "operations"]) => Some(AccessRequirement::aarnn_control()),
         ("POST", ["api", "management", "migrations"])
@@ -621,6 +645,41 @@ fn api_access_requirement(method: &Method, path: &str) -> Option<AccessRequireme
         ("POST", ["api", "update_network"]) => Some(AccessRequirement::aarnn_use()),
         ("POST", ["api", "control_network"]) => Some(AccessRequirement::aarnn_use()),
         _ => None,
+    }
+}
+
+/// In a hosted tenancy deployment a customer owns their brains outright: the
+/// operations the research profile reserves for `aarnn:control` (stopping,
+/// resetting, deleting) are allowed at `aarnn:use` on the caller's own
+/// workspaces. Ownership is still enforced by the handlers.
+fn tenancy_access_requirement(
+    tenancy_enabled: bool,
+    method: &Method,
+    path: &str,
+    requirement: AccessRequirement,
+) -> AccessRequirement {
+    if !tenancy_enabled {
+        return requirement;
+    }
+    let segments = path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    match (method.as_str(), segments.as_slice()) {
+        ("DELETE", ["api", "runtime", "workspaces", _]) => AccessRequirement::aarnn_use(),
+        _ => requirement,
+    }
+}
+
+fn tenancy_workspace_control_requirement(
+    tenancy_enabled: bool,
+    action: WorkspaceControlAction,
+) -> AccessRequirement {
+    if tenancy_enabled {
+        AccessRequirement::aarnn_use()
+    } else {
+        workspace_control_requirement(action)
     }
 }
 
@@ -2163,6 +2222,13 @@ async fn main() -> anyhow::Result<()> {
     })
     .await?;
 
+    let tenancy = EntitlementClient::from_env()?.map(Arc::new);
+    if tenancy.is_some() {
+        eprintln!(
+            "[web_ui] hosted tenancy enabled: runtime workspaces are bounded by subscription entitlements"
+        );
+    }
+
     let state = Arc::new(AppState {
         default_orchestrator: args.orchestrator,
         default_network: args
@@ -2187,6 +2253,7 @@ async fn main() -> anyhow::Result<()> {
         commerce,
         llm_output_vocab: Arc::new(RwLock::new(load_dynamic_output_decoder())),
         fpv_job_root: fpv_job_root.clone(),
+        tenancy,
     });
     if !args.disable_fpv_workers {
         tokio::spawn(fpv_jobs::worker_loop(fpv_job_root));
@@ -2237,6 +2304,23 @@ async fn main() -> anyhow::Result<()> {
             "/runtime/workspaces/{workspace_id}/export",
             get(export_runtime_workspace),
         )
+        .route(
+            "/runtime/workspaces/{workspace_id}/aer/inject",
+            post(runtime_workspace_aer_inject),
+        )
+        .route(
+            "/runtime/workspaces/{workspace_id}/aer/output",
+            get(runtime_workspace_aer_output),
+        )
+        .route(
+            "/runtime/workspaces/{workspace_id}/peripheral-grants",
+            get(runtime_workspace_peripheral_grants).post(grant_runtime_workspace_peripheral),
+        )
+        .route(
+            "/runtime/workspaces/{workspace_id}/peripheral-grants/{principal}",
+            axum::routing::delete(revoke_runtime_workspace_peripheral),
+        )
+        .route("/runtime/tenancy", get(runtime_tenancy_status))
         .route("/management/status", get(management_http_status))
         .route("/management/operations", post(management_http_submit))
         .route(
@@ -3386,6 +3470,96 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
             }
           }
         },
+        "/api/runtime/workspaces/{workspace_id}/aer/inject": {
+          "post": {
+            "tags": ["network"],
+            "summary": "Queue one AER sensory frame for a runtime workspace",
+            "description": "The scheduler applies queued frames one per step. Callable by the owner, or by a device principal the owner granted (pass `owner`). In a hosted tenancy deployment the owner's subscription must be active.",
+            "operationId": "injectWorkspaceAer",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              { "name": "workspace_id", "in": "path", "required": true, "schema": { "type": "string" } },
+              { "name": "owner", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Workspace owner when a granted device principal calls." }
+            ],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": {
+              "spike_indices": { "type": "array", "items": { "type": "integer", "format": "uint32" } },
+              "aer_payload_hex": { "type": "string", "nullable": true, "description": "Hex-encoded AER1 payload bytes." },
+              "aer_base": { "type": "integer", "format": "uint32", "nullable": true }
+            } } } } },
+            "responses": {
+              "202": { "description": "Frame queued.", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "400": { "description": "Invalid frame.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "402": { "description": "Subscription required.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "Workspace owner access denied.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "429": { "description": "Input queue full.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/runtime/workspaces/{workspace_id}/aer/output": {
+          "get": {
+            "tags": ["network"],
+            "summary": "Read a runtime workspace's output spikes",
+            "operationId": "getWorkspaceAerOutput",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              { "name": "workspace_id", "in": "path", "required": true, "schema": { "type": "string" } },
+              { "name": "owner", "in": "query", "required": false, "schema": { "type": "string" } },
+              { "name": "since_step", "in": "query", "required": false, "schema": { "type": "integer", "format": "uint64" } }
+            ],
+            "responses": {
+              "200": { "description": "Latest output spikes and bounded history after since_step.", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "403": { "description": "Workspace owner access denied.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/runtime/workspaces/{workspace_id}/peripheral-grants": {
+          "get": {
+            "tags": ["network"],
+            "summary": "List device principals granted AER access to a workspace",
+            "operationId": "listWorkspacePeripheralGrants",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [ { "name": "workspace_id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+            "responses": { "200": { "description": "Granted principals.", "content": { "application/json": { "schema": { "type": "object" } } } } }
+          },
+          "post": {
+            "tags": ["network"],
+            "summary": "Grant a device principal AER access to a workspace",
+            "operationId": "grantWorkspacePeripheral",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [ { "name": "workspace_id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["principal"], "properties": { "principal": { "type": "string" } } } } } },
+            "responses": {
+              "201": { "description": "Granted.", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "402": { "description": "Subscription required.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+              "403": { "description": "Device quota exceeded.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
+        "/api/runtime/workspaces/{workspace_id}/peripheral-grants/{principal}": {
+          "delete": {
+            "tags": ["network"],
+            "summary": "Revoke a device principal's AER access",
+            "operationId": "revokeWorkspacePeripheral",
+            "security": [{ "cookieAuth": [] }],
+            "parameters": [
+              { "name": "workspace_id", "in": "path", "required": true, "schema": { "type": "string" } },
+              { "name": "principal", "in": "path", "required": true, "schema": { "type": "string" } }
+            ],
+            "responses": { "200": { "description": "Remaining grants.", "content": { "application/json": { "schema": { "type": "object" } } } } }
+          }
+        },
+        "/api/runtime/tenancy": {
+          "get": {
+            "tags": ["health"],
+            "summary": "The caller's hosted plan entitlement and current usage",
+            "operationId": "getRuntimeTenancy",
+            "security": [{ "cookieAuth": [] }],
+            "responses": {
+              "200": { "description": "Entitlement and usage.", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "503": { "description": "Subscription service unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+            }
+          }
+        },
         "/api/snapshot": {
           "get": {
             "tags": ["network"],
@@ -3820,7 +3994,9 @@ async fn api_auth_middleware(
     if is_public_api_path(path) {
         return next.run(req).await;
     }
-    let access_requirement = api_access_requirement(req.method(), path);
+    let access_requirement = api_access_requirement(req.method(), path).map(|requirement| {
+        tenancy_access_requirement(state.tenancy.is_some(), req.method(), path, requirement)
+    });
     let jar = CookieJar::from_headers(req.headers());
     if let Some(user) = session_auth_user(&state, &jar).await {
         if let Some(requirement) = access_requirement {
@@ -4813,6 +4989,18 @@ async fn create_runtime_workspace(
     Extension(user): Extension<AuthUser>,
     Json(payload): Json<WorkspaceCreateRequest>,
 ) -> axum::response::Response {
+    let (limits, entitlement) = match tenancy_workspace_limits(
+        &state,
+        &user,
+        &user.username,
+        true,
+        payload.auto_start.unwrap_or(false),
+    )
+    .await
+    {
+        Ok(gate) => gate,
+        Err(response) => return response,
+    };
     let cost = state.token_pricing.create_workspace;
     if let Err(err) = ensure_token_budget(&state, &user, cost).await {
         return (
@@ -4823,7 +5011,7 @@ async fn create_runtime_workspace(
     }
     match state
         .runtime
-        .create_workspace(&user.username, payload)
+        .create_workspace_with_limits(&user.username, payload, limits)
         .await
     {
         Ok(detail) => {
@@ -4861,12 +5049,475 @@ async fn create_runtime_workspace(
             }
             Json(detail).into_response()
         }
+        Err(err) => neuron_cap_error_response(&err, entitlement.as_ref()).unwrap_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": err.to_string() })),
+            )
+                .into_response()
+        }),
+    }
+}
+
+/// The entitlement that bounds `owner`, or `None` when quotas do not apply
+/// (tenancy disabled, or the caller is an administrator acting for staff).
+async fn tenancy_entitlement(
+    state: &AppState,
+    user: &AuthUser,
+    owner: &str,
+) -> Result<Option<Entitlement>, axum::response::Response> {
+    let Some(tenancy) = state.tenancy.as_ref() else {
+        return Ok(None);
+    };
+    if user.is_admin && owner.eq_ignore_ascii_case(user.username.trim()) {
+        return Ok(None);
+    }
+    if owner.eq_ignore_ascii_case("system") {
+        return Ok(None);
+    }
+    tenancy.entitlement(owner).await.map(Some).map_err(|err| {
+        eprintln!("[warn] tenancy entitlement lookup failed for an owner: {err}");
+        let mut response = (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "entitlement_service_unavailable",
+                "details": "The subscription service could not be reached; try again shortly.",
+            })),
+        )
+            .into_response();
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+        response
+    })
+}
+
+async fn tenant_usage(state: &AppState, owner: &str) -> anyhow::Result<TenantUsage> {
+    let workspaces = state.runtime.list_workspaces(owner).await?;
+    let devices = state.runtime.owner_peripheral_principals(owner).await?;
+    Ok(TenantUsage {
+        networks: workspaces.len() as u64,
+        running_networks: workspaces
+            .iter()
+            .filter(|workspace| workspace.running)
+            .count() as u64,
+        devices: devices.len() as u64,
+    })
+}
+
+fn tenancy_usage_error_response(err: anyhow::Error) -> axum::response::Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": format!("failed to count workspace usage: {err}") })),
+    )
+        .into_response()
+}
+
+fn quota_denied_response(
+    decision: &QuotaDecision,
+    entitlement: &Entitlement,
+) -> Option<axum::response::Response> {
+    match decision {
+        QuotaDecision::Allowed => None,
+        QuotaDecision::SubscriptionRequired => Some(
+            (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(json!({
+                    "error": "subscription_required",
+                    "details": "An active AARNN hosting subscription is required for this operation.",
+                    "service_key": aarnn_rust::tenancy::TENANCY_SERVICE_KEY,
+                })),
+            )
+                .into_response(),
+        ),
+        QuotaDecision::Exceeded { quota, limit, used } => Some(
+            (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": "quota_exceeded",
+                    "details": format!("Your plan allows {limit} ({quota}); {used} in use."),
+                    "quota": quota,
+                    "limit": limit,
+                    "used": used,
+                    "plan_id": entitlement.plan_id,
+                })),
+            )
+                .into_response(),
+        ),
+    }
+}
+
+fn neuron_cap_error_response(
+    err: &anyhow::Error,
+    entitlement: Option<&Entitlement>,
+) -> Option<axum::response::Response> {
+    let exceeded = err.downcast_ref::<NeuronCapExceeded>()?;
+    Some(
+        (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "quota_exceeded",
+                "details": exceeded.to_string(),
+                "quota": "max_neurons_per_network",
+                "limit": exceeded.cap,
+                "used": exceeded.total,
+                "plan_id": entitlement.and_then(|entitlement| entitlement.plan_id.clone()),
+            })),
+        )
+            .into_response(),
+    )
+}
+
+/// The plan limits for a new or imported brain, or a denial response.
+async fn tenancy_workspace_limits(
+    state: &AppState,
+    user: &AuthUser,
+    owner: &str,
+    creating: bool,
+    auto_start: bool,
+) -> Result<(WorkspaceLimits, Option<Entitlement>), axum::response::Response> {
+    let Some(entitlement) = tenancy_entitlement(state, user, owner).await? else {
+        return Ok((WorkspaceLimits::default(), None));
+    };
+    let usage = tenant_usage(state, owner)
+        .await
+        .map_err(tenancy_usage_error_response)?;
+    let decision = if creating {
+        check_create(&entitlement, usage)
+    } else if entitlement.active {
+        QuotaDecision::Allowed
+    } else {
+        QuotaDecision::SubscriptionRequired
+    };
+    if let Some(response) = quota_denied_response(&decision, &entitlement) {
+        return Err(response);
+    }
+    if auto_start {
+        let decision = check_start(&entitlement, usage, false);
+        if let Some(response) = quota_denied_response(&decision, &entitlement) {
+            return Err(response);
+        }
+    }
+    let cap = neuron_cap(&entitlement);
+    if cap == 0 {
+        let decision = QuotaDecision::Exceeded {
+            quota: "max_neurons_per_network",
+            limit: 0,
+            used: 0,
+        };
+        return Err(quota_denied_response(&decision, &entitlement)
+            .expect("an exceeded decision always has a response"));
+    }
+    Ok((
+        WorkspaceLimits {
+            max_total_neurons: cap,
+        },
+        Some(entitlement),
+    ))
+}
+
+/// The owner of a workspace an AER call addresses: the caller's own, or one
+/// whose owner granted the caller (a device principal) peripheral access.
+async fn resolve_peripheral_workspace_owner(
+    state: &AppState,
+    user: &AuthUser,
+    workspace_id: &str,
+    requested_owner: Option<&str>,
+) -> Result<String, axum::response::Response> {
+    let owner = requested_owner.unwrap_or_default().trim();
+    if owner.is_empty() || owner.eq_ignore_ascii_case(user.username.trim()) {
+        return Ok(user.username.clone());
+    }
+    if user.is_admin && owner.eq_ignore_ascii_case("system") {
+        return Ok("system".to_string());
+    }
+    if state
+        .runtime
+        .workspace_grants_principal(owner, workspace_id, &user.username)
+        .await
+    {
+        return Ok(owner.to_string());
+    }
+    Err((
+        StatusCode::FORBIDDEN,
+        Json(json!({ "error": "workspace owner access denied" })),
+    )
+        .into_response())
+}
+
+#[derive(Deserialize, Default)]
+struct RuntimeWorkspaceAerOutputQuery {
+    owner: Option<String>,
+    since_step: Option<u64>,
+}
+
+async fn runtime_workspace_aer_inject(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(workspace_id): Path<String>,
+    Query(query): Query<RuntimeWorkspaceOwnerQuery>,
+    Json(payload): Json<WorkspaceAerInjectRequest>,
+) -> axum::response::Response {
+    let owner = match resolve_peripheral_workspace_owner(
+        &state,
+        &user,
+        &workspace_id,
+        query.owner.as_deref(),
+    )
+    .await
+    {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    // Quotas belong to the brain's owner, whoever sends the frame.
+    match tenancy_entitlement(&state, &user, &owner).await {
+        Err(response) => return response,
+        Ok(Some(entitlement)) if !entitlement.active => {
+            if let Some(response) =
+                quota_denied_response(&QuotaDecision::SubscriptionRequired, &entitlement)
+            {
+                return response;
+            }
+        }
+        Ok(_) => {}
+    }
+    let num_sensory = match state
+        .runtime
+        .workspace_sensory_len(&owner, &workspace_id)
+        .await
+    {
+        Ok(len) => len,
+        Err(err) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": err.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    let aer_payload = match decode_hex_payload(payload.aer_payload_hex) {
+        Ok(bytes) => bytes,
+        Err(response) => return response.into_response(),
+    };
+    let spike_indices = payload.spike_indices.unwrap_or_default();
+    if aer_payload.is_empty() && spike_indices.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "provide spike_indices or aer_payload_hex" })),
+        )
+            .into_response();
+    }
+    if let Some(index) = spike_indices
+        .iter()
+        .copied()
+        .find(|index| *index as usize >= num_sensory)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!(
+                    "spike index {index} is outside the workspace's {num_sensory} sensory neurons"
+                )
+            })),
+        )
+            .into_response();
+    }
+    let frame = match spikes_from_transport(
+        &aer_payload,
+        payload.aer_base.unwrap_or(0),
+        &spike_indices,
+        num_sensory,
+    ) {
+        Ok(frame) => frame,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": err.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    match state
+        .runtime
+        .queue_workspace_sensory(&owner, &workspace_id, frame)
+        .await
+    {
+        Ok(response) => (StatusCode::ACCEPTED, Json(response)).into_response(),
+        Err(err) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn runtime_workspace_aer_output(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(workspace_id): Path<String>,
+    Query(query): Query<RuntimeWorkspaceAerOutputQuery>,
+) -> axum::response::Response {
+    let owner = match resolve_peripheral_workspace_owner(
+        &state,
+        &user,
+        &workspace_id,
+        query.owner.as_deref(),
+    )
+    .await
+    {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    match state
+        .runtime
+        .workspace_aer_output(&owner, &workspace_id, query.since_step)
+        .await
+    {
+        Ok(output) => Json(output).into_response(),
+        Err(err) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn runtime_workspace_peripheral_grants(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(workspace_id): Path<String>,
+    Query(query): Query<RuntimeWorkspaceOwnerQuery>,
+) -> axum::response::Response {
+    let owner = match resolve_runtime_workspace_owner(&user, query.owner.as_deref()) {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    match state
+        .runtime
+        .workspace_peripheral_principals(&owner, &workspace_id)
+        .await
+    {
+        Ok(grants) => Json(grants).into_response(),
+        Err(err) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn grant_runtime_workspace_peripheral(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(workspace_id): Path<String>,
+    Query(query): Query<RuntimeWorkspaceOwnerQuery>,
+    Json(payload): Json<WorkspacePeripheralGrantRequest>,
+) -> axum::response::Response {
+    let owner = match resolve_runtime_workspace_owner(&user, query.owner.as_deref()) {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    let principal = payload.principal.trim().to_string();
+    if principal.eq_ignore_ascii_case(owner.trim()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "the owner already has access; grant a device principal" })),
+        )
+            .into_response();
+    }
+    if let Err(response) = state
+        .runtime
+        .workspace_peripheral_principals(&owner, &workspace_id)
+        .await
+        .map_err(|err| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": err.to_string() })),
+            )
+                .into_response()
+        })
+    {
+        return response;
+    }
+    match tenancy_entitlement(&state, &user, &owner).await {
+        Err(response) => return response,
+        Ok(Some(entitlement)) => {
+            let usage = match tenant_usage(&state, &owner).await {
+                Ok(usage) => usage,
+                Err(err) => return tenancy_usage_error_response(err),
+            };
+            let already_counted = match state.runtime.owner_peripheral_principals(&owner).await {
+                Ok(principals) => principals
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(&principal)),
+                Err(err) => return tenancy_usage_error_response(err),
+            };
+            let decision = check_device_grant(&entitlement, usage, already_counted);
+            if let Some(response) = quota_denied_response(&decision, &entitlement) {
+                return response;
+            }
+        }
+        Ok(None) => {}
+    }
+    match state
+        .runtime
+        .grant_workspace_principal(&owner, &workspace_id, &principal)
+        .await
+    {
+        Ok(grants) => (StatusCode::CREATED, Json(grants)).into_response(),
         Err(err) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": err.to_string() })),
         )
             .into_response(),
     }
+}
+
+async fn revoke_runtime_workspace_peripheral(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path((workspace_id, principal)): Path<(String, String)>,
+    Query(query): Query<RuntimeWorkspaceOwnerQuery>,
+) -> axum::response::Response {
+    let owner = match resolve_runtime_workspace_owner(&user, query.owner.as_deref()) {
+        Ok(owner) => owner,
+        Err(response) => return response,
+    };
+    match state
+        .runtime
+        .revoke_workspace_principal(&owner, &workspace_id, &principal)
+        .await
+    {
+        Ok(grants) => Json(grants).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn runtime_tenancy_status(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> axum::response::Response {
+    let owner = user.username.clone();
+    let usage = match tenant_usage(&state, &owner).await {
+        Ok(usage) => usage,
+        Err(err) => return tenancy_usage_error_response(err),
+    };
+    let entitlement = match tenancy_entitlement(&state, &user, &owner).await {
+        Ok(entitlement) => entitlement,
+        Err(response) => return response,
+    };
+    Json(json!({
+        "enabled": state.tenancy.is_some(),
+        "owner": owner,
+        "quotas_apply": entitlement.is_some(),
+        "entitlement": entitlement,
+        "usage": usage,
+    }))
+    .into_response()
 }
 
 async fn runtime_workspace_detail(
@@ -5068,7 +5719,8 @@ async fn control_runtime_workspace(
     Query(query): Query<RuntimeWorkspaceOwnerQuery>,
     Json(payload): Json<WorkspaceControlRequest>,
 ) -> axum::response::Response {
-    let requirement = workspace_control_requirement(payload.action);
+    let requirement =
+        tenancy_workspace_control_requirement(state.tenancy.is_some(), payload.action);
     if !user.can_access(requirement) {
         return insufficient_service_access_response(&user, requirement);
     }
@@ -5076,6 +5728,41 @@ async fn control_runtime_workspace(
         Ok(owner) => owner,
         Err(response) => return response,
     };
+    if matches!(
+        payload.action,
+        WorkspaceControlAction::Start
+            | WorkspaceControlAction::Repeat
+            | WorkspaceControlAction::Step
+    ) {
+        match tenancy_entitlement(&state, &user, &owner).await {
+            Err(response) => return response,
+            Ok(Some(entitlement)) => {
+                let decision = if payload.action == WorkspaceControlAction::Step {
+                    if entitlement.active {
+                        QuotaDecision::Allowed
+                    } else {
+                        QuotaDecision::SubscriptionRequired
+                    }
+                } else {
+                    let usage = match tenant_usage(&state, &owner).await {
+                        Ok(usage) => usage,
+                        Err(err) => return tenancy_usage_error_response(err),
+                    };
+                    let already_running = state
+                        .runtime
+                        .workspace_detail(&owner, &workspace_id)
+                        .await
+                        .map(|detail| detail.summary.running)
+                        .unwrap_or(false);
+                    check_start(&entitlement, usage, already_running)
+                };
+                if let Some(response) = quota_denied_response(&decision, &entitlement) {
+                    return response;
+                }
+            }
+            Ok(None) => {}
+        }
+    }
     let cost = state.token_pricing.control_cost(payload.action);
     if let Err(err) = ensure_token_budget(&state, &user, cost).await {
         return (
@@ -5155,6 +5842,18 @@ async fn import_runtime_workspace(
         Ok(owner) => owner,
         Err(response) => return response,
     };
+    let (limits, entitlement) = match tenancy_workspace_limits(
+        &state,
+        &user,
+        &owner,
+        false,
+        payload.auto_start.unwrap_or(false),
+    )
+    .await
+    {
+        Ok(gate) => gate,
+        Err(response) => return response,
+    };
     let cost = state.token_pricing.import_workspace;
     if let Err(err) = ensure_token_budget(&state, &user, cost).await {
         return (
@@ -5165,7 +5864,7 @@ async fn import_runtime_workspace(
     }
     match state
         .runtime
-        .import_workspace_json(&owner, &workspace_id, payload)
+        .import_workspace_json_with_limits(&owner, &workspace_id, payload, limits)
         .await
     {
         Ok(detail) => {
@@ -5201,11 +5900,13 @@ async fn import_runtime_workspace(
             }
             Json(detail).into_response()
         }
-        Err(err) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": err.to_string() })),
-        )
-            .into_response(),
+        Err(err) => neuron_cap_error_response(&err, entitlement.as_ref()).unwrap_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": err.to_string() })),
+            )
+                .into_response()
+        }),
     }
 }
 
@@ -10286,6 +10987,39 @@ mod tests {
             Some(AccessRequirement::aarnn_control())
         );
         assert_eq!(
+            api_access_requirement(&Method::POST, "/api/runtime/workspaces/demo/aer/inject"),
+            Some(AccessRequirement::aarnn_use())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/runtime/workspaces/demo/aer/output"),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(
+                &Method::GET,
+                "/api/runtime/workspaces/demo/peripheral-grants"
+            ),
+            Some(AccessRequirement::aarnn_observe())
+        );
+        assert_eq!(
+            api_access_requirement(
+                &Method::POST,
+                "/api/runtime/workspaces/demo/peripheral-grants"
+            ),
+            Some(AccessRequirement::aarnn_use())
+        );
+        assert_eq!(
+            api_access_requirement(
+                &Method::DELETE,
+                "/api/runtime/workspaces/demo/peripheral-grants/svc_robot"
+            ),
+            Some(AccessRequirement::aarnn_use())
+        );
+        assert_eq!(
+            api_access_requirement(&Method::GET, "/api/runtime/tenancy"),
+            Some(AccessRequirement::aarnn_request())
+        );
+        assert_eq!(
             api_access_requirement(&Method::GET, "/api/runtime/workspaces/demo/snapshot"),
             Some(AccessRequirement::aarnn_observe())
         );
@@ -10691,5 +11425,75 @@ mod tests {
         assert_eq!(first.iter().filter(|value| **value > 0).count(), 8);
         assert_eq!(second.iter().filter(|value| **value > 0).count(), 8);
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn tenancy_lets_owners_delete_and_stop_their_own_brains_at_use() {
+        let delete = api_access_requirement(&Method::DELETE, "/api/runtime/workspaces/demo")
+            .expect("delete requirement");
+        assert_eq!(
+            tenancy_access_requirement(
+                false,
+                &Method::DELETE,
+                "/api/runtime/workspaces/demo",
+                delete
+            ),
+            AccessRequirement::aarnn_control()
+        );
+        assert_eq!(
+            tenancy_access_requirement(
+                true,
+                &Method::DELETE,
+                "/api/runtime/workspaces/demo",
+                delete
+            ),
+            AccessRequirement::aarnn_use()
+        );
+        let grants = api_access_requirement(&Method::GET, "/api/management/status")
+            .expect("management requirement");
+        assert_eq!(
+            tenancy_access_requirement(true, &Method::GET, "/api/management/status", grants),
+            AccessRequirement::aarnn_observe()
+        );
+        assert_eq!(
+            tenancy_workspace_control_requirement(false, WorkspaceControlAction::Stop),
+            AccessRequirement::aarnn_control()
+        );
+        assert_eq!(
+            tenancy_workspace_control_requirement(true, WorkspaceControlAction::Stop),
+            AccessRequirement::aarnn_use()
+        );
+        assert_eq!(
+            tenancy_workspace_control_requirement(true, WorkspaceControlAction::Reset),
+            AccessRequirement::aarnn_use()
+        );
+    }
+
+    #[test]
+    fn quota_denials_map_to_payment_required_and_forbidden() {
+        let entitlement = Entitlement {
+            active: true,
+            plan_id: Some("explorer".to_string()),
+            ..Entitlement::default()
+        };
+        assert!(quota_denied_response(&QuotaDecision::Allowed, &entitlement).is_none());
+        let response =
+            quota_denied_response(&QuotaDecision::SubscriptionRequired, &entitlement).unwrap();
+        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+        let response = quota_denied_response(
+            &QuotaDecision::Exceeded {
+                quota: "max_networks",
+                limit: 1,
+                used: 1,
+            },
+            &entitlement,
+        )
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let err = anyhow::Error::new(NeuronCapExceeded { total: 12, cap: 10 })
+            .context("failed to create workspace");
+        let response = neuron_cap_error_response(&err, Some(&entitlement)).unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(neuron_cap_error_response(&anyhow::anyhow!("other"), None).is_none());
     }
 }
