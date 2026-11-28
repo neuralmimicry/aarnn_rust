@@ -1122,6 +1122,9 @@ start_distributed_tcp_servers() {
     --brains "$(IFS=,; echo "${BRAIN_IDS[*]}")"
   )
   if [ "$NO_BUILD" -eq 1 ]; then cluster_cmd+=(--no-build); fi
+  # A host without a display (a Slurm or cluster node) cannot open the
+  # orchestrator dashboard; run it headless instead of failing at start-up.
+  if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then cluster_cmd+=(--no-orchestrator-ui); fi
   [ -n "$cluster_config_map" ] && cluster_cmd+=(--config-map "$cluster_config_map")
   [ -n "$cluster_network_map" ] && cluster_cmd+=(--network-map "$cluster_network_map")
 
