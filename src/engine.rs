@@ -154,6 +154,25 @@ pub enum EnginePayloadKind {
     Snapshot,
 }
 
+/// A network is larger than the neuron cap a hosted plan allows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NeuronCapExceeded {
+    pub total: u64,
+    pub cap: u64,
+}
+
+impl std::fmt::Display for NeuronCapExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "network has {} neurons; the plan allows at most {}",
+            self.total, self.cap
+        )
+    }
+}
+
+impl std::error::Error for NeuronCapExceeded {}
+
 pub struct RunnerEngine {
     spec: EngineSpec,
     runner: Runner,
@@ -875,6 +894,24 @@ impl RunnerEngine {
         self.runner.set_learning(learning);
         self.spec.learning_rule = learning.to_str().to_string();
         self.clear_activity();
+        Ok(())
+    }
+
+    /// Bound the network's total neurons, including neurons grown later, to
+    /// `cap`. Fails when the network already holds more than `cap` neurons.
+    /// A zero cap leaves the existing limit unchanged.
+    pub fn apply_neuron_cap(&mut self, cap: u64) -> anyhow::Result<()> {
+        if cap == 0 {
+            return Ok(());
+        }
+        let total = self.status().total_neurons as u64;
+        if total > cap {
+            return Err(NeuronCapExceeded { total, cap }.into());
+        }
+        let current = self.runner.net.max_total_neurons;
+        let bounded = if current == 0 { cap } else { current.min(cap) };
+        self.runner.net.max_total_neurons = bounded;
+        self.spec.net.max_total_neurons = bounded;
         Ok(())
     }
 
