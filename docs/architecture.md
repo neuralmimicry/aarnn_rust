@@ -97,6 +97,20 @@ wall-clock barrier. Imports, resets and model changes reset that causal
 admission state. Standalone/UI/bridge/GA callers still use the explicit legacy
 compatibility facade until their biological phase extraction is complete.
 
+Release builds use `--all-features`, so production nodes run this path. With
+the executor compiled in, the kernel leaves the global neuromodulator and
+resonance update to field events derived after each committed tick
+(`Runner::derive_next_global_field_events`). That derivation carries the whole
+update: signal-driven dopamine, acetylcholine and serotonin; the environmental
+and modulatory-cell drives (food, light, heat, noxious, energy, activity,
+novelty, reward); noradrenaline; and resonance. Applying a modulator event also
+refreshes the presynaptic release factor (depth 2 and above). The drive
+integrators and neuromodulator telemetry are runner-local state, updated during
+the derivation. The legacy facade (`Runner::step`, used by batch runs, the UI
+and layer shards) has no executor, so its kernel keeps the in-step
+neuromodulator update in every build. Only `Runner::step_at`, the executor's
+entry point, hands that update to the field events.
+
 ## Main control loops
 
 ### Delivery loop

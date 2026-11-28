@@ -512,7 +512,8 @@ mod tests {
             .step(&mut runner, None)
             .expect("first AARNN step");
         assert_eq!(runner.ambient_field_drive, configured_ambient);
-        assert_eq!(controller.pending_len(), 4);
+        // Dopamine, acetylcholine, serotonin, resonance and noradrenaline.
+        assert_eq!(controller.pending_len(), 5);
 
         controller
             .step(&mut runner, None)
@@ -526,7 +527,11 @@ mod tests {
             runner.neuromod_serotonin,
             runner.net.aarnn_neuromod_baseline_serotonin
         );
-        assert_eq!(controller.pending_len(), 4);
+        assert_eq!(
+            runner.neuromod_noradrenaline,
+            runner.net.aarnn_neuromod_baseline_noradrenaline
+        );
+        assert_eq!(controller.pending_len(), 5);
     }
 
     #[test]

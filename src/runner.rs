@@ -1971,7 +1971,6 @@ pub struct StepOut {
 struct InputPhaseResult {
     sensory: Vec<i8>,
     perceptual_error_drive: f64,
-    #[cfg(not(feature = "superdense_executor"))]
     perceptual_mean_err: f64,
 }
 
@@ -2884,6 +2883,27 @@ impl Runner {
     /// steps (default 50): levels, stimuli, synaptic drive and (with
     /// morphology) synapse energy; kept in a bounded history for the UI graph
     /// and appended to the `NM_NEUROMOD_TRACE` jsonl file when that is set.
+    /// Presynaptic (bouton) release factor for the current modulator levels.
+    /// Release modulation is a depth >= 2 feature; shallower networks and
+    /// networks without neuromodulated transmission release at 1.0.
+    fn derived_neuromod_release_factor(&self) -> f64 {
+        if !(self.net.aarnn_neuromod_transmission_enabled && self.net.aarnn_layer_depth >= 2) {
+            return 1.0;
+        }
+        let presyn = crate::aarnn::neuromodulation::ReceptorProfile {
+            dopamine: f64::from(self.net.aarnn_neuromod_presynaptic_dopamine),
+            serotonin: f64::from(self.net.aarnn_neuromod_presynaptic_serotonin),
+            noradrenaline: f64::from(self.net.aarnn_neuromod_presynaptic_noradrenaline),
+        };
+        crate::aarnn::neuromodulation::transmission_gain(
+            &self.neuromod_levels(),
+            &self.neuromod_baselines(),
+            &presyn,
+            f64::from(self.net.aarnn_neuromod_efficacy_min),
+            f64::from(self.net.aarnn_neuromod_efficacy_max),
+        )
+    }
+
     fn record_neuromod_sample(&mut self, depth: usize) {
         use crate::aarnn::neuromodulation::{NeuromodSample, transmission_gain};
         static EVERY: OnceLock<u64> = OnceLock::new();
@@ -9673,7 +9693,10 @@ impl Runner {
     ///   using exact per‑synapse delays.
     pub fn step(&mut self, s_t_external: Option<&[i8]>) -> StepOut {
         let current_tick = self.t;
-        let mut output = self.run_legacy_biological_kernel(s_t_external);
+        // A direct step has no executor to publish the global neuromodulator
+        // and resonance fields, so the kernel updates them itself, as in a
+        // build without the superdense executor.
+        let mut output = self.run_legacy_biological_kernel(s_t_external, false);
         self.commit_legacy_tick(current_tick)
             .expect("legacy runner tick overflow");
         output.t = self.t;
@@ -9704,7 +9727,11 @@ impl Runner {
         let expected_next = expected
             .checked_add(1)
             .ok_or(RunnerTimeError::TickOverflow { tick: tag.tick })?;
-        let mut output = self.run_legacy_biological_kernel(s_t_external);
+        // Under the superdense executor the global neuromodulator and
+        // resonance update arrives as next-tick field events
+        // (`derive_next_global_field_events`), not from the kernel.
+        let mut output =
+            self.run_legacy_biological_kernel(s_t_external, cfg!(feature = "superdense_executor"));
         self.commit_legacy_tick(expected)?;
         debug_assert_eq!(self.t, expected_next);
         output.t = self.t;
@@ -9778,7 +9805,10 @@ impl Runner {
                 self.perceptual_field_drive =
                     reduced_value(self.perceptual_field_drive).clamp(0.0, 1.0e6);
             }
-            FieldKind::Dopamine | FieldKind::Acetylcholine | FieldKind::Serotonin => {
+            FieldKind::Dopamine
+            | FieldKind::Acetylcholine
+            | FieldKind::Serotonin
+            | FieldKind::Noradrenaline => {
                 if layer.is_some() {
                     return Err(FieldApplicationError::UnsupportedScope(event.scope));
                 }
@@ -9795,8 +9825,15 @@ impl Runner {
                         self.neuromod_serotonin =
                             reduced_value(self.neuromod_serotonin as f64).clamp(0.0, 3.0) as f32
                     }
+                    FieldKind::Noradrenaline => {
+                        self.neuromod_noradrenaline =
+                            reduced_value(self.neuromod_noradrenaline as f64).clamp(0.0, 3.0) as f32
+                    }
                     _ => unreachable!("matched neuromodulator field kind"),
                 }
+                // Bouton release follows the levels now in force, as it does
+                // at the end of the default path's neuromodulator update.
+                self.neuromod_release_factor = self.derived_neuromod_release_factor();
             }
         }
         Ok(())
@@ -9808,9 +9845,17 @@ impl Runner {
     /// committed. This keeps neuromodulator and resonance state out of a
     /// hidden runner-wide producer path while preserving their declared
     /// logical-time dependency on the completed tick.
+    ///
+    /// The environmental and modulatory-cell drives (food, light, heat,
+    /// noxious, energy, activity, novelty, reward) are integrated here from
+    /// the completed tick's spikes, as the default path does in its
+    /// neuromodulator update, and added to the signal-driven targets. The
+    /// drive integrators and the neuromodulator telemetry are runner-local
+    /// state; the modulator levels themselves change only through the
+    /// published events.
     #[cfg(feature = "superdense_executor")]
     pub(crate) fn derive_next_global_field_events(
-        &self,
+        &mut self,
         current_tag: crate::deterministic::LogicalTag,
     ) -> Result<Vec<FieldEvent>, crate::field_events::FieldEventError> {
         if !matches!(self.neuron_model, NeuronModel::Aarnn) {
@@ -9875,6 +9920,44 @@ impl Runner {
         let error = (self.perceptual_mean_error as f32).clamp(0.0, 1.0);
         let stability = (1.0 - error).max(0.0);
         let reward_proxy = (self.net.aarnn_reward_proxy + self.external_reward).clamp(0.0, 1.0);
+        let env_inc = if self.net.aarnn_neuromod_env_enabled {
+            let active_sensory: Vec<usize> = self
+                .spk_hist_s
+                .front()
+                .map(|spikes| {
+                    spikes
+                        .iter()
+                        .enumerate()
+                        .filter(|&(_, &spike)| spike != 0)
+                        .map(|(index, _)| index)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let active_hidden_by_layer: Vec<Vec<usize>> = self
+                .last_spk_h
+                .iter()
+                .map(|layer| {
+                    layer
+                        .iter()
+                        .enumerate()
+                        .filter(|&(_, &spike)| spike != 0)
+                        .map(|(index, _)| index)
+                        .collect()
+                })
+                .collect();
+            let output_active = self.last_spk_o.iter().filter(|&&spike| spike != 0).count();
+            self.update_neuromod_drives(
+                &active_sensory,
+                &active_hidden_by_layer,
+                output_active,
+                reward_proxy,
+            )
+        } else {
+            self.neuromod_drives = Default::default();
+            crate::aarnn::neuromodulation::ModulatorLevels::zero()
+        };
+        let depth = self.net.aarnn_layer_depth;
+        self.record_neuromod_sample(depth);
         let signal_value = |signal: NeuromodSignal| -> f32 {
             match signal {
                 NeuromodSignal::None => 0.0,
@@ -9889,19 +9972,27 @@ impl Runner {
         };
         let target_dopamine = (self.net.aarnn_neuromod_baseline_dopamine.max(0.0)
             + self.net.aarnn_neuromod_error_gain.max(0.0)
-                * signal_value(self.net.aarnn_neuromod_dopamine_signal))
-        .clamp(0.0, 3.0);
+                * signal_value(self.net.aarnn_neuromod_dopamine_signal)
+            + env_inc.dopamine as f32)
+            .clamp(0.0, 3.0);
         let target_ach = (self.net.aarnn_neuromod_baseline_ach.max(0.0)
             + self.net.aarnn_neuromod_activity_gain.max(0.0)
-                * signal_value(self.net.aarnn_neuromod_ach_signal))
-        .clamp(0.0, 3.0);
+                * signal_value(self.net.aarnn_neuromod_ach_signal)
+            + env_inc.acetylcholine as f32)
+            .clamp(0.0, 3.0);
         let target_serotonin = (self.net.aarnn_neuromod_baseline_serotonin.max(0.0)
             + self.net.aarnn_neuromod_stability_gain.max(0.0)
-                * signal_value(self.net.aarnn_neuromod_serotonin_signal))
-        .clamp(0.0, 3.0);
+                * signal_value(self.net.aarnn_neuromod_serotonin_signal)
+            + env_inc.serotonin as f32)
+            .clamp(0.0, 3.0);
+        let target_noradrenaline = (self.net.aarnn_neuromod_baseline_noradrenaline.max(0.0)
+            + env_inc.noradrenaline as f32)
+            .clamp(0.0, 3.0);
         let next_dopamine = self.neuromod_dopamine * retain + target_dopamine * decay;
         let next_ach = self.neuromod_ach * retain + target_ach * decay;
         let next_serotonin = self.neuromod_serotonin * retain + target_serotonin * decay;
+        let next_noradrenaline =
+            self.neuromod_noradrenaline * retain + target_noradrenaline * decay;
         let resonance_decay = self.net.aarnn_resonance_decay.clamp(0.0, 1.0);
         let next_resonance = self.resonance_level * (1.0 - resonance_decay)
             + hidden_rate.clamp(0.0, 1.0) * resonance_decay;
@@ -9938,6 +10029,7 @@ impl Runner {
             (2, FieldKind::Acetylcholine, next_ach),
             (3, FieldKind::Serotonin, next_serotonin),
             (4, FieldKind::ResonanceLevel, next_resonance),
+            (5, FieldKind::Noradrenaline, next_noradrenaline),
         ]
         .into_iter()
         .map(|(ordinal, kind, value)| make_event(ordinal, kind, value))
@@ -10089,7 +10181,6 @@ impl Runner {
         InputPhaseResult {
             sensory: s_t,
             perceptual_error_drive: perceptual_error_drive + self.perceptual_field_drive,
-            #[cfg(not(feature = "superdense_executor"))]
             perceptual_mean_err,
         }
     }
@@ -11164,7 +11255,11 @@ impl Runner {
     /// Temporary monolithic biological kernel. It mutates biological state but
     /// deliberately does not own or advance logical time; the facade/executor
     /// commits the tick only after this method returns.
-    fn run_legacy_biological_kernel(&mut self, s_t_external: Option<&[i8]>) -> StepOut {
+    fn run_legacy_biological_kernel(
+        &mut self,
+        s_t_external: Option<&[i8]>,
+        executor_owns_global_fields: bool,
+    ) -> StepOut {
         if self.neuron_shard.is_some() {
             self.begin_neuron_shard_step(s_t_external);
         }
@@ -11375,7 +11470,6 @@ impl Runner {
         );
         let s_t = input_phase.sensory;
         let perceptual_error_drive = input_phase.perceptual_error_drive;
-        #[cfg(not(feature = "superdense_executor"))]
         let perceptual_mean_err = input_phase.perceptual_mean_err;
 
         let mut stp_release_s: Vec<f64> = if use_stp {
@@ -11671,11 +11765,10 @@ impl Runner {
         #[allow(unused_variables)]
         let has_sparse_recv_out = false;
 
-        // Update neuromodulator and resonance state (AARNN only). The
-        // superdense path publishes these derived values as next-tick causal
-        // field events instead of mutating runner-wide fields here.
-        #[cfg(not(feature = "superdense_executor"))]
-        if is_aarnn {
+        // Update neuromodulator and resonance state (AARNN only). Under the
+        // superdense executor these derived values are published as next-tick
+        // causal field events instead of mutating runner-wide fields here.
+        if is_aarnn && !executor_owns_global_fields {
             let sensory_rate = if num_sensory_neurons > 0 {
                 active_s_indices.len() as f32 / num_sensory_neurons as f32
             } else {
@@ -11809,24 +11902,7 @@ impl Runner {
             self.neuromod_serotonin = state[2] as f32;
             self.resonance_level = state[3] as f32;
             self.neuromod_noradrenaline = self.neuromod_noradrenaline * retain + target_n * decay;
-            // Presynaptic (bouton) release modulation is a depth >= 2 feature.
-            self.neuromod_release_factor =
-                if self.net.aarnn_neuromod_transmission_enabled && depth >= 2 {
-                    let presyn = crate::aarnn::neuromodulation::ReceptorProfile {
-                        dopamine: f64::from(self.net.aarnn_neuromod_presynaptic_dopamine),
-                        serotonin: f64::from(self.net.aarnn_neuromod_presynaptic_serotonin),
-                        noradrenaline: f64::from(self.net.aarnn_neuromod_presynaptic_noradrenaline),
-                    };
-                    crate::aarnn::neuromodulation::transmission_gain(
-                        &self.neuromod_levels(),
-                        &self.neuromod_baselines(),
-                        &presyn,
-                        f64::from(self.net.aarnn_neuromod_efficacy_min),
-                        f64::from(self.net.aarnn_neuromod_efficacy_max),
-                    )
-                } else {
-                    1.0
-                };
+            self.neuromod_release_factor = self.derived_neuromod_release_factor();
             self.record_neuromod_sample(depth);
         }
         let volume_transmission_factors = if is_aarnn {
@@ -26955,7 +27031,6 @@ mod tests {
 
         assert_eq!(result.sensory, vec![1, 0, 1, 0]);
         assert_eq!(result.perceptual_error_drive, 0.0);
-        #[cfg(not(feature = "superdense_executor"))]
         assert_eq!(result.perceptual_mean_err, 0.0);
     }
 
@@ -31205,7 +31280,6 @@ mod neuromod_transmission_tests {
         );
     }
 
-    #[cfg(not(feature = "superdense_executor"))]
     fn drive(tag: &str, depth: usize, steps: usize) -> Runner {
         let mut r = runner(depth);
         let ns = r.net.num_sensory_neurons;
@@ -31226,10 +31300,9 @@ mod neuromod_transmission_tests {
     }
 
     // The environmental drives are applied in the Runner's own neuromodulator
-    // update. The opt-in superdense executor derives the global levels as
-    // causal field events (derive_next_global_field_events) and does not yet
-    // carry the environmental drives, so these tests cover the default path.
-    #[cfg(not(feature = "superdense_executor"))]
+    // update on a direct step, in every build. The superdense executor derives
+    // the same update as causal field events (derive_next_global_field_events);
+    // the superdense_executor_* tests below cover that path.
     #[test]
     fn food_raises_dopamine_and_serotonin_light_raises_serotonin() {
         let food = drive("food", 1, 2500);
@@ -31260,7 +31333,6 @@ mod neuromod_transmission_tests {
         assert!(!food.neuromod_history.is_empty());
     }
 
-    #[cfg(not(feature = "superdense_executor"))]
     #[test]
     fn serotonin_depresses_bouton_release_from_depth_two() {
         let d2 = drive("light", 2, 2500);
@@ -31270,6 +31342,77 @@ mod neuromod_transmission_tests {
             d2.neuromod_release_factor
         );
         let d1 = drive("light", 1, 2500);
+        assert_eq!(d1.neuromod_release_factor, 1.0);
+    }
+
+    /// Drive a network through the superdense executor, the path every
+    /// `--all-features` release build uses on distributed nodes and engines.
+    #[cfg(feature = "superdense_executor")]
+    fn drive_superdense(tag: &str, depth: usize, steps: usize) -> Runner {
+        let mut r = runner(depth);
+        let ns = r.net.num_sensory_neurons;
+        r.net.aarnn_sensory_modalities = vec![tag.to_string(); ns];
+        r.net.aarnn_neuromod_novelty_noradrenaline_gain = 0.0;
+        r.net.aarnn_neuromod_activity_dopamine_gain = 0.0;
+        r.net.aarnn_neuromod_cell_release_gain = 0.0;
+        let mut controller = crate::superdense::SuperdenseController::new();
+        let quiet = vec![0i8; ns];
+        for _ in 0..1000 {
+            controller
+                .step(&mut r, Some(&quiet))
+                .expect("superdense step");
+        }
+        let input = vec![1i8; ns];
+        for _ in 0..steps {
+            controller
+                .step(&mut r, Some(&input))
+                .expect("superdense step");
+        }
+        r
+    }
+
+    #[cfg(feature = "superdense_executor")]
+    #[test]
+    fn superdense_executor_carries_environmental_neuromodulation() {
+        let food = drive_superdense("food", 1, 2500);
+        let light = drive_superdense("light", 1, 2500);
+        let heat = drive_superdense("heat", 1, 2500);
+        let other = drive_superdense("other", 1, 2500);
+        assert!(
+            food.neuromod_dopamine > 1.3 && food.neuromod_serotonin > 1.3,
+            "food: {:?}",
+            food.neuromod_levels()
+        );
+        assert!(
+            light.neuromod_serotonin > 1.3 && light.neuromod_dopamine < 1.05,
+            "light: {:?}",
+            light.neuromod_levels()
+        );
+        assert!(
+            heat.neuromod_noradrenaline > 1.3,
+            "heat: {:?}",
+            heat.neuromod_levels()
+        );
+        assert!(
+            (other.neuromod_dopamine - 1.0).abs() < 1e-3
+                && (other.neuromod_serotonin - 1.0).abs() < 1e-3,
+            "other: {:?}",
+            other.neuromod_levels()
+        );
+        assert!(food.neuromod_drives.food > 0.9 && other.neuromod_drives.food == 0.0);
+        assert!(!food.neuromod_history.is_empty(), "telemetry is recorded");
+    }
+
+    #[cfg(feature = "superdense_executor")]
+    #[test]
+    fn superdense_executor_depresses_bouton_release_from_depth_two() {
+        let d2 = drive_superdense("light", 2, 2500);
+        assert!(
+            d2.neuromod_release_factor < 0.95,
+            "release factor {}",
+            d2.neuromod_release_factor
+        );
+        let d1 = drive_superdense("light", 1, 2500);
         assert_eq!(d1.neuromod_release_factor, 1.0);
     }
 }
