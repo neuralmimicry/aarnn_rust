@@ -459,6 +459,27 @@ async fn hosted_neuron_cap_refuses_oversized_brains_and_rolls_back_imports() {
     assert!(exceeded.total > 8);
     assert!(runtime.list_workspaces("alice").await.unwrap().is_empty());
 
+    // A huge config is refused from its declared size, before allocation.
+    let huge = runtime
+        .create_workspace_with_limits(
+            "alice",
+            WorkspaceCreateRequest {
+                workspace_id: Some("huge".to_string()),
+                config_json: Some(small_io_config(4, 50_000_000, 2)),
+                ..WorkspaceCreateRequest::default()
+            },
+            WorkspaceLimits {
+                max_total_neurons: 64,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        huge.downcast_ref::<NeuronCapExceeded>()
+            .map(|err| err.total),
+        Some(50_000_006)
+    );
+
     let created = runtime
         .create_workspace_with_limits(
             "alice",

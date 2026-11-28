@@ -173,6 +173,32 @@ impl std::fmt::Display for NeuronCapExceeded {
 
 impl std::error::Error for NeuronCapExceeded {}
 
+/// The neuron count a network config asks for before any engine is built,
+/// counted the way [`EngineStatus::total_neurons`] counts a built network.
+/// `None` when the JSON is not a network config. Used to refuse an oversized
+/// hosted brain without first allocating it.
+pub fn estimated_config_neurons(config_json: &str) -> Option<u64> {
+    let cfg: crate::config::NetworkConfig = serde_json::from_str(config_json).ok()?;
+    let hidden =
+        (cfg.num_hidden_layers as u64).saturating_mul(cfg.num_hidden_per_layer_initial as u64);
+    Some(
+        (cfg.num_sensory_neurons as u64)
+            .saturating_add(cfg.num_output_neurons as u64)
+            .saturating_add(hidden),
+    )
+}
+
+/// Refuse a config whose initial network already exceeds `cap` (zero: no cap).
+pub fn check_config_neuron_cap(config_json: &str, cap: u64) -> Result<(), NeuronCapExceeded> {
+    if cap == 0 {
+        return Ok(());
+    }
+    match estimated_config_neurons(config_json) {
+        Some(total) if total > cap => Err(NeuronCapExceeded { total, cap }),
+        _ => Ok(()),
+    }
+}
+
 pub struct RunnerEngine {
     spec: EngineSpec,
     runner: Runner,

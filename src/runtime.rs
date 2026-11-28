@@ -1431,6 +1431,11 @@ impl RuntimeManager {
             ));
         }
 
+        // Refuse an oversized hosted brain before allocating it.
+        if let Some(config_json) = req.config_json.as_deref() {
+            crate::engine::check_config_neuron_cap(config_json, limits.max_total_neurons)?;
+        }
+
         let mut spec = EngineSpec::default();
         if let Some(model) = req.neuron_model.as_deref() {
             spec.neuron_model = model.to_string();
@@ -1954,6 +1959,9 @@ impl RuntimeManager {
         req: WorkspaceImportRequest,
         limits: WorkspaceLimits,
     ) -> anyhow::Result<WorkspaceDetailResponse> {
+        if req.kind != Some(EnginePayloadKind::Snapshot) {
+            crate::engine::check_config_neuron_cap(&req.payload_json, limits.max_total_neurons)?;
+        }
         let handle = self.workspace_handle(user_id, workspace_id).await?;
         let _lease = self
             .acquire_workspace_lease(&handle, Duration::from_secs(2))
