@@ -92,6 +92,9 @@ pub struct EngineActivity {
     pub sensory_history: Vec<EngineSpikeHistoryFrame>,
     #[serde(default)]
     pub output_history: Vec<EngineSpikeHistoryFrame>,
+    /// Global neuromodulator state (DA, 5-HT, NA, ACh, stimuli, synapse energy).
+    #[serde(default)]
+    pub neuromod: Option<crate::aarnn::neuromodulation::NeuromodSample>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -914,6 +917,7 @@ impl RunnerEngine {
             output,
             sensory_history: Vec::new(),
             output_history: Vec::new(),
+            neuromod: Some(self.runner.neuromod_sample),
         };
         self.last_activity.clone()
     }

@@ -15,7 +15,8 @@
 //! of the cell centre, not MuJoCo's ray-cast light proxy).
 
 /// Kinds this adapter projects. Anything else keeps the neural binding refused.
-pub const SUPPORTED: [&str; 9] = [
+pub const SUPPORTED: [&str; 10] = [
+    "legacy-acoustic",
     "legacy-angle",
     "legacy-contact",
     "legacy-gyro",
@@ -70,6 +71,20 @@ pub fn directional(
     let hit = points.iter().any(|p| {
         let l = local(r, std::array::from_fn(|i| p[i] - position[i]));
         (0..3).map(|j| l[j] * direction[j]).sum::<f64>() > 0.
+    });
+    if hit { 1. } else { 0. }
+}
+/// Bumper switch: any contact point inside the body-local box `region`
+/// (`[[x0, y0, z0], [x1, y1, z1]]`), as the MuJoCo reference `region_contact`.
+pub fn region(
+    position: [f64; 3],
+    r: [[f64; 3]; 3],
+    points: &[[f64; 3]],
+    region: [[f64; 3]; 2],
+) -> f64 {
+    let hit = points.iter().any(|p| {
+        let l = local(r, std::array::from_fn(|i| p[i] - position[i]));
+        (0..3).all(|j| l[j] >= region[0][j] && l[j] <= region[1][j])
     });
     if hit { 1. } else { 0. }
 }

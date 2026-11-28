@@ -23,7 +23,10 @@ feedback normally refines):
   left femur + lifts, right femur + lowers); tibia and tarsus hold mid-range;
 * the shared hindbrain (``add_hindbrain``): ``MLR`` sets the stepping drive,
   ``RS``/``ARTR`` steer by shortening the strides of the inner side; range
-  rays and thorax touch on one side excite the ipsilateral ``RS`` (turn away).
+  rays and thorax touch on one side excite the ipsilateral ``RS`` (turn away);
+* the pivot (``REV_<leg>_<phase>``; ``--touch-escape 1``, ``--forage-steer-mode
+  pivot``): the touch escape and the learned food steering turn the fly by
+  making the inner legs step backwards while the outer legs walk on.
 
 Readouts are the policy's antagonistic pairs (channel a x 0.62, b x -0.38):
 graded activations map a joint about its mid-range.
@@ -35,7 +38,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from aarnn_circuit import Circuit, add_hindbrain, add_leg_oscillators, drive_weight, graded, sensor_weight  # noqa: E402
+from aarnn_circuit import (Circuit, add_hindbrain, add_learned_anticipation, add_learned_foraging, add_touch_escape, add_turn_bouts,  # noqa: E402
+                           add_leg_oscillators, apply_learner, drive_weight, graded, sensor_weight)
 
 ROOT = Path(__file__).resolve().parents[1]
 LEGS = ("lf", "lm", "lr", "rf", "rm", "rr")
@@ -52,7 +56,7 @@ def build(args):
     def w(mv):
         return drive_weight(mv, GAIN)
     common = dict(nmda_ratio=0.0, synaptic_gain=GAIN)
-    hb = add_hindbrain(c, GAIN, mlr_release=args.mlr_release, rs_plateau_mv=args.rs_plateau)
+    hb = add_hindbrain(c, GAIN, mlr_release=args.mlr_release, rs_plateau_mv=args.rs_plateau, rs_mutual=args.rs_mutual)
     mlr, rs, artr = hb["mlr"], hb["rs"], hb["artr"]
     c.type("Motor:leg", **graded(tau_ms=args.tau_m, release_hz=500.0), **common)
     for o in outputs:
@@ -124,9 +128,114 @@ def build(args):
             elif s["direction"][0] > 0.5:
                 for k in "lr":
                     c.sensor(s["name"], rs[k], sensor_weight(args.touch_rs * 0.5, GAIN))
+    learn = None
+    if args.learn_groups > 0:
+        # Learning by experience (aarnn_circuit.add_learned_anticipation): a
+        # near detector on the forward rays teaches LT_side, which drives RS.
+        rays = [s for s in model["io"]["sensors"] if s["kind"] == "legacy-range" and s.get("direction")]
+        reach = float(rays[0].get("angle_rad") or 0.08)
+        ang = {s["name"]: math.atan2(s["direction"][1], s["direction"][0]) for s in rays}
+        fr = [n for n, a in ang.items() if math.cos(a) > 0.95]
+        side_rays = {sd: [n for n, a in ang.items() if 0.95 >= math.cos(a) > 0.6 and (math.sin(a) > 0) == (sd == "l")][:3] + fr
+                     for sd in "lr"}
+        add_learned_anticipation(c, GAIN, side_rays, lambda d: 1.0 - d / reach, False, args.learn_teach_m,
+                                 args.learn_teach_m + 0.005, args.learn_teach_m + 0.02, args.learn_groups,
+                                 {sd: [(rs[sd], args.learn_rs_mv)] for sd in "lr"})
+        learn = dict(profile=args.profile, encoding="inverse", reach_m=reach, channels=side_rays, teach_m=args.learn_teach_m,
+                     near_m=args.learn_teach_m + 0.005, far_m=args.learn_teach_m + 0.02, protocol_far_m=reach,
+                     protocol_near_m=0.02)
+    bouts = None
+    if args.explore:
+        # Spontaneous run-and-turn bouts (shared hindbrain, zebrafish-style).
+        bouts = add_turn_bouts(c, GAIN, hb, on_ms=args.explore_on_ms, off_ms=args.explore_off_ms)
+    forage = None
+    if args.forage:
+        # Learned foraging (needs-v1; aarnn_circuit.add_learned_foraging): feeding
+        # halts locomotion; the value of the food odour is learned from eating.
+        forage = add_learned_foraging(c, GAIN, mlr, bouts["on"] if bouts else None, hunger_below=args.forage_hunger,
+                                      halt=[rs["l"], rs["r"], artr["l"], artr["r"]], steer=args.forage_steer > 0)
+        if args.forage_steer > 0 and args.forage_steer_mode == "cut":
+            # Learned steering: shortening one side's strides turns the fly
+            # toward that side (RS_l shortens the right legs and turns right),
+            # so STEER_l (odour stronger on the left) shortens the left strides.
+            for leg in LEGS:
+                inner = forage["steer"]["l"] if leg[0] == "l" else forage["steer"]["r"]
+                for ch in channels(f"{leg}_coxa"):
+                    c.connect(inner, ch, w(-args.forage_steer))
+        if learn is None:
+            learn = dict(profile=args.profile)
+    rev_cells = {}
+
+    def reverse_cells():
+        """The pivot. Like the moonwalker descending neurons (Bidaye et al.
+        2014), a turn command makes the legs on the inner side of the turn
+        step backwards (retract in swing, protract in stance) while the outer
+        legs walk on, so the fly turns without shortening the outer strides.
+        REV_<leg>_<phase> is an AND cell, on only while both its phase cell and
+        a turn command (the touch escape, the learned steering) fire. Made
+        once, on first use."""
+        if not rev_cells:
+            c.type("Leg:reverse", **graded(tau_ms=10.0, tonic=-args.reverse_gate), **common)
+            for leg in LEGS:
+                protract = -1 if leg[0] == "l" else 1
+                x, y = positions[leg]
+                for phase, direction, mv in (("sw", -protract, args.coxa), ("st", protract, 2.0 * args.coxa)):
+                    r = c.cell(f"REV_{leg}_{phase}", "Leg:reverse", leg, (x, y, -0.002))
+                    c.connect(E[leg, phase], r, w(args.reverse_in))
+                    drive_joint(r, f"{leg}_coxa", direction, mv)
+                    rev_cells[leg, phase] = r
+        return rev_cells
+    if args.touch_escape:
+        # Innate touch escape (aarnn_circuit.add_touch_escape): the antennae and
+        # front legs touching a surface (horizontal rays within 60 deg of
+        # ahead at >= touch_ref, about 1 cm beyond the head) or the thorax's
+        # own touch fires the escape cell of that side. It silences the
+        # opposite turn and the learned steering, and pivots the fly away.
+        touch = {"l": [], "r": [], "f": []}
+        for s in model["io"]["sensors"]:
+            d = s.get("direction")
+            if not d:
+                continue
+            if s["kind"] == "legacy-range" and (len(d) < 3 or abs(d[2]) < 1e-9):
+                a = math.atan2(d[1], d[0])
+                if math.cos(a) >= math.cos(math.radians(60.0)):
+                    side = "f" if abs(math.sin(a)) < 1e-6 else "l" if math.sin(a) > 0 else "r"
+                    touch[side].append((s["name"], args.touch_ref))
+            elif s["kind"] == "legacy-contact":
+                side = "l" if d[1] > 0.5 else "r" if d[1] < -0.5 else "f" if d[0] > 0.5 else None
+                if side:
+                    touch[side].append((s["name"], 0.5))
+        esc = add_touch_escape(c, GAIN, hb, touch, suppress=list(forage["steer"].values()) if forage else None,
+                               quiet=[forage["feed"]] if forage else None, touch_tau_ms=args.touch_tau)
+        # The escape turns by the pivot (reverse_cells). Cutting the inner
+        # side's strides (the RS turn) left the fly pinned: with its head on
+        # the wall, the outer legs' forward push only pressed that side harder
+        # into the wall (26 Nov closed loop).
+        rev = reverse_cells()
+        for leg in LEGS:
+            inner = esc["esc"]["r"] if leg[0] == "l" else esc["esc"]["l"]   # ESC_l turns right: right legs reverse
+            c.connect(inner, f"D_{leg}_sw", w(-30.0))   # no forward protraction while reversed
+            for phase in ("sw", "st"):
+                c.connect(inner, rev[leg, phase], w(args.reverse_in))
+    if forage and args.forage_steer > 0 and args.forage_steer_mode == "pivot":
+        # Learned steering by the pivot: STEER_l (odour stronger on the left)
+        # makes the left legs step backwards, graded by its release, while the
+        # right legs walk on, so the fly turns left. Each reversing swing also
+        # holds back that leg's forward protraction (REV_sw -> D_sw), which
+        # would otherwise cancel the backward swing. Cutting the inner strides
+        # instead (mode "cut") turned the fly only at 12 mV/ms and halved its
+        # walking speed, so the learned fly reached fruit later than the naive
+        # one (26 Nov).
+        rev = reverse_cells()
+        for leg in LEGS:
+            for phase in ("sw", "st"):
+                c.connect(forage["steer"][leg[0]], rev[leg, phase], w(args.forage_steer))
+            c.connect(rev[leg, "sw"], f"D_{leg}_sw", w(-args.pivot_protract))
     labels = {"design": "Drosophila tripod walking: per-leg escape half-centres, swing-swing neighbour inhibition, shared hindbrain",
               "parameters": vars(args)}
     c.write(Path(args.output), Path(args.config_out) if args.config_out else None, synaptic_gain=GAIN, depth=args.depth, labels=labels)
+    if learn:
+        apply_learner(Path(args.output), Path(args.config_out) if args.config_out else None, GAIN, learn)
     return c
 
 
@@ -143,6 +252,18 @@ def main():
     ap.add_argument("--tau-a-stance", type=float, default=45.0, help="stance burst length: duty factor > 0.5")
     ap.add_argument("--plateau", type=float, default=22.0)
     ap.add_argument("--drive", type=float, default=4.0)
+    ap.add_argument("--explore", type=int, default=0, help="1: spontaneous run-and-turn bouts (shared hindbrain)")
+    ap.add_argument("--explore-on-ms", type=float, default=2000.0)
+    ap.add_argument("--explore-off-ms", type=float, default=12000.0)
+    ap.add_argument("--forage", type=int, default=0, help="1: learned foraging (needs-v1 channels; food-odour value learned from eating)")
+    ap.add_argument("--forage-hunger", type=float, default=0.5)
+    ap.add_argument("--forage-steer", type=float, default=0.0,
+                    help="learned steering toward the stronger odour (mV/ms; 0 = off): mode cut, STEER -> inner-side coxa "
+                         "strides; mode pivot, STEER -> the inner legs' reversal AND cells")
+    ap.add_argument("--forage-steer-mode", default="cut", choices=("cut", "pivot"),
+                    help="cut: shorten the inner strides; pivot: the inner legs step backwards (as the touch escape)")
+    ap.add_argument("--pivot-protract", type=float, default=30.0,
+                    help="pivot steering: a reversing swing -> that leg's protraction delay cell (inhibitory mV/ms)")
     ap.add_argument("--mlr-release", type=float, default=0.5)
     ap.add_argument("--w-ea", type=float, default=10.0)
     ap.add_argument("--w-ae", type=float, default=9.0)
@@ -159,8 +280,19 @@ def main():
     ap.add_argument("--turn", type=float, default=4.0)
     ap.add_argument("--artr-turn", type=float, default=0.8)
     ap.add_argument("--rs-plateau", type=float, default=18.0)
+    ap.add_argument("--rs-mutual", type=float, default=6.0,
+                    help="RS_l <-> RS_r inhibition; near a wall rays + LT drive both RS past 6 (use ~20 for a decisive turn)")
     ap.add_argument("--wall-rs", type=float, default=3.0)
     ap.add_argument("--touch-rs", type=float, default=4.0)
+    ap.add_argument("--learn-groups", type=int, default=0, help="anticipation learning: range cells per side (0 = off)")
+    ap.add_argument("--learn-teach-m", type=float, default=0.04, help="innate near detector (teacher) distance (m)")
+    ap.add_argument("--learn-rs-mv", type=float, default=3.0)
+    ap.add_argument("--touch-escape", type=int, default=0, help="1: innate touch escape (pivot away from a surface the antennae touch)")
+    ap.add_argument("--touch-ref", type=float, default=0.45, help="ray value that counts as touch (0.45 = 4.4 cm from the thorax)")
+    ap.add_argument("--touch-tau", type=float, default=1000.0,
+                    help="touch cell decay (ms): how long the escape outlasts the contact (400 left the fly wall-following at 6-9 cm)")
+    ap.add_argument("--reverse-in", type=float, default=10.0, help="phase cell / escape cell -> reversal AND cell (mV/ms each)")
+    ap.add_argument("--reverse-gate", type=float, default=12.0, help="reversal AND cell threshold (mV/ms): needs both inputs")
     args = ap.parse_args()
     args.output = args.output or f"network_{args.profile}_walk.json"
     args.config_out = args.config_out or f"webots_world/configs/config_{args.profile}_walk.json"

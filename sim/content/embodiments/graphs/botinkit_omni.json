@@ -3,7 +3,7 @@
   "compiler": "embodiment-rigid-graph-v2",
   "digest_encoding": "embodiment-binary-v1",
   "profile_id": "botinkit_omni",
-  "model_digest": "598ea111478ed4d10ee59986802a11c2d4c6b0b8eebe35625d04edf7dd7b6575",
+  "model_digest": "5ac6c0a84bf2b8729713bbfdb9fc6dd1ba8ed2ed0305deb77bf0e859e0403c6a",
   "io_digest": "f2a398e0578bbdee6dadae26b8337a000620e8b335ff9b0f51daa975524fad23",
   "fidelity": "functional-surrogate",
   "variant_id": "original-v1",
@@ -11997,5 +11997,5 @@
   },
   "collision_exclusions": [],
   "collision_filter_scope": "source masks aggregated per rigid cluster; joint-neighbour exclusions native; different instances retain external contact",
-  "digest": "f97a5e71d75af14cee0d85ec4af498974ef62ecaa12ec2202717be8a1271c5d0"
+  "digest": "7e5823351f5fbd0d56dc9365512c9ee82888b17e06b2576c1aa70c0c30124a10"
 }

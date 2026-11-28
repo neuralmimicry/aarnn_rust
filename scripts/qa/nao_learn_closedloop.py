@@ -33,8 +33,29 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
-REACH = 2.55
+REACH = 2.55          # v1 single-ray sonar (traces recorded before the V6 body)
 DT_STEP = 0.002
+_RECORD = json.loads((ROOT / "sim/content/embodiments/generated/nao.json").read_text())
+
+
+# Earlier NAO V6 IO contracts (0.8 m sonar), e.g. before the hearing group.
+V6_IO_DIGESTS = {"7c6e767d01140c1819d444c3734560ea47a4e84c93f02a48c67e1ec5b6327a91"}
+
+
+def sonar_reach(header):
+    """Sonar reach of the body that recorded a trace: the current record's
+    (NAO V6: 0.8 m) when the IO digests match or the digest is a known V6
+    contract, else the v1 2.55 m."""
+    if header.get("io_digest") in V6_IO_DIGESTS:
+        return 0.8
+    if header.get("io_digest") == _RECORD["io"]["digest"]:
+        return next(s for s in _RECORD["io"]["sensors"] if s["name"] == "Sonar/Left")["angle_rad"]
+    return REACH
+
+
+def target_ball():
+    o = next((o for o in _RECORD["scene"]["objects"] if o["id"] == "target_ball"), None)
+    return (o["position"][:2], o["size"][0] / 2) if o else None
 
 
 def run(a):
@@ -64,11 +85,16 @@ def load(d):
     names = [s["name"] for s in io["sensors"]]
     il, ir = names.index("Sonar/Left"), names.index("Sonar/Right")
     f = next((Path(d) / "trace").glob("*.jsonl"))
-    T, X, Y, Z, YAW, DL, DR = [], [], [], [], [], [], []
+    bumpers = [i for i, n in enumerate(names) if "Bumper" in n]
+    T, X, Y, Z, YAW, DL, DR, BU = [], [], [], [], [], [], [], []
     with open(f) as fh:
-        fh.readline()
+        reach = sonar_reach(json.loads(fh.readline()))
         for line in fh:
-            r = json.loads(line)
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                break      # a run still writing its trace: stop at the partial last line
+
             if not r.get("sensors") or not r.get("qpos"):
                 continue
             q = r["qpos"]
@@ -78,15 +104,22 @@ def load(d):
             Y.append(q[1])
             Z.append(q[2])
             YAW.append(math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
-            DL.append((1 - r["sensors"][il]) * REACH)
-            DR.append((1 - r["sensors"][ir]) * REACH)
-    return {k: np.array(v) for k, v in dict(t=T, x=X, y=Y, z=Z, yaw=np.unwrap(YAW), dl=DL, dr=DR).items()}
+            DL.append((1 - r["sensors"][il]) * reach)
+            DR.append((1 - r["sensors"][ir]) * reach)
+            BU.append(max(r["sensors"][i] for i in bumpers) if bumpers else 0.0)
+    out = {k: np.array(v) for k, v in dict(t=T, x=X, y=Y, z=Z, yaw=np.unwrap(YAW), dl=DL, dr=DR, bump=BU).items()}
+    out["reach"] = reach
+    return out
 
 
 def encounters(tr, near_m=0.6, approach_m=1.2, clear_m=0.9):
     """Wall encounters: the nearer sonar dips below `near_m`; the approach
     starts where it last read >= `approach_m` (or where the previous
-    encounter ended); the encounter ends when it reads > `clear_m` again."""
+    encounter ended); the encounter ends when it reads > `clear_m` again.
+    With the V6 sonar (nothing beyond 0.8 m) the approach starts at the last
+    "nothing" reading and the encounter clears 5 cm inside the reach."""
+    approach_m = min(approach_m, tr["reach"] - 1e-3)
+    clear_m = min(clear_m, tr["reach"] - 0.05)
     dmin = np.minimum(tr["dl"], tr["dr"])
     out, i, n, prev_end = [], 0, len(dmin), 0
     while i < n:
@@ -132,10 +165,27 @@ def report(a):
         tr = load(d)
         enc = encounters(tr)
         fell = bool((tr["z"] < 0.2).any())
-        res[str(d)] = dict(sim_s=float(tr["t"][-1]), fell=fell, path_m=float(np.sum(np.hypot(np.diff(tr["x"]),
-                                                                                              np.diff(tr["y"])))),
+        t, x, y = tr["t"], tr["x"], tr["y"]
+        dt = float(np.median(np.diff(t)))
+        w = max(1, int(round(20.0 / dt)))
+        # stalled: net displacement over the next 20 s below 0.10 m
+        stalled = float((np.hypot(x[w:] - x[:-w], y[w:] - y[:-w]) < 0.10).mean() * 100) if len(t) > w else None
+        dmin = np.minimum(tr["dl"], tr["dr"])
+        ball = target_ball()
+        at_ball = (float(((np.hypot(x - ball[0][0], y - ball[0][1]) - ball[1]) < 0.15).mean() * 100)
+                   if ball else None)
+        res[str(d)] = dict(sim_s=float(t[-1]), fell=fell, path_m=float(np.sum(np.hypot(np.diff(x), np.diff(y)))),
+                           sonar_reach_m=tr["reach"], in_reflex_pct=float((dmin < 0.4).mean() * 100),
+                           stalled_pct=stalled, at_target_ball_pct=at_ball,
+                           bumper_pressed_pct=float((tr["bump"] > 0.5).mean() * 100),
+                           cells_visited=int(len({(int(np.floor(a / 0.25)), int(np.floor(b / 0.25)))
+                                                  for a, b in zip(x, y)})),
                            encounters=enc)
-        print(f"\n## {d}  ({tr['t'][-1]:.0f} s simulated, fell={fell}, {len(enc)} encounters)")
+        r = res[str(d)]
+        print(f"\n## {d}  ({t[-1]:.0f} s simulated, fell={fell}, {len(enc)} encounters; "
+              f"reflex zone {r['in_reflex_pct']:.1f} %, stalled {r['stalled_pct'] or 0:.1f} %, at target ball "
+              f"{r['at_target_ball_pct'] or 0:.1f} %, bumper pressed {r['bumper_pressed_pct']:.1f} %, "
+              f"{r['cells_visited']} 0.25 m cells)")
         print(" #  t(s)    side closest  turn@   s<0.4m  back-off")
         for k, e in enumerate(enc):
             print(f"{k:2d} {e['t_start']:6.1f}   {e['side']}   {e['closest_m']:.2f}   "

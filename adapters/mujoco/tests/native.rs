@@ -9,7 +9,7 @@ fn directory() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../sim/content/embodiments/generated")
 }
 #[test]
-fn all_twenty_eight_native_models_and_reset_snapshots() {
+fn all_twenty_nine_native_models_and_reset_snapshots() {
     let mut count = 0;
     for entry in std::fs::read_dir(directory()).unwrap() {
         let path = entry.unwrap().path();
@@ -39,7 +39,7 @@ fn all_twenty_eight_native_models_and_reset_snapshots() {
         count += 1;
     }
     assert_eq!(
-        count, 28,
+        count, 29,
         "generate all profiles before the required native lane"
     );
 }
@@ -107,6 +107,7 @@ fn own_model_measurements_and_projection_gates() {
         "drosophila_fafb",
         "nao",
         "zebrafish",
+        "salamander_crawler",
     ] {
         let path = directory().join(format!("{profile}.xml"));
         let record: Model =
@@ -140,6 +141,7 @@ fn legacy_named_readouts_cover_outputs_silence_reset_and_joint_response() {
         "drosophila_fafb",
         "nao",
         "zebrafish",
+        "salamander_crawler",
     ] {
         let path = directory().join(format!("{profile}.xml"));
         let model = aarnn_mujoco::schema::load_model(&path).unwrap();
@@ -279,10 +281,12 @@ fn celegans_named_muscle_effort_silence_and_proper_acceleration() {
     assert_eq!(sensors[6], 0.);
     assert_eq!(sensors[7], 0.);
     // A straight body reports no bend on any of the 24 proprioceptive channels.
+    // Channels 24..48: the core proprioceptive contract (the optional
+    // energy-needs group follows it).
     assert!(
-        sensors[24..].iter().all(|v| *v < 0.05),
+        sensors[24..48].iter().all(|v| *v < 0.05),
         "{:?}",
-        &sensors[24..]
+        &sensors[24..48]
     );
     let mut spikes = vec![0; 96];
     spikes[world
@@ -359,14 +363,15 @@ fn celegans_trace_and_passive_observation_never_perturb_physics() {
     let mut plain = World::load(&path, record).unwrap();
     let header = observed.trace_header();
     assert_eq!(header["segment_body_ids"].as_array().unwrap().len(), 24);
-    assert_eq!(header["sensor_names"].as_array().unwrap().len(), 48);
+    // 48 core channels plus the optional energy-needs group (4).
+    assert_eq!(header["sensor_names"].as_array().unwrap().len(), 52);
     for _ in 0..500 {
         observed.advance().unwrap();
         plain.advance().unwrap();
         observed.observe_unbound().unwrap();
         let sample = observed.trace_record().unwrap();
         assert_eq!(sample["sensor_source"], "passive-observation");
-        assert_eq!(sample["sensors"].as_array().unwrap().len(), 48);
+        assert_eq!(sample["sensors"].as_array().unwrap().len(), 52);
         assert_eq!(sample["joint_q"].as_array().unwrap().len(), 23);
         assert_eq!(
             sample["qpos"].as_array().unwrap().len(),
@@ -702,4 +707,73 @@ fn fly_flight_motor_lifts_off_only_on_a_neural_command() {
         "no lift-off: {} m",
         physics.qpos()[2]
     );
+}
+
+/// NAO V6 senses: toe bumpers are switches on the toe shell (never pressed
+/// by standing on the floor) and the 60 deg sonar cone sees a low obstacle
+/// below the chest while the floor, struck obliquely, returns no echo.
+#[test]
+fn nao_v6_toe_bumpers_and_sonar_cone_are_physical() {
+    let path = directory().join("nao.xml");
+    let load = || {
+        let record: Model =
+            serde_json::from_slice(&std::fs::read(path.with_extension("json")).unwrap()).unwrap();
+        let names: Vec<String> = record.io.sensors.iter().map(|s| s.name.clone()).collect();
+        (World::load(&path, record).unwrap(), names)
+    };
+    let index = |names: &[String], n: &str| names.iter().position(|x| x == n).unwrap();
+    // The room's low target ball (0.225 m, centre (0.78, -0.645)).
+    let (ball, radius) = ([0.78, -0.645], 0.1125);
+    // Measured in the standing pose itself: without a brain the unpowered
+    // servos let the body fall within a second.
+    let placed = |root: [f64; 2]| {
+        let (mut world, names) = load();
+        let mut state = world.physics.snapshot();
+        // mjSTATE_INTEGRATION starts with time, then qpos (free joint xyz).
+        state[1] = root[0];
+        state[2] = root[1];
+        world.physics.restore(&state).unwrap();
+        // Settle the 2 mm onto the floor (50 ms; toppling takes ~0.5 s).
+        for _ in 0..25 {
+            world.advance().unwrap();
+        }
+        let s = world.sensors().unwrap();
+        (s, names)
+    };
+    // Standing at the centre of the room (walls ~1.5 m away, beyond the
+    // 0.8 m range): feet loaded on the floor, yet no bumper and no echo.
+    let (s, names) = placed([0., 0.]);
+    for n in ["LFsr.z", "RFsr.z"] {
+        assert!(
+            (s[index(&names, n)] - 0.5).abs() > 1e-6,
+            "{n}: foot not loaded"
+        );
+    }
+    for n in [
+        "LFoot/Bumper/Left",
+        "LFoot/Bumper/Right",
+        "RFoot/Bumper/Left",
+        "RFoot/Bumper/Right",
+    ] {
+        assert_eq!(s[index(&names, n)], 0., "{n} pressed by the floor");
+    }
+    for n in ["Sonar/Left", "Sonar/Right"] {
+        assert_eq!(
+            s[index(&names, n)],
+            0.,
+            "{n} echoes the floor: {}",
+            s[index(&names, n)]
+        );
+    }
+    // Left toe pressed 5 mm into the ball at the top edge of the toe.
+    let toe_reach = (radius * radius - (radius - 0.026f64).powi(2)).sqrt();
+    let (s, names) = placed([ball[0] - 0.11 - toe_reach + 0.005, ball[1] - 0.05]);
+    assert!(
+        s[index(&names, "LFoot/Bumper/Left")] + s[index(&names, "LFoot/Bumper/Right")] > 0.,
+        "left toe bumper misses the ball"
+    );
+    // 0.45 m from the ball, facing it: below the chest, inside the cone.
+    let (s, names) = placed([ball[0] - radius - 0.45 - 0.0477, ball[1]]);
+    let nearest = s[index(&names, "Sonar/Left")].max(s[index(&names, "Sonar/Right")]);
+    assert!(nearest > 0., "sonar cone misses the low ball");
 }

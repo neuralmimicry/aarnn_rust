@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
+[package]
+name = "aarnn-explorer"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Connectome explorer: GNAT analysis, isolated interventions, function-preserving reduction and executable export for AARNN networks"
+
+[[bin]]
+name = "aarnn-explorer"
+path = "src/main.rs"
+
+[features]
+default = []
+# Loopback browser UI and job API (`aarnn-explorer serve`).
+web-ui = ["dep:axum", "dep:tokio"]
+
+[dependencies]
+# The authoritative biological implementation. Default features stay off so the
+# explorer does not pull desktop visualisation. growth3d + morpho match the
+# production runtime build (run_sim.sh builds with --all-features).
+aarnn_rust = { path = "../..", default-features = false, features = ["parallel", "growth3d", "morpho"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+hex = "0.4"
+clap = { version = "4.6", features = ["derive"] }
+thiserror = "2.0"
+fastrand = "2"
+toml = "0.9"
+libc = "0.2"
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "process", "signal"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
+#
+# Explorer profile: resilient silicon. Same functional contract as default.toml,
+# plus: every single neuron loss in the go and steer regions must be survived
+# (exhaustive, bounded), and a random 7 % loss of those regions' neurons must
+# succeed with probability >= 0.99 at 95 % family confidence. 20 trials cannot
+# establish that bound even with no failures (~300 are needed per claim), so the
+# sampled claim is reported inconclusive: an explicit insufficient-evidence
+# result, not a pass.
+# The numbers are software defaults for the authored scenario, not biological
+# constants or a reliability claim. Every result stores this expanded profile.
+schema_version = 1
+name = "synthetic-resilient-silicon"
+
+[execution]
+backend = "source"
+numeric_profile = "inherit"
+plasticity_policy = "frozen"
+seed = 20261125
+
+[resources]
+total_compute_threads = 2
+analysis_threads = 1
+max_worker_processes = 1
+threads_per_worker = 1
+memory_limit_mib = 4096
+disk_budget_mib = 8192
+worker_wall_timeout_seconds = 300
+gpu_enabled = false
+launcher = "local"
+
+[capture]
+mode = "scientific-isolated"
+require_complete = true
+max_segment_mib = 64
+# Only "none" is implemented; "zstd" is rejected as unsupported.
+compression = "none"
+
+[gnat]
+method = "effective-delivery-v1"
+tau_ms = 5.0
+threshold_mode = "development-calibrated"
+minimum_score = 0.0067
+require_generation_mapping = true
+recurrence_mode = "bounded-verified"
+max_motif_candidates = 100000
+norm = "l1-abs"
+
+[functional]
+task_suite = "examples/explorer/tasks/synthetic_sensorimotor.toml"
+minimum_reference_score_ratio = 0.99
+maximum_additional_latency_ms = 1.0
+require_all_tasks = true
+development_split = "development"
+validation_split = "locked-validation"
+learning_required = false
+
+[resilience]
+preset = "resilient-silicon"
+eligible_population = "all-internal-neurons"
+random_neuron_loss_fraction = 0.07
+random_synapse_loss_fraction = 0.0
+targeted_single_faults_required = true
+minimum_success_probability = 0.99
+confidence = 0.95
+confidence_scope = "simultaneous-required-claims"
+trials_per_sampled_claim = 20
+recovery_policy = "none"
+recovery_window_ms = 0.0
+# Single faults must be survivable in the redundant go and steer pathways.
+fault_regions = ["go", "steer"]
+
+[optimisation]
+method = "deterministic-beam"
+proposal_budget = 200
+beam_width = 4
+allow_neuron_removal = true
+allow_synapse_removal = true
+allow_verified_relay_replacement = false
+training_assisted_reduction = false
+protect_input_output_mapping = true
+cost_dimensions = ["state_bytes", "synapses", "neurons", "latency_ms"]
+
+[hardware]
+target = "aarnn-cpu-native"
+cost_mode = "measured-when-supported"
+
+[ui]
+listen = "127.0.0.1:0"
+maximum_visible_nodes = 20000
+maximum_visible_edges = 50000

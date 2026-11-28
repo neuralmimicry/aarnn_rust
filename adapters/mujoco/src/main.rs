@@ -16,6 +16,10 @@ use std::{
     },
     time::{Duration, Instant},
 };
+mod needs_report;
+#[cfg(feature = "viewer")]
+mod replay;
+mod wall_report;
 #[derive(Deserialize)]
 struct Registry {
     schema_version: u32,
@@ -56,6 +60,8 @@ struct Session {
     start: Instant,
     initial_capture: bool,
     trace: Option<Trace>,
+    /// Programmed NPC actor sharing the world (`NM_MUJOCO_NPC_ACTOR`).
+    actor: Option<aarnn_mujoco::npc_actor::NpcActor>,
 }
 impl Session {
     fn load(
@@ -65,7 +71,25 @@ impl Session {
         binding: Option<Binding>,
         options: &Options,
     ) -> Result<Self, String> {
-        let mut world = World::load(&path, record)?;
+        // A programmed NPC actor (NM_MUJOCO_NPC_ACTOR) shares this body's
+        // world: load a sibling model with the actor appended; the pinned
+        // model and its digest-checked record are unchanged.
+        let actor = aarnn_mujoco::npc_actor::NpcActor::from_env(&record.profile_id)?;
+        let mut world = match &actor {
+            Some(_) => {
+                let augmented = aarnn_mujoco::npc_actor::augment_model(&path)?;
+                let loaded = World::load(&augmented, record);
+                let _ = std::fs::remove_file(&augmented);
+                loaded?
+            }
+            None => World::load(&path, record)?,
+        };
+        if let Some(actor) = &actor {
+            eprintln!(
+                "{}",
+                serde_json::json!({"npc_actor":actor.source,"body":aarnn_mujoco::npc_actor::BODY,"profile":world.model.profile_id})
+            );
+        }
         world.instance_id = instance;
         world.npc_enabled = options.control.npc(binding.is_some())?;
         if let Some(binding) = binding {
@@ -104,12 +128,17 @@ impl Session {
             }
             None => None,
         };
-        Ok(Self {
+        let mut session = Self {
             world,
             start: Instant::now(),
             initial_capture: false,
             trace,
-        })
+            actor,
+        };
+        if let Some(actor) = &mut session.actor {
+            actor.apply(&mut session.world.physics)?;
+        }
+        Ok(session)
     }
     /// A private body begins its simulation after its first neural exchange.
     /// Network loading/compilation cannot age out the initial output while
@@ -195,6 +224,12 @@ impl Session {
         if options.reset_at == Some(iteration) {
             self.world.reset();
         }
+        if let Some(actor) = &mut self.actor {
+            actor.apply(&mut self.world.physics)?;
+            let t = self.world.physics.time();
+            let sources = actor.sound_source(t).into_iter().collect();
+            self.world.set_dynamic_sound_sources(sources);
+        }
         self.world.advance()?;
         if self.world.step.is_multiple_of(2500) {
             eprintln!(
@@ -218,7 +253,11 @@ impl Session {
             if trace.records < TRACE_LIMIT {
                 use std::io::Write;
                 self.world.observe_unbound()?;
-                writeln!(trace.writer, "{}", self.world.trace_record()?)
+                let mut record = self.world.trace_record()?;
+                if let Some(actor) = &self.actor {
+                    record["npc_actor"] = actor.trace_value();
+                }
+                writeln!(trace.writer, "{record}")
                     .map_err(|e| format!("trace {}: {e}", trace.path.display()))?;
                 trace.records += 1;
             } else {
@@ -372,9 +411,19 @@ fn interactive(
 }
 fn main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(feature = "viewer")]
+    if args.first().is_some_and(|a| a == "--replay") {
+        return replay::run(&args);
+    }
+    if args.first().is_some_and(|a| a == "--needs-report") {
+        return needs_report::run(&args);
+    }
+    if args.first().is_some_and(|a| a == "--wall-report") {
+        return wall_report::run(&args);
+    }
     if args.is_empty() || args.iter().any(|a| a == "--help") {
         println!(
-            "aarnn-mujoco MODEL.xml | --robots PROFILE=COUNT [--control auto|npc|silent] [--assets DIR] [--steps N] [--realtime] [--reference-binding JSON | --reference-bindings MAP.json] [--output JSON] [--reset-at STEP] [--trace DIR [--trace-every N]] [--lockstep]\nNative Rust interactive viewer by default; --headless uses a bounded diagnostic run. --steps N bounds either mode; --json prints full state; --output retains evidence. --trace writes a new read-only DIR/INSTANCE.jsonl body/joint/sensor/spike sample every N physics steps (default 25). --lockstep (headless) waits for each reference reply before the next physics step instead of wall-clock pacing, so a slow brain receives every frame. --arm-file FILE waits for managed startup. --screenshot FILE writes a rendered PPM. No production effect authority."
+            "aarnn-mujoco MODEL.xml | --robots PROFILE=COUNT [--control auto|npc|silent] [--assets DIR] [--steps N] [--realtime] [--reference-binding JSON | --reference-bindings MAP.json] [--output JSON] [--reset-at STEP] [--trace DIR [--trace-every N]] [--lockstep]\nNative Rust interactive viewer by default; --headless uses a bounded diagnostic run. --steps N bounds either mode; --json prints full state; --output retains evidence. --trace writes a new read-only DIR/INSTANCE.jsonl body/joint/sensor/spike sample every N physics steps (default 25). --lockstep (headless) waits for each reference reply before the next physics step instead of wall-clock pacing, so a slow brain receives every frame. --arm-file FILE waits for managed startup. --screenshot FILE writes a rendered PPM. `--replay TRACE --video OUT.mp4 [...]` renders a recorded trace with neuromodulator/energy overlays (viewer feature; see src/replay.rs). No production effect authority."
         );
         return Ok(());
     }

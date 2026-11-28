@@ -1244,6 +1244,55 @@ fn persist_imported_network_payload(path: &str, payload: &str) -> anyhow::Result
     Ok(())
 }
 
+/// Configuration of a startup network whose snapshot file is too large for
+/// the orchestrator to hold (above `LARGE_STARTUP_SNAPSHOT_BYTES`), when nodes
+/// preload snapshots from the local file (`NM_PRELOAD_NODE_NETWORK`, default
+/// on) and `NM_DISTRIBUTE_STARTUP_SNAPSHOT` does not ask for distribution.
+/// Only the configuration metadata is decoded: fully decoding and re-aligning
+/// the 2.7 GB FAFB snapshot took the orchestrator ~30 GB and many minutes,
+/// during which nodes could not register and placement timed out. Nodes keep
+/// their preloaded weights when given the configuration (`apply_config`).
+/// `NM_DISTRIBUTE_STARTUP_SNAPSHOT`: `Some(true|false)` when set to a
+/// boolean, `None` when unset or `auto` (decide by snapshot size).
+fn distribute_startup_snapshot_setting() -> Option<bool> {
+    let value = std::env::var("NM_DISTRIBUTE_STARTUP_SNAPSHOT").ok()?;
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn startup_config_only_for_large_snapshot(path: &str) -> anyhow::Result<Option<NetworkConfig>> {
+    let explicit = distribute_startup_snapshot_setting();
+    let nodes_preload = std::env::var("NM_PRELOAD_NODE_NETWORK")
+        .ok()
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+        .unwrap_or(true);
+    let size = std::fs::metadata(path)
+        .map(|m| m.len() as usize)
+        .unwrap_or(0);
+    if explicit == Some(true) || !nodes_preload || size <= LARGE_STARTUP_SNAPSHOT_BYTES {
+        return Ok(None);
+    }
+    // Stream the metadata: reading a multi-GB snapshot into a String here
+    // is what grew the orchestrator past the host's memory.
+    let Ok(metadata) =
+        crate::runner::decode_snapshot_metadata_from_path(std::path::Path::new(path))
+    else {
+        return Ok(None);
+    };
+    let mut cfg = metadata.net;
+    cfg.deployment.migrate_legacy_import();
+    nm_err!(
+        "[startup] {}: {} MB snapshot; the orchestrator reads its configuration only and nodes \
+         preload the snapshot from the file (set NM_DISTRIBUTE_STARTUP_SNAPSHOT=1 to load it)",
+        path,
+        size / (1024 * 1024)
+    );
+    Ok(Some(cfg))
+}
+
 fn load_network_config_or_snapshot(path: &str) -> anyhow::Result<(NetworkConfig, Option<String>)> {
     let payload = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read startup network payload: {}", path))?;
@@ -1279,8 +1328,12 @@ fn load_io_contract_from_path(path: &str) -> Option<NetworkConfig> {
         return None;
     }
     let payload = std::fs::read_to_string(trimmed).ok()?;
-    if let Ok(snapshot) = crate::runner::decode_snapshot_with_profile_backfill(&payload) {
-        return Some(snapshot.net);
+    // Only the configuration is needed. The full decoder takes `net` from
+    // this same metadata pass, so the contract is identical - without
+    // materialising every weight array (a 2.7 GB FAFB snapshot used as the
+    // config path drove the orchestrator to ~40 GB and out of memory).
+    if let Ok(metadata) = crate::runner::decode_snapshot_metadata_with_profile_backfill(&payload) {
+        return Some(metadata.net);
     }
     serde_json::from_str::<NetworkConfig>(&payload).ok()
 }
@@ -1583,6 +1636,11 @@ fn build_orchestrator_startup_networks(
                 let mut loaded: Option<(NetworkConfig, Option<String>)> = None;
                 if let Some(path) = spec.network_path.as_deref().map(str::trim) {
                     if !path.is_empty() {
+                        if let Some(cfg) = startup_config_only_for_large_snapshot(path)? {
+                            loaded = Some((cfg, None));
+                        }
+                    }
+                    if !path.is_empty() && loaded.is_none() {
                         loaded =
                             Some(load_network_config_or_snapshot(path).with_context(|| {
                                 format!(
@@ -1595,6 +1653,11 @@ fn build_orchestrator_startup_networks(
                 if loaded.is_none() {
                     if let Some(path) = spec.config_path.as_deref().map(str::trim) {
                         if !path.is_empty() {
+                            if let Some(cfg) = startup_config_only_for_large_snapshot(path)? {
+                                loaded = Some((cfg, None));
+                            }
+                        }
+                        if !path.is_empty() && loaded.is_none() {
                             loaded =
                                 Some(load_network_config_or_snapshot(path).with_context(|| {
                                     format!(
@@ -2822,6 +2885,11 @@ fn handle_runtime_action(args: &Cli) -> anyhow::Result<()> {
             let workspace_id = runtime_workspace_required(args)?;
             let snapshot = client.workspace_snapshot(&workspace_id)?;
             if let Some(path) = args.network.as_deref() {
+                crate::monitor::check_disk_for_write(
+                    std::path::Path::new(path),
+                    snapshot.snapshot_json.len() as u64,
+                )
+                .map_err(|e| anyhow::anyhow!(e))?;
                 std::fs::write(path, snapshot.snapshot_json.as_bytes())
                     .with_context(|| format!("Failed to write runtime snapshot to {}", path))?;
                 println!("wrote {}", path);
@@ -3499,10 +3567,20 @@ fn main() -> anyhow::Result<()> {
                     startup_snapshot_json.as_deref(),
                 )?;
                 let default_playing = distributed_autostart_enabled();
-                let distribute_startup_snapshot = std::env::var("NM_DISTRIBUTE_STARTUP_SNAPSHOT")
+                // Placement rebalancing parses (and may re-serialise) a held
+                // snapshot while it owns the cluster state lock. A multi-GB
+                // snapshot (the 20,048-neuron FAFB import is 2.7 GB) blocked
+                // node registration for minutes, so placement never
+                // completed. Nodes preload large snapshots from the local
+                // file instead (NM_PRELOAD_NODE_NETWORK, on by default), so
+                // unless NM_DISTRIBUTE_STARTUP_SNAPSHOT says otherwise the
+                // orchestrator holds only snapshots up to
+                // LARGE_STARTUP_SNAPSHOT_BYTES.
+                let nodes_preload = std::env::var("NM_PRELOAD_NODE_NETWORK")
                     .ok()
-                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
                     .unwrap_or(true);
+                let distribute_startup_snapshot = distribute_startup_snapshot_setting();
                 rt.block_on(async move {
                     {
                         let mut state = node.state.write().await;
@@ -3550,8 +3628,22 @@ fn main() -> anyhow::Result<()> {
                                 );
                             }
                             state.network_registry.insert(network_id.clone(), status);
-                            if distribute_startup_snapshot {
-                                if let Some(snapshot_json) = startup.snapshot_json {
+                            if let Some(snapshot_json) = startup.snapshot_json {
+                                let hold = distribute_startup_snapshot.unwrap_or_else(|| {
+                                    let large = nodes_preload
+                                        && snapshot_json.len() > LARGE_STARTUP_SNAPSHOT_BYTES;
+                                    if large {
+                                        nm_err!(
+                                            "[startup] network {}: {} MB startup snapshot not held by the \
+                                             orchestrator; nodes preload it from the local file (set \
+                                             NM_DISTRIBUTE_STARTUP_SNAPSHOT=1 to distribute it)",
+                                            network_id,
+                                            snapshot_json.len() / (1024 * 1024)
+                                        );
+                                    }
+                                    !large
+                                });
+                                if hold {
                                     state.network_snapshots.insert(network_id, snapshot_json);
                                 }
                             }
@@ -4441,6 +4533,10 @@ async fn start_automatic_placement_loop(
 /// Depending on the CLI arguments, the node will either act as:
 /// - **Orchestrator**: Manages the cluster, assigns partitions, and aggregates results.
 /// - **Compute Node**: Performs a subset of the network simulation.
+/// Startup snapshots above this size stay with the nodes (which preload them
+/// from the local file) rather than in the orchestrator's placement state.
+const LARGE_STARTUP_SNAPSHOT_BYTES: usize = 256 * 1024 * 1024;
+
 async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::DistributedNode> {
     use crate::causal_transport::proto::causal_data_plane_server::CausalDataPlaneServer;
     use crate::distributed::proto::distributed_neuromorphic_client::DistributedNeuromorphicClient;
@@ -4580,10 +4676,29 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
             let preload_io_contract = load_io_contract_from_path(&args.config);
 
             if let Some(network_path) = args.network.as_deref() {
-                if let Ok(s) = std::fs::read_to_string(network_path) {
-                    if let Ok(snap) = crate::runner::decode_snapshot_with_profile_backfill(&s) {
+                // Admission control: stream the snapshot's dimensions, estimate
+                // what the runner will need and refuse (clear error, clean exit)
+                // rather than let the node grow into the OOM killer. The full
+                // decode only ran to keep `net`; the metadata carries it.
+                let path = std::path::Path::new(network_path);
+                if let Ok(metadata) = crate::runner::decode_snapshot_metadata_from_path(path) {
+                    let payload_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                    let estimate = crate::runner::estimate_runner_bytes(&metadata, payload_bytes);
+                    let sample = crate::monitor::admit_allocation(
+                        &format!("node {} preload of {}", args.brain_id, network_path),
+                        estimate,
+                    )
+                    .map_err(|e| anyhow::anyhow!(e))?;
+                    nm_log!(
+                        "[startup] node {} admits {} (~{} MB estimated; {})",
+                        args.brain_id,
+                        network_path,
+                        estimate / (1024 * 1024),
+                        sample.summary()
+                    );
+                    if let Ok(s) = std::fs::read_to_string(network_path) {
                         preload_snapshot_json = Some(s);
-                        preload_cfg = Some(snap.net);
+                        preload_cfg = Some(metadata.net);
                     }
                 }
             }

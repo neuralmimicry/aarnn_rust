@@ -49,6 +49,7 @@ struct Args {
     /// Write the network (learned weights, runtime state, frozen
     /// morphology) after the run, for a later closed-loop test.
     export_after: Option<PathBuf>,
+    dump_synapse_gains: Option<PathBuf>,
 }
 
 fn parse() -> Result<Args, String> {
@@ -67,6 +68,7 @@ fn parse() -> Result<Args, String> {
         watch_rows: Vec::new(),
         route_report: None,
         export_after: None,
+        dump_synapse_gains: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(k) = it.next() {
@@ -83,6 +85,7 @@ fn parse() -> Result<Args, String> {
             "--series-ms" => a.series_ms = v()?.parse().map_err(|_| "series-ms")?,
             "--route-report" => a.route_report = Some(PathBuf::from(v()?)),
             "--export-after" => a.export_after = Some(PathBuf::from(v()?)),
+            "--dump-synapse-gains" => a.dump_synapse_gains = Some(PathBuf::from(v()?)),
             "--watch-rows" => a.watch_rows = v()?.split(',').map(str::to_string).collect(),
             // Write the imported network with its built morphology frozen in
             // runtime state, so later loads (all depth variants) share one
@@ -213,6 +216,36 @@ fn main() -> Result<(), String> {
     // the probe seed then selects the stochastic input/noise sequence.
     fastrand::seed(a.seed);
     runner.set_dt(1.0);
+    if let Some(path) = &a.dump_synapse_gains {
+        // Spatial-mode calibration (scripts/calibrate_spatial_network.py):
+        // every morphological synapse's route delay and attenuation (axon and
+        // dendrite length, dendritic compartment gain, myelination, fatigue)
+        // as the runtime computes them, plus its release probability.
+        let mut lines = Vec::new();
+        for (idx, syn) in runner.morph.synapses.iter().enumerate() {
+            let (steps, atten) = runner.syn_delay_and_atten(idx);
+            lines.push(
+                serde_json::json!({
+                    "pre_layer": syn.pre_layer, "pre_id": syn.pre_id,
+                    "post_layer": syn.post_layer, "post_id": syn.post_id,
+                    "weight": syn.weight, "p_release": syn.p_release,
+                    "delay_steps": steps, "attenuation": atten,
+                })
+                .to_string(),
+            );
+        }
+        std::fs::write(path, lines.join("\n") + "\n").map_err(|e| e.to_string())?;
+        println!(
+            "{} synapses (use_morphology={}, use_aarnn_delays={}, attenuation/unit={}, p_release={}) written to {}",
+            lines.len(),
+            runner.net.use_morphology,
+            runner.net.use_aarnn_delays,
+            runner.net.aarnn_distance_attenuation_per_unit,
+            runner.net.p_release_default,
+            path.display()
+        );
+        return Ok(());
+    }
     if let Some(path) = &a.export_frozen {
         let mut frozen: serde_json::Value =
             serde_json::from_str(&runner.export_network_json().map_err(|e| e.to_string())?)
@@ -235,7 +268,10 @@ fn main() -> Result<(), String> {
         })
         .unwrap_or_default();
     let s_count = runner.net.num_sensory_neurons;
-    let h_count = runner.v_h.first().map(|v| v.len()).unwrap_or(0);
+    // With structural growth on, the hidden layer can grow during the run;
+    // the per-cell tallies below follow it (`h_count` is updated each step).
+    let mut h_count = runner.v_h.first().map(|v| v.len()).unwrap_or(0);
+    let h_count_initial = h_count;
     let o_count = runner.net.num_output_neurons;
     let trace = match &a.input {
         Some(p) => Some(load_trace(p)?),
@@ -341,6 +377,15 @@ fn main() -> Result<(), String> {
         for sub in 0..2 {
             let input = if sub == 0 { &frame } else { &zero };
             let _ = runner.step_sync(1.0, Some(input));
+            let grown = runner.v_h.first().map(|v| v.len()).unwrap_or(0);
+            if grown > h_count {
+                counts_h.resize(grown, 0);
+                graded_hz_sum.resize(grown, 0.0);
+                graded.resize(grown, false);
+                win_h.resize(grown, 0.0);
+                win_v.resize(grown, 0.0);
+                h_count = grown;
+            }
             let tick = (f * 2 + sub) as u32;
             for (j, s) in runner.last_spk_h[0].iter().enumerate() {
                 if *s != 0 {
@@ -459,6 +504,9 @@ fn main() -> Result<(), String> {
         "w_out_nonzero": runner.w_out.iter().filter(|w| w.abs() > 1e-12).count(),
         "w_out_negative": runner.w_out.iter().filter(|w| **w < -1e-12).count(),
         "hist_len": runner.spk_hist_s.len(),
+        "hidden_initial": h_count_initial,
+        "hidden_final": h_count,
+        "hidden_grown": h_count.saturating_sub(h_count_initial),
     });
     let wall = started.elapsed().as_secs_f64();
     let secs = a.ms as f64 / 1000.0;

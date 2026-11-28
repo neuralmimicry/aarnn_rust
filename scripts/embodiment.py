@@ -26,6 +26,10 @@ FIRST = ('galbot_g1_golf', 'ugot_mecanum', 'crow_corvus_corone')
 BALANCING = ('ugot_balance', 'ugot_wheelleg')
 from embodiment_legacy import LEGACY, projection as legacy_projection
 NEW = tuple(r['id'] for r in json.loads((PACK / 'manifests/robots.json').read_text())['robots'])
+# Bodies designed in this repository, each compiled from its own spec module
+# (scripts/embodiment_salamander.py); not part of the LEC research manifest.
+from embodiment_salamander import PROFILE as SALAMANDER, ALIASES as SALAMANDER_ALIASES
+DESIGNED = (SALAMANDER,)
 
 
 def digest(value):
@@ -229,8 +233,15 @@ def make_crow():
         for i in range(3):
             element(toes, 'geom', name=f'{side}_toe{i+1}', type='capsule', fromto=[0, (i-1)*.01, 0, .035, (i-1)*.014, 0], size=.002, mass=.0005)
     # Sum of explicit link masses = 0.510 kg including all eight toes.
+    # Lateral eyes, one on each side of the head, each axis 0.45 rad (26 deg)
+    # outward: with ~91 deg horizontal per eye (fovy 75, 4:3) the fields
+    # overlap ~40 deg in front, the corvid binocular field (~37-40 deg; v1
+    # mounted both retinas at one point looking straight ahead, so the two
+    # 96-cell retinas saw the same image).
     for side, yaw in [('left', .45), ('right', -.45)]:
-        element(bodies['neck_roll'], 'camera', name='retina_'+side, pos=[.03, 0, .01], xyaxes=[0, -1, 0, 0, 0, 1], fovy=75)
+        sign = 1 if side == 'left' else -1
+        element(bodies['neck_roll'], 'camera', name='retina_'+side, pos=[.03, sign*.012, .01],
+                xyaxes=[round(math.sin(yaw), 6), round(-math.cos(yaw), 6), 0, 0, 0, 1], fovy=75)
     # Synergy bodies overlap at shared pivots. Disable intra-bird collision in
     # this reduced model explicitly; ground, toes, obstacles and external bodies
     # still collide. Self-collision calibration is an open fidelity gate.
@@ -246,6 +257,9 @@ def prepare_source(profile):
             from embodiment_legacy import build
             return build(profile,element,base_world)
         if profile == 'crow_corvus_corone': return make_crow()
+        if profile == SALAMANDER:
+            from embodiment_salamander import build
+            return build(element, base_world)
         from embodiment_archetypes import build
         descriptions = {r['id']: r for r in json.loads((PACK/'manifests/robots.json').read_text())['robots']}
         if profile not in descriptions: raise ValueError('unknown embodiment profile: '+profile)
@@ -355,15 +369,33 @@ def compile_profile(profile, root):
         output_names = proposal['output_names']
         known = {s['name']: s for s in sensors}
         sensors = [known.get(n, dict(name=n, kind='projection', units='normalised', range=[0, 1], rate_hz=500, missing='unavailable-disarm')) for n in proposal['sensor_names']]
+    if profile == SALAMANDER:
+        # Designed contract: legacy-native measurement kinds and antagonistic
+        # position readouts (embodiment_salamander module docstring).
+        import embodiment_salamander as salamander
+        sensors = salamander.sensors()
+        output_names = salamander.output_names()
+        for i, motor in enumerate(motors):
+            motor.update(encoding=salamander.VERSION, readout=salamander.readout(motor['joint']), position_readout=True)
+            motor['velocity_limit'] = float(model.actuator_user[i, 0])
+    from embodiment_scene import needs_sensors
+    sensors = sensors + needs_sensors(profile, scene['half_extent_m'])
     io = dict(schema_version=1, digest_encoding='embodiment-binary-v1', mapping_version=profile+'-io-v1', sensors=sensors, output_names=output_names,
               sensory_base=4096, output_base=16384, dt_us=2000,
               transducer=dict(version='antagonist-rate-v1', tau_s=.02, stale_s=.1, neutral='zero effort; passive dynamics continue'))
     io['digest'] = digest(io)
     if profile in NEURAL_LEGACY:
         io['neural_sensory_names'],io['neural_output_names']=neural_names(profile)
+        # Optional sensor groups (hearing, vision...) keep their record names
+        # as neural names; a preserved network binds only its own core list.
+        io['neural_sensory_names']+=[s['name'] for s in sensors if s.get('group') and s['name'] not in io['neural_sensory_names']]
         io['mapping_version']=LEGACY_VERSION+'/'+profile
         io['transducer']=dict(version=LEGACY_VERSION,tau_s=.02,stale_s=.1,neutral='zero active drive on empty history; no twitch or oscillator',fidelity='versioned engineering projection; no learned task or biological calibration claim')
         io['digest']=digest({k:v for k,v in io.items() if k!='digest'})
+    if profile == SALAMANDER:
+        io['mapping_version'] = salamander.VERSION
+        io['transducer'] = salamander.transducer()
+        io['digest'] = digest({k: v for k, v in io.items() if k != 'digest'})
     if profile == 'celegans':
         io['mapping_version']='celegans-simulation-v2'
         io['transducer']=dict(version='celegans-muscle-v3-sim-v1',muscle_tau_s=.055,spine_tau_s=.080,twitch_fraction=.3,row_order='row 01 = head (segment_23)',stale_s=.1,neutral='zero active effort; no twitch fallback',calibration='functional surrogate; twitch summation, head-to-tail rows; not measured muscle physiology')
@@ -385,6 +417,11 @@ def compile_profile(profile, root):
                   anatomy_sources_sha256=sha(ROOT/'scripts/embodiment_anatomy.py'),
                   neural_sources_sha256=sha(ROOT/'scripts/embodiment_neural.py'),
                   bodies=[], joints=[], geoms=[], constraints=[dict(tag=e.tag, **e.attrib) for e in root.findall('./equality/*')])
+    if profile == SALAMANDER:
+        record.update(exact_replica='designed body; not a measured animal',
+                      controller_transfer=salamander.VERSION+'; untrained; native MuJoCo engineering body, calibration unvalidated',
+                      source='scripts/embodiment_salamander.py:build',
+                      source_digest=digest([sha(Path(__file__)), sha(ROOT/'scripts/embodiment_salamander.py')]))
     for bid in range(1, model.nbody):
         record['bodies'].append(dict(name=mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, bid), parent=int(model.body_parentid[bid]),
                                      position=model.body_pos[bid].tolist(), quaternion_wxyz=model.body_quat[bid].tolist(),
@@ -417,7 +454,7 @@ def compile_profile(profile, root):
     return xml, record
 
 
-def products(profiles=FIRST+tuple(p for p in NEW+LEGACY if p not in FIRST)):
+def products(profiles=FIRST+tuple(p for p in NEW+LEGACY+DESIGNED if p not in FIRST)):
     verify_sources()
     result = {}
     for profile in profiles:
@@ -433,13 +470,13 @@ def products(profiles=FIRST+tuple(p for p in NEW+LEGACY if p not in FIRST)):
     # launcher. Existing neural files and aliases are read, never rewritten.
     from robot_profiles import PROFILES
     entries=[]
-    for profile in NEW+LEGACY:
+    for profile in NEW+LEGACY+DESIGNED:
         path=OUT/(profile+'.json')
         encoded=result.get(path)
         record=json.loads(encoded) if encoded else json.loads(path.read_text()) if path.exists() else None
         if record:
             old=PROFILES.get(profile)
-            entries.append(dict(id=profile,aliases=list(old.aliases) if old else [profile],sensory=len(record['io']['sensors']),output=len(record['io']['output_names']),
+            entries.append(dict(id=profile,aliases=list(old.aliases) if old else list(SALAMANDER_ALIASES) if profile==SALAMANDER else [profile],sensory=len(record['io']['sensors']),output=len(record['io']['output_names']),
                                 model=profile+'.xml',record=profile+'.json',config=profile+'.config.json',network=old.network_rel if profile in LEGACY else '',io_digest=record['io']['digest'],model_digest=record['digest']))
     result[OUT/'registry.generated.json']=json.dumps(dict(schema_version=1,profiles=entries),indent=2)+'\n'
     return result
@@ -448,7 +485,7 @@ def products(profiles=FIRST+tuple(p for p in NEW+LEGACY if p not in FIRST)):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check', action='store_true')
-    parser.add_argument('--profiles', nargs='+', default=list(FIRST + tuple(p for p in NEW+LEGACY if p not in FIRST)))
+    parser.add_argument('--profiles', nargs='+', default=list(FIRST + tuple(p for p in NEW+LEGACY+DESIGNED if p not in FIRST)))
     args = parser.parse_args()
     stale = []
     for path, value in products(args.profiles).items():

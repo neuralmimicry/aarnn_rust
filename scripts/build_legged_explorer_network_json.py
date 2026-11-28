@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from aarnn_circuit import (Circuit, add_hindbrain, add_leg_oscillators, add_sensor_relay,  # noqa: E402
+from aarnn_circuit import (Circuit, add_hindbrain, add_learned_anticipation, add_leg_oscillators, add_sensor_relay, apply_learner,  # noqa: E402
                            add_servo_reflex, add_turn_bouts, bistable_band, drive_weight, graded, steady_release)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -174,9 +174,26 @@ def build(args):
                 c.connect(cell, rs[side], w(0.8 * w_prs))
         elif math.cos(a) > -0.1 and abs(math.sin(a)) > 0.1:
             c.connect(cell, rs["l" if math.sin(a) > 0 else "r"], w(w_prs * (1.0 if math.cos(a) > 0.5 else 0.5)))
+    learn = None
+    if args.learn_groups > 0:
+        # Learning by experience (aarnn_circuit.add_learned_anticipation): a
+        # near detector at the innate onset teaches LT_side through the
+        # forward rays of that side (and the front ray).
+        rays = [s for s in model["io"]["sensors"] if s["kind"] == "range_ray"]
+        front = [s["name"] for s in rays if math.cos(s["angle_rad"]) > 0.9]
+        side_rays = {sd: [s["name"] for s in rays if math.cos(s["angle_rad"]) > 0.5 and 0.9 >= math.cos(s["angle_rad"])
+                          and (math.sin(s["angle_rad"]) > 0) == (sd == "l")] + front for sd in "lr"}
+        w_prs = hi_knee / steady_release(6.0)
+        add_learned_anticipation(c, GAIN, side_rays, lambda d: d / RAY_RANGE_M, True, d_on, d_on + 0.05, d_on + 0.35,
+                                 args.learn_groups, {sd: [(rs[sd], w_prs)] for sd in "lr"})
+        learn = dict(profile=args.profile, encoding="direct", reach_m=RAY_RANGE_M, channels=side_rays, teach_m=d_on,
+                     near_m=d_on + 0.05, far_m=d_on + 0.35, protocol_far_m=min(d_on + 1.2, RAY_RANGE_M),
+                     protocol_near_m=max(d_on - 0.1, 0.05))
     labels = {"design": "four-legged trot: leg escape half-centres, equilibrium-point stretch reflexes, shared hindbrain",
               "parameters": vars(args)}
     c.write(Path(args.output), Path(args.config_out), synaptic_gain=GAIN, depth=0, labels=labels)
+    if learn:
+        apply_learner(Path(args.output), Path(args.config_out), GAIN, learn)
     return c
 
 
@@ -218,6 +235,7 @@ def main():
     ap.add_argument("--rs-plateau", type=float, default=18.0)
     ap.add_argument("--artr-plateau", type=float, default=30.0)
     ap.add_argument("--onset-lengths", type=float, default=2.0)
+    ap.add_argument("--learn-groups", type=int, default=0, help="anticipation learning: range cells per side (0 = off)")
     args = ap.parse_args()
     if args.knee_ref is None:
         args.knee_ref = 0.5 if args.profile == "ugot_spider" else 0.8

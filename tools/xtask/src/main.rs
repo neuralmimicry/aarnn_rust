@@ -200,11 +200,36 @@ fn example_test(id: &str) -> Option<&'static str> {
     }
 }
 
+/// Examples whose oracle lives in another workspace package: (package, test).
+fn example_package_test(id: &str) -> Option<(&'static str, &'static str)> {
+    match id {
+        "EX-EXPLORER-001" => Some(("aarnn-explorer", "explorer_e2e")),
+        _ => None,
+    }
+}
+
 fn examples_run(root: &Path, args: &[String]) -> bool {
     let id = required_option(args, "--id");
     if !scenario_manifest_is_complete(root, &id) {
         eprintln!("example {id} has no complete QA scenario manifest");
         return false;
+    }
+    if let Some((package, test)) = example_package_test(&id) {
+        // The explorer drives the real runner in worker processes; a debug
+        // build is about 10x slower, so the example runs optimised.
+        return run(
+            root,
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "--release",
+                "-p",
+                package,
+                "--test",
+                test,
+            ],
+        );
     }
     let Some(test) = example_test(&id) else {
         eprintln!("unknown or externally gated example {id}; report is not-run");
@@ -516,6 +541,28 @@ fn qa_suite(root: &Path, suite: &str) -> bool {
             "cargo",
             &["test", "--locked", "--workspace", "--tests"],
         ),
+        "explorer" => {
+            scenario_manifest_is_complete(root, "EX-EXPLORER-001")
+                && run(
+                    root,
+                    "cargo",
+                    &["test", "--locked", "--release", "-p", "aarnn-explorer"],
+                )
+                && run(
+                    root,
+                    "cargo",
+                    &[
+                        "test",
+                        "--locked",
+                        "--release",
+                        "-p",
+                        "aarnn-explorer",
+                        "--features",
+                        "web-ui",
+                        "--lib",
+                    ],
+                )
+        }
         other => {
             eprintln!("unknown QA suite {other}; no test was silently skipped");
             false
@@ -671,7 +718,15 @@ mod tests {
                 .iter()
                 .map(|(id, _)| id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["EX-001", "EX-002", "EX-005", "EX-007", "EX-011", "EX-012"]
+            vec![
+                "EX-001",
+                "EX-002",
+                "EX-005",
+                "EX-007",
+                "EX-011",
+                "EX-012",
+                "EX-EXPLORER-001"
+            ]
         );
         assert!(entries.iter().all(|(_, title)| !title.trim().is_empty()));
         assert!(

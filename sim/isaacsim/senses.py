@@ -78,6 +78,25 @@ class Geometry:
         x, _ = self._ray(point, direction, groups, exclude)
         return x if x >= 0 else None
 
+    def echo(self, point, direction, exclude, incidence_max=None):
+        """``ray`` with the sonar echo rule of ``Physics::echo_beyond_self``:
+        a hit at an angle of incidence above ``incidence_max`` returns nothing."""
+        if incidence_max is None:
+            return self.ray(point, direction, exclude)
+        self._geomid[0] = -1
+        p = np.asarray(point, dtype=np.float64)
+        v = np.asarray(direction, dtype=np.float64)
+        normal = np.zeros(3, dtype=np.float64)
+        x = self.mj.mj_ray(self.m, self.d, p, v, RANGE_GROUPS, 1, int(exclude), self._geomid, normal)
+        if x < 0:
+            return None
+        n, length = float(np.linalg.norm(normal)), float(np.linalg.norm(v))
+        if n > 0 and length > 0:
+            cos = abs(float(v @ normal)) / (n * length)
+            if math.acos(min(max(cos, 0.0), 1.0)) > incidence_max:
+                return None
+        return x
+
     def ray_light(self, point, direction, exclude):
         x, geom = self._ray(point, direction, None, exclude)
         if x < 0 or geom < 0:
@@ -183,17 +202,80 @@ def field_value(stimuli, name, x, y):
     return min(max(sum(stimulus_value(s, x, y) for s in stimuli if s.get('field') == name), 0.0), 1.0)
 
 
+# ---- crates/aarnn-embodiment/src/acoustics.rs ------------------------------------------
+SPEED_OF_SOUND = 343.0
+
+
+def _source_on(src, t):
+    if t < src.get('start_s', 0.0):
+        return False
+    period, on = src.get('period_s'), src.get('on_s')
+    if period and on is not None and period > 0:
+        return (t - src.get('start_s', 0.0)) % period < on
+    return True
+
+
+def _level_at_1m(src, band_hz):
+    pts = sorted((f, db) for f, db in src.get('spectrum', []) if f > 0)
+    if not pts or band_hz <= 0:
+        return -200.0
+    x = math.log(band_hz)
+    if x <= math.log(pts[0][0]):
+        return pts[0][1]
+    for (f0, d0), (f1, d1) in zip(pts, pts[1:]):
+        a, b = math.log(f0), math.log(f1)
+        if x <= b:
+            t = (x - a) / (b - a) if b > a else 0.0
+            return d0 + t * (d1 - d0)
+    return pts[-1][1]
+
+
+def _source_level_db(src, rx_pos, rx_axis, directivity, band_hz):
+    to = np.asarray(src['position'], dtype=float) - rx_pos
+    r = max(float(np.linalg.norm(to)), 0.05)
+    n = float(np.linalg.norm(rx_axis))
+    cos = float(to @ rx_axis) / (r * n) if n > 0 else 1.0
+    k = min(max(directivity, 0.0), 1.0) * min(max(band_hz / 1000.0, 0.0), 1.0)
+    gain = max((1.0 - k) + k * min(max(cos, -1.0), 1.0), 0.05)
+    return _level_at_1m(src, band_hz) - 20.0 * math.log10(r) + 20.0 * math.log10(gain)
+
+
+def band_level_db(sources, rx_pos, rx_axis, directivity, band_hz, t):
+    power = sum(10 ** (_source_level_db(s, rx_pos, rx_axis, directivity, band_hz) / 10.0)
+                for s in sources if _source_on(s, t))
+    return 10.0 * math.log10(power) if power > 0 else -200.0
+
+
+def itd_normalised(sources, a, b, band_hz, t):
+    """a, b: (position, axis, directivity) receivers; 0.5 when silent."""
+    live = [(s, _source_level_db(s, *a, band_hz)) for s in sources if _source_on(s, t)]
+    live = [x for x in live if x[1] > -100.0]
+    spacing = float(np.linalg.norm(a[0] - b[0]))
+    if not live or spacing <= 0:
+        return 0.5
+    src = max(live, key=lambda x: x[1])[0]
+    p = np.asarray(src['position'], dtype=float)
+    dt = (float(np.linalg.norm(p - a[0])) - float(np.linalg.norm(p - b[0]))) / SPEED_OF_SOUND
+    return min(max(0.5 + 0.5 * dt / (spacing / SPEED_OF_SOUND), 0.0), 1.0)
+
+
 class Senses:
     """Per-body sensory projection with the MuJoCo owner's per-step cache."""
 
     def __init__(self, record, geometry):
         self.record = record
         self.geometry = geometry
-        self.sensors = record['io']['sensors']
+        # Energy-needs channels (optional group `needs`): Isaac has no energy
+        # model, so they read neutral (full reserve, no refill, no cue) and are
+        # spliced back into the record order after the engine projection.
+        self.needs = [(i, s['kind']) for i, s in enumerate(record['io']['sensors']) if s['kind'].startswith('needs-')]
+        self.sensors = [s for s in record['io']['sensors'] if not s['kind'].startswith('needs-')]
         self.profile = record['profile_id']
         self.cells = {}
         self.cache_step = None
         self.values = None
+        self.held = {}
+        self.dynamic_sound_sources = []   # moving sources set by the owner each step
         self.vibration_lp = np.zeros(3)
         self.vibration_step = None
         kinds = {s['kind'] for s in self.sensors}
@@ -208,8 +290,9 @@ class Senses:
         self._bodies = {}
         self._joints = {}
         for s in self.sensors:
-            if s.get('body'):
-                self._bodies[s['body']] = geometry.body(s['body'])
+            for name in [s.get('body')] + list(s.get('bodies') or []):
+                if name:
+                    self._bodies[name] = geometry.body(name)
             if s.get('joint'):
                 self._joints[s['joint']] = geometry.joint(s['joint'])
         self._actuated = [(a, geometry.joint(a['joint'])) for a in record['actuators']]
@@ -224,27 +307,36 @@ class Senses:
     def reset(self):
         self.cells.clear()
         self.cache_step = None
+        self.held.clear()
         self.vibration_step = None
 
     def measure(self, st, step):
         if self.cache_step == step:
             return list(self.values)
         if self.mode == 'legacy':
-            out = self._legacy(st)
+            out = self._legacy(st, step)
         elif self.mode == 'celegans':
             out = self._celegans(st, step)
         else:
             out = self._native(st)
+        for i, kind in self.needs:
+            out.insert(i, 1.0 if kind == 'needs-energy' else 0.0)
         self.cache_step = step
         self.values = out
         return list(out)
 
     # ---- adapters/mujoco/src/legacy.rs -------------------------------------------------
-    def _legacy(self, st):
+    def _legacy(self, st, step=0):
         g = self.geometry
         cameras = {}
         out = []
-        for s in self.sensors:
+        for index, s in enumerate(self.sensors):
+            period = s.get('period_s')
+            if period and index in self.held:
+                at, value = self.held[index]
+                if 0 <= step - at < max(1, round(period / DT)):
+                    out.append(value)
+                    continue
             body = self._bodies[s['body']]
             position, r, velocity = st.body_pos[body], st.body_rot[body], st.com_vel[body]
             axis = s.get('axis') or 0
@@ -263,7 +355,9 @@ class Senses:
                     vec = np.array([vec[0], vec[2], -vec[1]])
                 v = norm(float(vec[axis]), -bound, bound)
             elif kind == 'legacy-contact':
-                if s.get('direction') is not None:
+                if s.get('region_m') is not None:
+                    v = self._region_contact(st, body, np.asarray(s['region_m'], dtype=float))
+                elif s.get('direction') is not None:
                     v = self._directional_contact(st, body, np.asarray(s['direction'], dtype=float))
                 else:
                     v = 1.0 if st.contact[body] else 0.0
@@ -274,8 +368,12 @@ class Senses:
             elif kind == 'legacy-range':
                 point = position + r @ np.asarray(s.get('position_m') or [0.0, 0.0, 0.0], dtype=float)
                 reach = s['angle_rad']
-                hit = g.ray(point, r @ np.asarray(s['direction'], dtype=float), body)
-                distance = min(reach if hit is None else hit, reach)
+                distance = reach
+                for ray in s.get('rays') or [s['direction']]:
+                    hit = g.echo(point, r @ np.asarray(ray, dtype=float), body, s.get('incidence_max_rad'))
+                    if hit is not None:
+                        distance = min(distance, hit)
+                distance = max(min(distance, reach), s.get('min_m') or 0.0)
                 lookup = s.get('lookup')
                 if lookup:
                     raw = lookup[-1][1]
@@ -289,13 +387,14 @@ class Senses:
                     v = 1.0 - distance / reach
             elif kind == 'legacy-camera':
                 name = s['camera']
-                if name not in cameras:
-                    rows, cols = s['retina_shape']
+                rows, cols = s['retina_shape']
+                key = f'{name}#{rows}x{cols}'   # one eye may feed retinas of two shapes
+                if key not in cameras:
                     if rows == 0 or cols == 0 or rows * cols > 192:
                         raise ValueError('camera bound')
                     point, cr, owner, fovy = g.camera_state(name)
                     vertical = math.tan(math.radians(fovy) / 2.0)
-                    cells = self.cells.setdefault(name, [Cell() for _ in range(rows * cols)])
+                    cells = self.cells.setdefault(key, [Cell() for _ in range(rows * cols)])
                     readings = []
                     for y in range(rows):
                         for x in range(cols):
@@ -303,10 +402,9 @@ class Senses:
                                                  (1.0 - 2.0 * (y + 0.5) / rows) * vertical, -1.0])
                             ray = ray / math.sqrt(float(ray @ ray))
                             readings.append(cells[y * cols + x].sample(g.ray_light(point, ray, owner), DT))
-                    cameras[name] = readings
+                    cameras[key] = readings
                 y, x = s['cell']
-                cols = s['retina_shape'][1]
-                v = cameras[name][y * cols + x][{'on': 0, 'off': 1, 'lum': 2, 'gradient': 3}[s['mode']]]
+                v = cameras[key][y * cols + x][{'on': 0, 'off': 1, 'lum': 2, 'gradient': 3}[s['mode']]]
             elif kind == 'legacy-flow':
                 lv = float((r.T @ velocity[3:])[axis])
                 if s.get('mode') == 'left':
@@ -315,6 +413,23 @@ class Senses:
                     v = min(max(-lv, 0.0), 1.0)
                 else:
                     v = min(abs(lv), 1.0)
+            elif kind == 'legacy-acoustic':
+                def receiver(spec):
+                    bb = self._bodies[spec['body']]
+                    pos, rot = st.body_pos[bb], st.body_rot[bb]
+                    return (pos + rot @ np.asarray(spec.get('position_m') or [0.0, 0.0, 0.0], dtype=float),
+                            rot @ np.asarray(spec.get('direction') or [1.0, 0.0, 0.0], dtype=float),
+                            float(spec.get('directivity') or 0.0))
+                sources = list((self.record.get('scene') or {}).get('sound_sources') or []) + list(self.dynamic_sound_sources)
+                t = step * DT
+                rx = receiver(s)
+                if s.get('mode') == 'itd':
+                    pair = next(x for x in self.sensors if x['name'] == s['pair'])
+                    v = itd_normalised(sources, rx, receiver(pair), s['band_hz'], t)
+                else:
+                    level = band_level_db(sources, *rx, s['band_hz'], t)
+                    lo, hi = s.get('floor_db', 20.0), s.get('ceil_db', 100.0)
+                    v = min(max((level - lo) / (hi - lo), 0.0), 1.0) if hi > lo else 0.0
             elif kind == 'legacy-depth':
                 v = min(max((0.4 - float(position[2])) / 0.4, 0.0), 1.0)
             elif kind == 'legacy-pitch':
@@ -323,8 +438,19 @@ class Senses:
                 raise NotImplementedError(f"unimplemented native sensor {s['name']} {kind}")
             if not math.isfinite(v):
                 raise ValueError(f"nonfinite sensor {s['name']}")
+            if period:
+                self.held[index] = (step, min(max(v, 0.0), 1.0))
             out.append(min(max(v, 0.0), 1.0))
         return out
+
+    @staticmethod
+    def _region_contact(st, body, region):
+        position, r = st.body_pos[body], st.body_rot[body]
+        for point, _ in st.contact_points.get(body, ()):
+            local = r.T @ (np.asarray(point) - position)
+            if np.all(local >= region[0]) and np.all(local <= region[1]):
+                return 1.0
+        return 0.0
 
     @staticmethod
     def _directional_contact(st, body, direction):
@@ -406,7 +532,8 @@ class Senses:
             elif kind == 'celegans-rotation-v2':
                 v = min(max(abs(gyro[s['axis']]) / 10.0, 0.0), 1.0)
             elif kind == 'celegans-contact-v1':
-                v = self._object_contact(st, self._bodies[s['body']])
+                names = s.get('bodies') or [s['body']]
+                v = max(self._object_contact(st, self._bodies[n]) for n in names)
             elif kind == 'celegans-field-v2':
                 _, point, _ = self._mount(st, s)
                 v = field_value(self.stimuli, s['mode'], point[0], point[1])

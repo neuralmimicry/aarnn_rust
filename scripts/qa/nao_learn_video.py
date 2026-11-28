@@ -34,11 +34,16 @@ spec.loader.exec_module(sv)
 
 
 def window_trace(trace, out, t0, t1, every=10):
-    """Rows of [t0, t1) seconds every `every` steps (20 ms) for the robot pane."""
+    """Rows of [t0, t1) seconds every `every` physics steps for the robot pane
+    (the trace may itself be sampled every N steps: keep every `every / N`)."""
     with open(trace) as f, open(out, "w") as g:
         header = json.loads(f.readline())
+        sampled = max(1, int(header.get("trace_every_steps", 1)))
+        if every % sampled:
+            raise SystemExit(f"frame interval {every} steps is not a multiple of the trace's {sampled}")
         header["trace_every_steps"] = every
         g.write(json.dumps(header) + "\n")
+        every //= sampled
         k = 0
         for line in f:
             r = json.loads(line)

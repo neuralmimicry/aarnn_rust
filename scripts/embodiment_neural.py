@@ -99,6 +99,22 @@ def install_mechanics(profile,root,element):
             for k,v in dict(ctrlrange=bounds,kp=kp,kv=0.,forcerange=[-effort,effort]).items():a.set(k,' '.join(map(str,v)) if isinstance(v,list) else str(v))
             a.set('user',str(speed))
             continue
+        if profile=='hexapod':
+            from embodiment_legacy import HEX_FREENOVE,HEX_SERVO
+            if HEX_FREENOVE:
+                # Freenove hexapod v3: MG996R-class position servos, 0-180 deg
+                # about the 90 deg centre (the built calibration pose, ref 0);
+                # full torque at 0.15 rad error (a hobby servo's proportional
+                # band), little damping, the servo's speed limit.
+                r=HEX_SERVO['range'];bounds=[-r,r];effort=HEX_SERVO['effort']
+                j.set('range',' '.join(map(str,bounds)));j.set('ref','0')
+                j.set('damping','0.02');j.set('armature','0.0005')
+                a.tag='position';a.attrib.clear();a.set('name',joint);a.set('joint',joint)
+                kp=effort/HEX_SERVO['stall_rad']
+                for k,v in dict(ctrlrange=bounds,kp=kp,kv=kp*.02,forcerange=[-effort,effort]).items():
+                    a.set(k,' '.join(map(str,v)) if isinstance(v,list) else str(v))
+                a.set('user',str(HEX_SERVO['speed']))
+                continue
         j.set('range',' '.join(map(str,bounds)));j.set('ref',str(sum(bounds)/2))
         a.tag='position';a.attrib.clear();a.set('name',joint);a.set('joint',joint)
         effort=f.get('maxTorque',1.) if f else .00005 if profile=='zebrafish' else .02 if profile.startswith('drosophila') else 1.
@@ -113,7 +129,22 @@ def install_mechanics(profile,root,element):
     # Native cameras measure this world's material/ray luminance. They do not
     # claim rendered RGB-camera parity with Webots.
     base=root.find('.//body[@name="'+('chassis' if profile=='hexapod' else 'thorax' if profile.startswith('drosophila') else 'torso' if profile=='nao' else 'segment_00')+'"]')
-    cameras=[('hex_s_26_head_camera',[.165,0,.05],0,1.117)] if profile=='hexapod' else [(f'dros_s_{34+i:02}_eye_{side}',[.028,sign*.018,.008],sign*.65,2.4) for i,(side,sign) in enumerate([('left',1),('right',-1)])] if profile.startswith('drosophila') else [('CameraBottom',[.0488,0,.1496],0,1.06),('CameraTop',[.0539,0,.1944],0,1.06)] if profile=='nao' else [('zebrafish_s_16_eye_left',[.005,.008,.002],.7,2.85),('zebrafish_s_18_eye_right',[.005,-.008,.002],-.7,2.85)]
+    if profile.startswith('drosophila'):
+        # Compound eyes on the head (anatomy v4); same lateral aim and field.
+        from embodiment_legacy import FLY_EYES
+        base=root.find('.//body[@name="head"]')
+    if profile=='hexapod':
+        from embodiment_legacy import HEX_FREENOVE,HEX_HEAD
+    # Freenove head camera: Raspberry Pi camera (OV5647, ~54 x 41 deg).
+    cameras=[('hex_s_26_head_camera',list(HEX_HEAD['camera']) if HEX_FREENOVE else [.165,0,.05],0,math.radians(41.4) if HEX_FREENOVE else 1.117)] if profile=='hexapod' else [(f'dros_s_{34+i:02}_eye_{side}',list(FLY_EYES[i]),sign*.65,2.4) for i,(side,sign) in enumerate([('left',1),('right',-1)])] if profile.startswith('drosophila') else [('CameraBottom',[.0488,0,.1496],0,1.06),('CameraTop',[.0539,0,.1944],0,1.06)] if profile=='nao' else [('zebrafish_s_16_eye_left',[.005,.008,.002],.7,2.85),('zebrafish_s_18_eye_right',[.005,-.008,.002],-.7,2.85)]
+    if profile=='nao':
+        # NAO V6 cameras sit in the head and move with HeadYaw/HeadPitch (v1
+        # hung them level on the torso). Poses: NAO V50 URDF / Webots V5
+        # (Head frame = HeadPitch_link); the bottom camera looks 39.7 deg down
+        # at the feet. Optics: OV5640, 56.3 x 43.7 deg (4:3 retina).
+        base=root.find('.//body[@name="HeadPitch_link"]');cameras=[]
+        for name,pos,pitch in NAO_CAMERAS:
+            element(base,'camera',name=name,pos=pos,xyaxes=[0,-1,0,math.sin(pitch),0,math.cos(pitch)],fovy=NAO_CAMERA_VFOV_DEG,resolution='32 24')
     for name,pos,yaw,fov in cameras:
         element(base,'camera',name=name,pos=pos,xyaxes=[math.sin(yaw),-math.cos(yaw),0,0,0,1],fovy=min(140,fov*180/math.pi),resolution='32 24')
 
@@ -129,7 +160,9 @@ def sensors(profile):
         if profile=='hexapod' and i<18:
             out.append(sensor(n,'angle',body,joint=n.replace('hex_s_'+f'{i:02}',f'hex_o_{i:03}')));continue
         if profile=='hexapod' and i<24:
-            leg=['lf','lm','lr','rf','rm','rr'][i-18];out.append(sensor(n,'contact',f'hex_o_{(i-18)*3+2:03}_{leg}_tibia_link'));continue
+            leg=['lf','lm','lr','rf','rm','rr'][i-18]
+            # Foot contact (simulated; the kit has no foot switch): the tibia tip.
+            out.append(sensor(n,'contact',f'hex_o_{(i-18)*3+2:03}_{leg}_tibia_link',region_m=[[-.02,-.02,-.125],[.02,.02,-.095]]));continue
         if profile=='nao' and n.endswith('S'):
             out.append(sensor(n,'angle',body,joint=n[:-1]));continue
         if 'accel' in n or 'gyro' in n:
@@ -139,9 +172,9 @@ def sensors(profile):
                 camera='zebrafish_s_16_eye_left' if i<18 else 'zebrafish_s_18_eye_right';cell=[0,0];shape=[1,1];mode='lum' if i%2==0 else 'gradient'
             else:
                 camera=n.split('.')[0];m=re.search(r'\.(on|off)\.r(\d+)c(\d+)',n);cell=[int(m[2]),int(m[3])];shape=[8,12] if profile.startswith('drosophila') else [6,8] if profile=='nao' else [1,1];mode=m[1]
-            out.append(sensor(n,'camera',body,camera=camera,cell=cell,retina_shape=shape,mode=mode));continue
+            out.append(sensor(n,'camera','HeadPitch_link' if profile=='nao' else 'head' if profile.startswith('drosophila') else body,camera=camera,cell=cell,retina_shape=shape,mode=mode));continue
         if profile=='nao' and ('Foot/Bumper' in n or 'Fsr.' in n):
-            side=n[0];kwargs={} if 'Fsr.' in n else dict(direction=[0,1 if n.endswith('Left') else -1,0])
+            side=n[0];kwargs={} if 'Fsr.' in n else dict(region_m=nao_bumper_region(side,n.endswith('Left')))
             out.append(sensor(n,'contact-force' if 'Fsr.' in n else 'contact',side+'AnkleRoll_link',axis='xyz'.index(n[-1]) if 'Fsr.' in n else 0,**kwargs));continue
         if profile.startswith('drosophila') and 'touch' in n:
             direction=[1,0,0] if n.endswith('front') else [-1,0,0] if n.endswith('rear') else [0,1,0] if n.endswith('left') else [0,-1,0]
@@ -160,6 +193,21 @@ def sensors(profile):
         # neither suffix and aimed both straight ahead. The chest transducers
         # look ~20 deg to each side (one ray each, not the OEM 60 deg cone).
         lname=n.lower()
+        if profile=='hexapod' and 'ultrasonic' in lname:
+            # HC-SR04 on the Freenove head: two transducers 26 mm apart, a ~15
+            # deg beam (cone sampled by rays), sonar specular loss, 2 cm to the
+            # 3 m the kit's software reads; reading 1 - distance / reach.
+            from embodiment_legacy import HEX_HEAD
+            sign=1 if lname.endswith('left') else -1
+            x,y,z=HEX_HEAD['sonar']
+            out.append(sensor(n,'range',body,position_m=[x,sign*y,z],direction=[1.,0.,0.],angle_rad=3.0,
+                              rays=cone_rays([1.,0.,0.],math.radians(15.),rings=2),incidence_max_rad=round(math.pi/8,6),
+                              min_m=.02,period_s=.06));continue
+        if profile=='nao' and 'sonar' in lname:
+            sign=1 if lname.endswith('left') else -1
+            out.append(sensor(n,'range',body,position_m=[NAO_SONAR_POS[0],sign*NAO_SONAR_POS[1],NAO_SONAR_POS[2]],
+                              direction=nao_sonar_axis(sign),angle_rad=NAO_SONAR_REACH_M,rays=[[x,sign*y,z] for x,y,z in cone_rays(nao_sonar_axis(1),NAO_SONAR_APERTURE_RAD)],
+                              incidence_max_rad=round(math.pi/8,6),min_m=NAO_SONAR_MIN_M,period_s=NAO_SONAR_PERIOD_S));continue
         angle=(2*math.pi*(i-10)/24 if profile.startswith('drosophila') else NAO_SONAR_RAD*(1 if lname.endswith('left') else -1) if profile=='nao' and 'sonar' in lname
                else .2 if n.endswith(('left','_l')) else -.2 if n.endswith(('right','_r')) else math.pi if 'rear' in n else 0)
         reach=1.2 if profile=='hexapod' else 2.55 if profile=='nao' else .08 if profile.startswith('drosophila') else .3
@@ -172,11 +220,171 @@ def sensors(profile):
             mount,pos=('segment_08',[-.022,0,0]) if 'rear' in n else ('segment_00',[.0068,0,0])
         if profile=='hexapod':kwargs['lookup']=[[0,1000],[.4,620],[.8,280],[1.2,120]]
         out.append(sensor(n,'range',mount,position_m=pos,direction=[math.cos(angle),math.sin(angle),0],angle_rad=reach,**kwargs))
+    if profile=='nao' and NAO_HEARING:
+        out+=nao_hearing()
+    if profile=='zebrafish' and ZEBRAFISH_RETINA:
+        out+=zebrafish_retina()
+    if profile.startswith('drosophila') and FLY_HEARING:
+        out+=fly_hearing()
+    if profile=='zebrafish' and ZEBRAFISH_HEARING:
+        out+=zebrafish_hearing()
     return out
 
 
-# NAO sonar aim (rad either side of forward).
+# Drosophila hearing (optional group "hearing"): the Johnston's organ in each
+# antenna's second segment senses the near-field particle velocity of sound
+# (courtship sine song ~150 Hz, pulse song ~200-300 Hz; range ~100-800 Hz),
+# strongly directional with the arista's rotation axis. Modelled as two
+# directional receivers on the head at the antennae (catalogue position),
+# aimed forward-outward, in three bands.
+FLY_HEARING=True
+FLY_ANTENNAE={'left':(.012,.0045,.0086),'right':(.012,-.0045,.0086)}
+FLY_HEARING_BANDS_HZ=(150,300,600)
+
+
+def fly_hearing():
+    out=[]
+    for side,pos in FLY_ANTENNAE.items():
+        sign=1 if side=='left' else -1
+        for band in FLY_HEARING_BANDS_HZ:
+            out.append(sensor(f'dros_hear_johnston_{side}_{band}Hz','acoustic','head',position_m=list(pos),
+                              direction=[.7071,sign*.7071,0],band_hz=float(band),directivity=.9,floor_db=20.,ceil_db=100.,group='hearing'))
+    return out
+
+
+# Zebrafish hearing (optional group "hearing"): the inner ears' otolith organs
+# (saccule/utricle) sense low-frequency particle motion (~100-1000 Hz, best
+# below ~400 Hz), one on each side of the hindbrain behind the eyes; nearly
+# omnidirectional. The proxy uses the airborne free-field model (no water
+# acoustics), so levels are relative.
+ZEBRAFISH_HEARING=True
+ZEBRAFISH_EARS={'left':(-.001,.003,0.),'right':(-.001,-.003,0.)}
+ZEBRAFISH_HEARING_BANDS_HZ=(100,300)
+
+
+def zebrafish_hearing():
+    out=[]
+    for side,pos in ZEBRAFISH_EARS.items():
+        sign=1 if side=='left' else -1
+        for band in ZEBRAFISH_HEARING_BANDS_HZ:
+            out.append(sensor(f'zebrafish_hear_inner_ear_{side}_{band}Hz','acoustic','segment_00',position_m=list(pos),
+                              direction=[0,sign,0],band_hz=float(band),directivity=.2,floor_db=20.,ceil_db=100.,group='hearing'))
+    return out
+
+
+# Zebrafish vision (optional group "vision"): v1 gave each eye one luminance
+# and one gradient cell. Each lateral eye camera (163 deg wide, aimed 40 deg
+# out) now also feeds a coarse retina of 6 x 8 receptive fields with ON and
+# OFF channels (the transient luminance cells of aarnn_embodiment::vision),
+# 96 per eye. Preserved networks bind their 32 core channels unchanged.
+ZEBRAFISH_RETINA=True
+ZEBRAFISH_RETINA_SHAPE=(6,8)
+
+
+def zebrafish_retina():
+    rows,cols=ZEBRAFISH_RETINA_SHAPE;out=[]
+    for side,camera in (('left','zebrafish_s_16_eye_left'),('right','zebrafish_s_18_eye_right')):
+        for r in range(rows):
+            for c in range(cols):
+                for mode in ('on','off'):
+                    out.append(sensor(f'zebrafish_eye_{side}.{mode}.r{r}c{c}','camera','segment_00',camera=camera,cell=[r,c],
+                                      retina_shape=[rows,cols],mode=mode,group='vision'))
+    return out
+
+
+# NAO V6 hearing (optional sensor group "hearing", appended after the
+# 250-channel core so preserved networks bind unchanged): four omnidirectional
+# head microphones (Aldebaran NAO6 docs: MicroFR/FL/RL/RR, 100 Hz-10 kHz;
+# positions from the NAO V5 head chain, m, Head frame = HeadPitch_link), each
+# read by a cochlea-like bank of four bands, plus the interaural time
+# difference of the front and of the rear pair (1 = source on the left).
+# Omnidirectional microphones on a 13 cm head still hear directionally: the
+# head shadow is the receivers' directivity (axis out from the head centre).
+NAO_MICS={'FL':(.0206,.0309,.0986),'FR':(.0206,-.0309,.0986),'RL':(-.0215,.0558,.0774),'RR':(-.0215,-.0558,.0774)}
+NAO_HEAD_CENTRE=(0.,0.,.06)
+NAO_HEARING_BANDS_HZ=(250,1000,3000,8000)
+NAO_HEAD_SHADOW=.6
+NAO_HEARING=True    # enabled after the 24 Nov V6 walking tests (their IO digest is kept in nao_learn_closedloop.V6_IO_DIGESTS)
+
+
+def nao_hearing():
+    out=[]
+    def axis(p):
+        d=[p[i]-NAO_HEAD_CENTRE[i] for i in range(3)];n=math.sqrt(sum(v*v for v in d))
+        return [round(v/n,6) for v in d]
+    for mic,pos in NAO_MICS.items():
+        for band in NAO_HEARING_BANDS_HZ:
+            out.append(sensor(f'Micro/{mic}/{band}Hz','acoustic','HeadPitch_link',position_m=list(pos),direction=axis(pos),
+                              band_hz=float(band),directivity=NAO_HEAD_SHADOW,floor_db=20.,ceil_db=100.,group='hearing'))
+    for pair,(right,left) in (('Front',('FR','FL')),('Rear',('RR','RL'))):
+        pos=NAO_MICS[right]
+        out.append(sensor(f'Micro/ITD/{pair}','acoustic','HeadPitch_link',position_m=list(pos),direction=axis(pos),band_hz=1000.,
+                          directivity=NAO_HEAD_SHADOW,mode='itd',pair=f'Micro/{left}/1000Hz',group='hearing'))
+    return out
+
+
+# NAO sonar aim (rad either side of forward): v1 single-ray surrogate, kept
+# for reference; the NAO V6 sonar below replaces it.
 NAO_SONAR_RAD=.35
+
+# NAO V6 sensors (Aldebaran NAO6 technical docs; poses from the NAO V50 URDF
+# and the Webots R2025a Nao.proto, V5):
+# - sonar: chest transducers at (0.0477, +-0.0416, 0.0509) m in the torso
+#   frame, axis 25.8 deg out and 13.6 deg down (Webots US2/US4 rotation),
+#   60 deg cone (aperture 1.04 rad), V6 range 0.20-0.80 m (below 0.20 m only
+#   "an object is present"), specular loss above pi/8 incidence (Webots
+#   "sonar" type);
+# - cameras: Head frame, top (0.05871, 0, 0.06364) pitched 1.2 deg, bottom
+#   (0.05071, 0, 0.01774) pitched 39.7 deg; vertical FOV 43.7 deg;
+# - foot bumpers: two ON/OFF switches at each toe, centred at x 0.0876 m,
+#   z -0.0353 m (10 mm above the sole at -0.0451 m) in the ankle frame,
+#   left/right of the toe (y +0.019/-0.014 on the left foot, mirrored).
+NAO_SONAR_POS=(0.0477,0.0416,0.0509)
+NAO_SONAR_AXIS=(0.8754,0.4226,-0.2346)
+NAO_SONAR_APERTURE_RAD=1.04
+NAO_SONAR_REACH_M=0.8
+NAO_SONAR_MIN_M=0.2
+# Sample-and-hold: one ping every 20 ms (a 0.8 m echo returns in 4.7 ms; the
+# transducer pings no faster), which keeps the 91-ray cone affordable.
+NAO_SONAR_PERIOD_S=0.02
+NAO_CAMERAS=[('CameraTop',[0.05871,0,0.06364],0.0209435),('CameraBottom',[0.05071,0,0.01774],0.692896)]
+NAO_CAMERA_VFOV_DEG=43.7
+
+
+def nao_sonar_axis(sign):
+    x,y,z=NAO_SONAR_AXIS;n=math.sqrt(x*x+y*y+z*z)
+    return [round(x/n,6),round(sign*y/n,6),round(z/n,6)]
+
+
+def cone_rays(axis,aperture,rings=5):
+    """Explicit, engine-independent rays sampling a transducer cone: the
+    axis plus `rings` rings out to half the aperture, ring k carrying 6k rays
+    so the spacing stays uniform (6 deg for the NAO's 60 deg cone). A beam
+    is continuous: a ball always has a point facing back to the transducer,
+    and with the pi/8 specular rule only rays within a few degrees of it
+    echo, so sparse sampling (Webots' 6 rays) misses curved obstacles."""
+    a=[float(v) for v in axis];n=math.sqrt(sum(v*v for v in a));a=[v/n for v in a]
+    ref=[0.,0.,1.] if abs(a[2])<0.9 else [1.,0.,0.]
+    u=[ref[1]*a[2]-ref[2]*a[1],ref[2]*a[0]-ref[0]*a[2],ref[0]*a[1]-ref[1]*a[0]];k=math.sqrt(sum(v*v for v in u));u=[v/k for v in u]
+    w=[a[1]*u[2]-a[2]*u[1],a[2]*u[0]-a[0]*u[2],a[0]*u[1]-a[1]*u[0]]
+    out=[[round(v,6) for v in a]]
+    for ring in range(1,rings+1):
+        t=aperture/2*ring/rings
+        per_ring=6*ring
+        for j in range(per_ring):
+            phi=2*math.pi*(j+0.5*(ring%2))/per_ring
+            out.append([round(math.cos(t)*a[i]+math.sin(t)*(math.cos(phi)*u[i]+math.sin(phi)*w[i]),6) for i in range(3)])
+    return out
+
+
+def nao_bumper_region(side,left):
+    """Body-local box of one toe bumper switch (ankle frame). It spans the
+    toe shell from 5 mm behind the switch to past the toe tip, from 4 mm
+    above the sole to the top of the toe, on its side of the toe midline;
+    standing on the floor never presses it."""
+    mid=0.0025 if side=='L' else -0.0025
+    y=[mid,0.07] if left else [-0.07,mid]
+    return [[0.0826,y[0],-0.041],[0.13,y[1],-0.012]]
 
 
 # Drosophila flight v3: sensor 22 (dros_s_22_prox_12, formerly the rear ray)

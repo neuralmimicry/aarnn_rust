@@ -2934,6 +2934,21 @@ Use `POST /api/login` (local mode) or OIDC endpoints to establish a session.",
                   "required": ["step", "indices"]
                 }
               },
+              "neuromod": {
+                "type": "object",
+                "nullable": true,
+                "description": "Global neuromodulator levels (1.0 = baseline) against stimuli and synaptic energy",
+                "properties": {
+                  "t_ms": { "type": "number" }, "depth": { "type": "integer" },
+                  "dopamine": { "type": "number" }, "serotonin": { "type": "number" },
+                  "noradrenaline": { "type": "number" }, "acetylcholine": { "type": "number" },
+                  "stimuli": { "type": "number" }, "synapse_drive": { "type": "number" },
+                  "synapse_energy": { "type": "number", "nullable": true },
+                  "synapse_stimuli": { "type": "number", "nullable": true },
+                  "efficacy": { "type": "number" }, "release_factor": { "type": "number" },
+                  "drives": { "type": "object", "additionalProperties": { "type": "number" } }
+                }
+              },
               "source": { "type": "string" }
             },
             "required": ["network_id", "sim_step", "sim_time_ms", "sensory", "sensory_history", "hidden", "output", "output_history", "source"]
@@ -7224,6 +7239,25 @@ async fn activity(
             "output_history": output_history,
             "output_source_layer": resp.output_source_layer,
             "output_stage_assigned": resp.output_stage_assigned,
+            "neuromod": resp.neuromod.as_ref().map(|n| json!({
+                "t_ms": n.t_ms,
+                "depth": n.depth,
+                "dopamine": n.dopamine,
+                "serotonin": n.serotonin,
+                "noradrenaline": n.noradrenaline,
+                "acetylcholine": n.acetylcholine,
+                "stimuli": n.stimuli,
+                "synapse_drive": n.synapse_drive,
+                "synapse_energy": n.synapse_energy,
+                "synapse_stimuli": n.synapse_stimuli,
+                "efficacy": n.efficacy,
+                "release_factor": n.release_factor,
+                "drives": {
+                    "reward": n.drive_reward, "food": n.drive_food, "light": n.drive_light,
+                    "heat": n.drive_heat, "noxious": n.drive_noxious, "energy": n.drive_energy,
+                    "activity": n.drive_activity, "novelty": n.drive_novelty,
+                },
+            })),
             "source": target_addr,
         }))).into_response();
     }

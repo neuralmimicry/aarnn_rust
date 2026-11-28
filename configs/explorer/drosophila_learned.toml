@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: masterkiga
+# SPDX-License-Identifier: MIT
+#
+# Licensed under the MIT License. See LICENSE in the project root.
+#
+# Explorer profile for the designed Drosophila circuit, learned state (G1 /
+# VX-001, 27 Nov): run on a learned-state source (aarnn-explorer derive
+# --preset learned-cap) under the learned-state contract
+# (examples/explorer/tasks/drosophila_learned.toml), so the value readouts,
+# learned steering and hunger gate are exercised rather than silent. Graded
+# spike-equivalent GNATs, 4 workers. Synapse removal is off to bound the
+# search; the learning substrate is protected (learning_required = false).
+# Declared out of the contract's scope (protect_cell_types): the turn-bout clock,
+# the ARTR exploration oscillator and the escape adaptation (1.5 s), function of
+# 1.5-20 s that 1-3 s trials cannot see (a reduction under the 1 s contract
+# removed BOUT_off; the first learned-state run, without Escape:A, removed
+# ESC_A_l).
+# The numbers are software defaults for the authored scenario, not biological
+# constants or a reliability claim. Every result stores this expanded profile.
+schema_version = 1
+name = "drosophila-learned-compact"
+
+[execution]
+backend = "source"
+numeric_profile = "inherit"
+plasticity_policy = "frozen"
+seed = 20261125
+
+[resources]
+total_compute_threads = 6
+analysis_threads = 1
+max_worker_processes = 4
+threads_per_worker = 1
+memory_limit_mib = 8192
+disk_budget_mib = 8192
+worker_wall_timeout_seconds = 1800
+gpu_enabled = false
+launcher = "local"
+
+[capture]
+mode = "scientific-isolated"
+require_complete = true
+max_segment_mib = 64
+# Only "none" is implemented; "zstd" is rejected as unsupported.
+compression = "none"
+
+[gnat]
+method = "effective-delivery-graded-v1"
+tau_ms = 5.0
+threshold_mode = "development-calibrated"
+minimum_score = 0.0067
+require_generation_mapping = true
+recurrence_mode = "bounded-verified"
+max_motif_candidates = 100000
+norm = "l1-abs"
+
+[functional]
+task_suite = "examples/explorer/tasks/drosophila_learned.toml"
+minimum_reference_score_ratio = 0.99
+maximum_additional_latency_ms = 1.0
+require_all_tasks = true
+development_split = "development"
+validation_split = "locked-validation"
+learning_required = false
+
+[resilience]
+preset = "compact-silicon"
+eligible_population = "all-internal-neurons"
+random_neuron_loss_fraction = 0.0
+random_synapse_loss_fraction = 0.0
+targeted_single_faults_required = false
+minimum_success_probability = 0.99
+confidence = 0.95
+confidence_scope = "simultaneous-required-claims"
+trials_per_sampled_claim = 1000
+recovery_policy = "none"
+recovery_window_ms = 0.0
+
+[optimisation]
+method = "deterministic-beam"
+proposal_budget = 100
+beam_width = 2
+allow_neuron_removal = true
+allow_synapse_removal = false
+allow_verified_relay_replacement = false
+training_assisted_reduction = false
+protect_input_output_mapping = true
+cost_dimensions = ["state_bytes", "synapses", "neurons", "latency_ms"]
+protect_cell_types = ["Bout:", "Hindbrain:ARTR", "Escape:A"]
+
+[hardware]
+target = "aarnn-cpu-native"
+cost_mode = "measured-when-supported"
+
+[ui]
+listen = "127.0.0.1:0"
+maximum_visible_nodes = 20000
+maximum_visible_edges = 50000

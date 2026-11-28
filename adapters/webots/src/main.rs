@@ -66,6 +66,8 @@ fn default_trace_every() -> u64 {
 enum Source {
     Angle(usize),
     Contact(Node, Option<[f64; 3]>),
+    /// Bumper switch: contacts inside a body-local box (`region_m`).
+    Region(Node, [[f64; 3]; 2]),
     Accel(usize, usize),
     Gyro(usize, usize),
     Flow(usize, usize),
@@ -73,6 +75,11 @@ enum Source {
     Pitch(usize),
     Range(usize, f64),
     Camera(usize, [usize; 2]),
+    /// `legacy-acoustic` receiver on a body; for an ITD channel, the paired
+    /// receiver's body and sensor index.
+    Acoustic(Node, Option<(Node, usize)>),
+    /// Energy-needs channel: Webots has no energy model (neutral value).
+    Neutral(f64),
 }
 #[derive(Deserialize)]
 struct Diagnostic {
@@ -135,7 +142,7 @@ fn main() -> Result<(), String> {
         .sensors
         .iter()
         .map(|s| s.kind.as_str())
-        .filter(|k| !legacy::SUPPORTED.contains(k))
+        .filter(|k| !legacy::SUPPORTED.contains(k) && !k.starts_with("needs-"))
         .collect();
     if legacy && config.binding.is_some() && !unsupported.is_empty() {
         return Err(format!(
@@ -312,18 +319,44 @@ fn main() -> Result<(), String> {
                 Ok(sense_bodies.len() - 1)
             };
             sources.push(match s.kind.as_str() {
+                k if k.starts_with("needs-") => {
+                    Source::Neutral(aarnn_embodiment::projection::neutral_needs(k))
+                }
                 "legacy-angle" => Source::Angle(
                     *target_index
                         .get(s.joint.as_deref().ok_or("legacy joint absent")?)
                         .ok_or("legacy joint has no Webots sensor")?,
                 ),
-                "legacy-contact" => Source::Contact(
-                    node(s.body.as_deref().ok_or("legacy sensor body absent")?)?,
-                    s.direction,
-                ),
+                "legacy-contact" => {
+                    let n = node(s.body.as_deref().ok_or("legacy sensor body absent")?)?;
+                    match s.region_m {
+                        Some(region) => Source::Region(n, region),
+                        None => Source::Contact(n, s.direction),
+                    }
+                }
                 "legacy-accel" => Source::Accel(slot(&s.body)?, axis),
                 "legacy-gyro" => Source::Gyro(slot(&s.body)?, axis),
                 "legacy-flow" => Source::Flow(slot(&s.body)?, axis),
+                "legacy-acoustic" => {
+                    let n = node(s.body.as_deref().ok_or("acoustic sensor body absent")?)?;
+                    let pair = if s.mode.as_deref() == Some("itd") {
+                        let name = s.pair.as_deref().ok_or("itd pair absent")?;
+                        let (k, spec) = model
+                            .io
+                            .sensors
+                            .iter()
+                            .enumerate()
+                            .find(|(_, x)| x.name == name)
+                            .ok_or("itd pair sensor not in the record")?;
+                        Some((
+                            node(spec.body.as_deref().ok_or("itd pair body absent")?)?,
+                            k,
+                        ))
+                    } else {
+                        None
+                    };
+                    Source::Acoustic(n, pair)
+                }
                 "legacy-depth" => Source::Depth(slot(&s.body)?),
                 "legacy-pitch" => Source::Pitch(slot(&s.body)?),
                 "legacy-range" => {
@@ -344,7 +377,9 @@ fn main() -> Result<(), String> {
                     if shape[0] == 0 || shape[1] == 0 || shape[0] * shape[1] > 192 {
                         return Err("camera bound".into());
                     }
-                    let index = match camera_slots.get(&name) {
+                    // Per camera and retina shape (one eye may feed two retinas).
+                    let key = format!("{name}#{}x{}", shape[0], shape[1]);
+                    let index = match camera_slots.get(&key) {
                         Some(&i) => i,
                         None => {
                             cameras.push((
@@ -352,7 +387,7 @@ fn main() -> Result<(), String> {
                                 shape,
                                 vec![Cell::default(); shape[0] * shape[1]],
                             ));
-                            camera_slots.insert(name, cameras.len() - 1);
+                            camera_slots.insert(key, cameras.len() - 1);
                             cameras.len() - 1
                         }
                     };
@@ -653,46 +688,93 @@ fn main() -> Result<(), String> {
                     .collect();
                 for (source, s) in sources.iter().zip(&model.io.sensors) {
                     let mode = s.mode.as_deref();
-                    let value = match *source {
-                        Source::Angle(i) => legacy::angle(measured[i]),
-                        Source::Contact(n, None) => {
-                            if engine.contact(n) {
-                                1.
-                            } else {
-                                0.
+                    let value =
+                        match *source {
+                            Source::Neutral(v) => v,
+                            Source::Angle(i) => legacy::angle(measured[i]),
+                            Source::Contact(n, None) => {
+                                if engine.contact(n) {
+                                    1.
+                                } else {
+                                    0.
+                                }
                             }
-                        }
-                        Source::Contact(n, Some(direction)) => {
-                            let (p, r, _, _) = engine.body(n)?;
-                            legacy::directional(p, r, &engine.contact_points(n), direction)
-                        }
-                        Source::Accel(b, axis) => legacy::inertial(specific[b], axis, mode, true),
-                        Source::Gyro(b, axis) => {
-                            let st = &states[b];
-                            legacy::inertial(
-                                legacy::local(st.1, [st.2[3], st.2[4], st.2[5]]),
-                                axis,
-                                mode,
-                                false,
-                            )
-                        }
-                        Source::Flow(b, axis) => {
-                            let st = &states[b];
-                            legacy::flow(
-                                legacy::local(st.1, [st.2[0], st.2[1], st.2[2]]),
-                                axis,
-                                mode,
-                            )
-                        }
-                        Source::Depth(b) => legacy::depth(states[b].0[2]),
-                        Source::Pitch(b) => legacy::pitch(states[b].1),
-                        Source::Range(ray, reach) => legacy::range_reading(
-                            engine.range(ranges[ray])?,
-                            reach,
-                            s.lookup.as_deref(),
-                        )?,
-                        Source::Camera(c, [k, m]) => frames[c][k][m],
-                    };
+                            Source::Contact(n, Some(direction)) => {
+                                let (p, r, _, _) = engine.body(n)?;
+                                legacy::directional(p, r, &engine.contact_points(n), direction)
+                            }
+                            Source::Region(n, region) => {
+                                let (p, r, _, _) = engine.body(n)?;
+                                legacy::region(p, r, &engine.contact_points(n), region)
+                            }
+                            Source::Accel(b, axis) => {
+                                legacy::inertial(specific[b], axis, mode, true)
+                            }
+                            Source::Gyro(b, axis) => {
+                                let st = &states[b];
+                                legacy::inertial(
+                                    legacy::local(st.1, [st.2[3], st.2[4], st.2[5]]),
+                                    axis,
+                                    mode,
+                                    false,
+                                )
+                            }
+                            Source::Flow(b, axis) => {
+                                let st = &states[b];
+                                legacy::flow(
+                                    legacy::local(st.1, [st.2[0], st.2[1], st.2[2]]),
+                                    axis,
+                                    mode,
+                                )
+                            }
+                            Source::Depth(b) => legacy::depth(states[b].0[2]),
+                            Source::Pitch(b) => legacy::pitch(states[b].1),
+                            // Root-laser proxy: no cone or echo loss in Webots;
+                            // the nearest measurable distance still applies.
+                            Source::Range(ray, reach) => legacy::range_reading(
+                                engine.range(ranges[ray])?.max(s.min_m.unwrap_or(0.)),
+                                reach,
+                                s.lookup.as_deref(),
+                            )?,
+                            Source::Camera(c, [k, m]) => frames[c][k][m],
+                            Source::Acoustic(n, pair) => {
+                                use aarnn_embodiment::acoustics as ac;
+                                let receiver = |node: Node,
+                                            spec: &aarnn_embodiment::aer::Sensor|
+                             -> Result<ac::Receiver, String> {
+                                let (p, r, _, _) = engine.body(node)?;
+                                let d = legacy::rotate(r, spec.position_m.unwrap_or([0.; 3]));
+                                Ok(ac::Receiver {
+                                    position: std::array::from_fn(|i| p[i] + d[i]),
+                                    axis: legacy::rotate(r, spec.direction.unwrap_or([1., 0., 0.])),
+                                    directivity: spec.directivity.unwrap_or(0.),
+                                })
+                            };
+                                // Static habitat sources (Webots has no NPC actor).
+                                let sources = model
+                                    .scene
+                                    .as_ref()
+                                    .map(|sc| sc.sound_sources.clone())
+                                    .unwrap_or_default();
+                                let t = step as f64 * 0.002;
+                                let band = s.band_hz.ok_or("acoustic band absent")?;
+                                let a = receiver(n, s)?;
+                                match pair {
+                                    Some((pn, k)) => ac::itd_normalised(
+                                        &sources,
+                                        &a,
+                                        &receiver(pn, &model.io.sensors[k])?,
+                                        band,
+                                        t,
+                                    ),
+                                    None => ac::normalised_level(
+                                        ac::band_level_db(&sources, &a, band, t),
+                                        s.floor_db.unwrap_or(20.),
+                                        s.ceil_db.unwrap_or(100.),
+                                    ),
+                                }
+                            }
+                        };
                     if !value.is_finite() {
                         return Err(format!("nonfinite sensor {}", s.name));
                     }

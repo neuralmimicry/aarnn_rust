@@ -1044,6 +1044,12 @@ pub enum MorphologyError {
     SpatialIndexCoordinateOverflow,
     #[error("no collision-free route candidate was found for connection {0}")]
     RouteUnavailable(u64),
+    #[error(
+        "point-only reconstruction skipped: {connections} connections exceed the budget of {budget} \
+         (route checks scale with the number of connections squared; set \
+         NM_POINT_RECONSTRUCTION_MAX_CONNECTIONS=0 to reconstruct anyway, or store a reconstruction in the snapshot)"
+    )]
+    ReconstructionBudgetExceeded { connections: usize, budget: usize },
     #[error("schema or primitive validation failed: {0}")]
     Primitive(#[from] PrimitiveError),
 }
@@ -1815,22 +1821,27 @@ pub fn reconstruct_point_only_connectome(
         .map(|(index, neuron)| (neuron.id, index))
         .collect::<BTreeMap<_, _>>();
     let mut connection_results = Vec::with_capacity(connection_list.len());
+    // Connections incident to each neuron rank, in id order (the list is
+    // sorted by id), and the ids already routed: the same traversal as
+    // filtering the whole list per neuron and scanning every result, without
+    // the quadratic cost on large connectomes.
+    let mut incident_by_rank: Vec<Vec<usize>> = vec![Vec::new(); neurons.len()];
+    for (index, connection) in connection_list.iter().enumerate() {
+        let pre_rank = rank[&connection.pre];
+        let post_rank = rank[&connection.post];
+        incident_by_rank[pre_rank].push(index);
+        if post_rank != pre_rank {
+            incident_by_rank[post_rank].push(index);
+        }
+    }
+    let mut routed = std::collections::HashSet::<u64>::with_capacity(connection_list.len());
     for neuron in &neurons {
-        let mut incident = connection_list
+        let incident = incident_by_rank[rank[&neuron.id]]
             .iter()
-            .filter(|connection| {
-                rank[&connection.pre] == rank[&neuron.id]
-                    || rank[&connection.post] == rank[&neuron.id]
-            })
+            .map(|&index| &connection_list[index])
             .collect::<Vec<_>>();
-        incident.sort_by_key(|connection| connection.id);
         for connection in incident {
-            if connection_results
-                .iter()
-                .any(|result: &ReconstructionConnectionResult| {
-                    result.connection_id == connection.id
-                })
-            {
+            if routed.contains(&connection.id) {
                 continue;
             }
             let result = build_connection_route(
@@ -1843,16 +1854,14 @@ pub fn reconstruct_point_only_connectome(
                 &mut occupied,
                 &mut next_id,
             )?;
+            routed.insert(result.connection_id);
             connection_results.push(result);
         }
     }
     // The incident traversal above covers every valid edge. Keep a defensive
     // pass so future ordering changes cannot accidentally omit an edge.
     for connection in &connection_list {
-        if !connection_results
-            .iter()
-            .any(|result| result.connection_id == connection.id)
-        {
+        if !routed.contains(&connection.id) {
             connection_results.push(ReconstructionConnectionResult {
                 connection_id: connection.id,
                 pre: connection.pre,

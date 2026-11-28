@@ -134,6 +134,20 @@ const eqPanel = document.getElementById("eq-panel");
 const eqEmpty = document.getElementById("eq-empty");
 const scopeCanvas = document.getElementById("scope-canvas");
 const scopeCtx = scopeCanvas ? scopeCanvas.getContext("2d") : null;
+const neuromodCanvas = document.getElementById("neuromod-canvas");
+const neuromodCtx = neuromodCanvas ? neuromodCanvas.getContext("2d") : null;
+const neuromodChipEl = document.getElementById("neuromod-chip");
+// Global neuromodulator samples from activity polls (newest last, bounded).
+const neuromodHistory = [];
+const NEUROMOD_HISTORY_MAX = 600;
+const NEUROMOD_SERIES = [
+  { key: "dopamine", label: "DA", color: "#f2c14e", scale: "level" },
+  { key: "serotonin", label: "5-HT", color: "#b48ead", scale: "level" },
+  { key: "noradrenaline", label: "NA", color: "#e06c5a", scale: "level" },
+  { key: "acetylcholine", label: "ACh", color: "#5fb3b3", scale: "level" },
+  { key: "stimuli", label: "stimuli", color: "#9ccc65", scale: "unit", dash: [4, 3] },
+  { key: "synapse_energy", label: "syn energy", color: "#d0d0d0", scale: "norm", dash: [2, 2] }
+];
 const scopeProbesEl = document.getElementById("scope-probes");
 const probeCountEl = document.getElementById("probe-count");
 const rasterCanvas = document.getElementById("raster-canvas");
@@ -4317,6 +4331,8 @@ async function pollActivity() {
         drawFpvMap();
       }
       pushInstrumentationFrame(activity);
+      pushNeuromodSample(activity.neuromod);
+      drawNeuromodPanel();
       drawNetwork();
       renderPlacement();
     } else {
@@ -5307,6 +5323,97 @@ function renderEqPanel() {
         <div class="eq-band-label">B${index + 1}</div>
       </div>`;
   }).join("");
+}
+function pushNeuromodSample(sample) {
+  if (!sample || typeof sample !== "object") return;
+  const last = neuromodHistory.length ? neuromodHistory[neuromodHistory.length - 1] : null;
+  if (last && last.t_ms === sample.t_ms) return;
+  // Synapse energy: the chemical drive delivered across synapses per cell
+  // (after modulation); mean axon/dendrite ATP is shown in the chip when known.
+  const energy = Number(sample.synapse_drive || 0);
+  neuromodHistory.push({
+    t_ms: sample.t_ms,
+    dopamine: Number(sample.dopamine || 0),
+    serotonin: Number(sample.serotonin || 0),
+    noradrenaline: Number(sample.noradrenaline || 0),
+    acetylcholine: Number(sample.acetylcholine || 0),
+    stimuli: Number(sample.stimuli || 0),
+    synapse_energy: Number.isFinite(energy) ? energy : 0,
+    atp: sample.synapse_energy == null ? null : Number(sample.synapse_energy),
+    depth: sample.depth
+  });
+  while (neuromodHistory.length > NEUROMOD_HISTORY_MAX) neuromodHistory.shift();
+}
+function drawNeuromodPanel() {
+  if (!neuromodCanvas || !neuromodCtx) return;
+  const rect = preparePanelCanvas(neuromodCanvas, neuromodCtx);
+  if (!rect) return;
+  const ctx = neuromodCtx;
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  ctx.fillStyle = "#171717";
+  ctx.fillRect(0, 0, rect.width, rect.height);
+  if (!neuromodHistory.length) {
+    ctx.fillStyle = "#8a8a8a";
+    ctx.font = "12px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("No neuromodulator data", rect.width / 2, rect.height / 2);
+    return;
+  }
+  const left = 26;
+  const top = 18;
+  const width = rect.width - left - 8;
+  const height = rect.height - top - 8;
+  // Levels on 0..3 (baseline 1); stimuli on 0..1; synapse energy normalised to its window maximum.
+  const yLevel = value => top + height * (1 - Math.max(0, Math.min(3, value)) / 3);
+  const yUnit = value => top + height * (1 - Math.max(0, Math.min(1, value)));
+  let energyMax = 0;
+  neuromodHistory.forEach(sample => { energyMax = Math.max(energyMax, sample.synapse_energy); });
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1;
+  [0, 1, 2, 3].forEach(level => {
+    const y = yLevel(level);
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(left + width, y);
+    ctx.stroke();
+    ctx.fillStyle = "#8f8f8f";
+    ctx.font = "9px sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(String(level), left - 4, y + 3);
+  });
+  const n = neuromodHistory.length;
+  const xAt = index => left + (n > 1 ? (index / (n - 1)) * width : width);
+  NEUROMOD_SERIES.forEach(series => {
+    ctx.strokeStyle = series.color;
+    ctx.lineWidth = series.scale === "level" ? 1.5 : 1;
+    ctx.setLineDash(series.dash || []);
+    ctx.beginPath();
+    neuromodHistory.forEach((sample, index) => {
+      const value = sample[series.key];
+      let y;
+      if (series.scale === "level") y = yLevel(value);
+      else if (series.scale === "unit") y = yUnit(value);
+      else y = yUnit(energyMax > 0 ? value / energyMax : 0);
+      if (index === 0) ctx.moveTo(xAt(index), y);
+      else ctx.lineTo(xAt(index), y);
+    });
+    ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  let x = left;
+  ctx.font = "9px sans-serif";
+  ctx.textAlign = "left";
+  NEUROMOD_SERIES.forEach(series => {
+    ctx.fillStyle = series.color;
+    ctx.fillText(series.label, x, 11);
+    x += ctx.measureText(series.label).width + 8;
+  });
+  const latest = neuromodHistory[n - 1];
+  if (neuromodChipEl) {
+    neuromodChipEl.textContent = "DA " + latest.dopamine.toFixed(2) + " · 5-HT " + latest.serotonin.toFixed(2)
+      + (latest.atp == null ? "" : " · ATP " + latest.atp.toFixed(2))
+      + " · depth " + (latest.depth == null ? "-" : String(latest.depth));
+  }
 }
 function drawScopePanel() {
   if (!scopeCanvas || !scopeCtx) return;

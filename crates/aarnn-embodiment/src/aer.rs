@@ -35,6 +35,51 @@ pub struct Sensor {
     pub direction: Option<[f64; 3]>,
     pub lookup: Option<Vec<[f64; 2]>>,
     pub mode: Option<String>,
+    /// `legacy-contact`: only contacts inside this body-local box
+    /// `[[x0, y0, z0], [x1, y1, z1]]` count (a bumper switch on the shell,
+    /// not the sole that stands on the floor).
+    #[serde(default)]
+    pub region_m: Option<[[f64; 3]; 2]>,
+    /// `legacy-range`: explicit ray directions (mount-body frame) sampling
+    /// the transducer's cone; the reading is the nearest echo. Every engine
+    /// casts these same rays. Absent: the single `direction` ray.
+    #[serde(default)]
+    pub rays: Option<Vec<[f64; 3]>>,
+    /// `legacy-range`: a ray whose angle of incidence on the surface it hits
+    /// exceeds this (rad) returns no echo (sonar specular loss; Webots
+    /// "sonar" uses pi/8). Absent: every hit echoes.
+    #[serde(default)]
+    pub incidence_max_rad: Option<f64>,
+    /// `legacy-range`: nearest measurable distance (m); nearer objects read
+    /// as this distance (presence without a distance).
+    #[serde(default)]
+    pub min_m: Option<f64>,
+    /// Sample-and-hold period (s): the transducer measures once per period
+    /// and holds its reading in between (a sonar's ping cycle).
+    #[serde(default)]
+    pub period_s: Option<f64>,
+    /// `legacy-acoustic` (`acoustics`): band centre (Hz), directivity at and
+    /// above 1 kHz (0 omni, 1 cardioid), level range mapped to [0, 1], and
+    /// for `mode: "itd"` the paired receiver's sensor name. The receiver
+    /// sits at `position_m` on `body`, its axis along `direction`.
+    #[serde(default)]
+    pub band_hz: Option<f64>,
+    #[serde(default)]
+    pub directivity: Option<f64>,
+    #[serde(default)]
+    pub floor_db: Option<f64>,
+    #[serde(default)]
+    pub ceil_db: Option<f64>,
+    #[serde(default)]
+    pub pair: Option<String>,
+    /// Optional sensor group (absent: the body's core contract), e.g.
+    /// "hearing": present on the body, bound only by networks that name it.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// Receptive field spanning several bodies (C. elegans touch cells: ALM/AVM
+    /// the anterior half, PLM the posterior half); any of them counts.
+    #[serde(default)]
+    pub bodies: Option<Vec<String>>,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct Io {
@@ -98,6 +143,10 @@ pub struct Scene {
     /// Analytic stimulus fields (C. elegans habitat v3); empty for others.
     #[serde(default)]
     pub stimuli: Vec<Stimulus>,
+    /// Static sound sources of the habitat (`acoustics`); moving ones (an
+    /// NPC, another robot) are supplied by the engine each step.
+    #[serde(default)]
+    pub sound_sources: Vec<crate::acoustics::SoundSource>,
     /// Periodic whole-plate tap (mechanical stimulus), if declared.
     #[serde(default)]
     pub taps: Option<Taps>,
@@ -114,6 +163,61 @@ pub struct Scene {
     /// released in flight), in world axes.
     #[serde(default)]
     pub launch: Option<Launch>,
+    /// Energy needs (`needs-v1`): an energy store that drains with activity
+    /// and refills at food (animals) or a charging dock (machines), with a
+    /// caretaker that presents food or docks the body in early life.
+    #[serde(default)]
+    pub needs: Option<Needs>,
+}
+/// Energy needs of a body (`needs-v1`, engineering proxy). The store holds
+/// `basal_w_per_kg x total mass x endurance_s` and drains at the basal rate
+/// times `1 + effort` (effort = mechanical power / (`effort_ref_w_per_kg` x
+/// mass), at most 1). It refills in `refill_s` from empty while the body is
+/// at a source, and only below full. At zero the body is exhausted (disarmed).
+/// What the body does about it is not wired: the network learns that from the
+/// sensed reserve, the feeding events and the cue field.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Needs {
+    pub version: String,
+    /// `food` (animals) or `power` (machines).
+    pub resource: String,
+    pub basal_w_per_kg: f64,
+    pub endurance_s: f64,
+    pub effort_ref_w_per_kg: f64,
+    pub refill_s: f64,
+    pub start_fraction: f64,
+    /// Refill hysteresis: intake at a source starts only below this fraction
+    /// and then continues to full (a charger's top-off threshold; a meal ends
+    /// at satiety). Without it a full body topped up continuously and the
+    /// feeding reflex held it on the dock for good (Keenon, 25 Nov).
+    #[serde(default = "default_refill_start")]
+    pub refill_start_fraction: f64,
+    pub sources: Vec<NeedsSource>,
+    #[serde(default)]
+    pub caretaker: Option<Caretaker>,
+}
+fn default_refill_start() -> f64 {
+    0.9
+}
+/// A food item or charging dock: consumed within `radius_m` of the body's
+/// root (horizontal distance); sensed through a Gaussian cue field of width
+/// `field_radius_m` (odour or dock beacon).
+#[derive(Debug, Clone, Deserialize)]
+pub struct NeedsSource {
+    pub id: String,
+    pub position_m: [f64; 3],
+    pub radius_m: f64,
+    pub field_radius_m: f64,
+}
+/// Early-life care: until `until_s`, whenever the reserve falls below
+/// `threshold` the caretaker presents food at the mouth (or plugs the robot
+/// in) for `feed_s`: energy flows in, the consume channel and the cue field
+/// read as at a source.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Caretaker {
+    pub until_s: f64,
+    pub threshold: f64,
+    pub feed_s: f64,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct Aerodynamics {
@@ -287,8 +391,37 @@ pub struct Binding {
     pub io_digest: String,
     pub host: String,
     pub port: u16,
+    /// Optional sensor groups: the record channels this brain was built
+    /// with, in its own order (by record sensor name). A body may carry more
+    /// senses (e.g. hearing) than a preserved network knows; the network
+    /// binds exactly its own channels. Absent: every record sensor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensor_names: Option<Vec<String>>,
 }
 impl Binding {
+    /// Record sensor indices sent to this brain, in its order.
+    pub fn selection(&self, model: &Model) -> Result<Vec<usize>, String> {
+        match &self.sensor_names {
+            None => Ok((0..model.io.sensors.len()).collect()),
+            Some(names) => {
+                let mut seen = HashSet::new();
+                names
+                    .iter()
+                    .map(|n| {
+                        if !seen.insert(n.as_str()) {
+                            return Err(format!("binding names sensor {n} twice"));
+                        }
+                        model
+                            .io
+                            .sensors
+                            .iter()
+                            .position(|s| &s.name == n)
+                            .ok_or_else(|| format!("binding sensor {n} is not in the body record"))
+                    })
+                    .collect()
+            }
+        }
+    }
     pub fn validate(&self, model: &Model) -> Result<(), String> {
         if self.brain_id.is_empty()
             || self.brain_generation == 0
@@ -307,6 +440,7 @@ impl Binding {
         if self.host != "127.0.0.1" && self.host != "::1" {
             return Err("AER1 reference endpoints must be loopback literals".into());
         }
+        self.selection(model)?;
         if model.io.sensors.len() > 4096
             || model.io.output_names.len() > 4096
             || model.io.dt_us != 2000
@@ -472,7 +606,8 @@ impl Client {
                     .map_err(|e| e.to_string())?;
                 stream.set_nodelay(true).map_err(|e| e.to_string())?;
                 *handle.lock().unwrap() = Some(stream.try_clone().map_err(|e| e.to_string())?);
-                let handshake = serde_json::json!({"brain_id":binding.brain_id,"brain_generation":binding.brain_generation,"model_digest":binding.model_digest,"io_digest":binding.io_digest,"sensory_base":model.io.sensory_base,"output_base":model.io.output_base,"s_names":model.io.sensors.iter().map(|s|&s.name).collect::<Vec<_>>(),"o_names":model.io.output_names,"sensory":model.io.sensors.len(),"output":model.io.output_names.len(),"dt_ms":2.});
+                let selection = binding.selection(&model)?;
+                let handshake = serde_json::json!({"brain_id":binding.brain_id,"brain_generation":binding.brain_generation,"model_digest":binding.model_digest,"io_digest":binding.io_digest,"sensory_base":model.io.sensory_base,"output_base":model.io.output_base,"s_names":selection.iter().map(|&i|&model.io.sensors[i].name).collect::<Vec<_>>(),"o_names":model.io.output_names,"sensory":selection.len(),"output":model.io.output_names.len(),"dt_ms":2.});
                 let reply: serde_json::Value = serde_json::from_slice(&exchange(
                     &mut stream,
                     handshake.to_string().as_bytes(),
@@ -486,7 +621,7 @@ impl Client {
                     ),
                     ("model_digest", serde_json::json!(binding.model_digest)),
                     ("io_digest", serde_json::json!(binding.io_digest)),
-                    ("expected_s", serde_json::json!(model.io.sensors.len())),
+                    ("expected_s", serde_json::json!(selection.len())),
                     ("expected_o", serde_json::json!(model.io.output_names.len())),
                 ] {
                     if reply.get(key) != Some(&value) {
@@ -511,18 +646,18 @@ impl Client {
                     status.output_code = output_code;
                     status.ready = true;
                 }
-                let mut phase = vec![0.; model.io.sensors.len()];
+                let mut phase = vec![0.; selection.len()];
                 while !cancel.load(Ordering::Relaxed) {
                     let capture = match rx.recv_timeout(Duration::from_millis(10)) {
                         Ok(c) => c,
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
                         Err(_) => break,
                     };
-                    if capture.values.len() != phase.len() {
+                    if capture.values.len() != model.io.sensors.len() {
                         return Err("capture shape mismatch".into());
                     }
                     let mut spikes = vec![0; phase.len()];
-                    for (i, value) in capture.values.into_iter().enumerate() {
+                    for (i, value) in selection.iter().map(|&k| capture.values[k]).enumerate() {
                         if !value.is_finite() || !(0. ..=1.).contains(&value) {
                             return Err("invalid normalised sensor".into());
                         }
@@ -622,6 +757,30 @@ impl Drop for Client {
 mod tests {
     use super::*;
     #[test]
+    fn a_network_binds_exactly_its_own_named_channels() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../sim/content/embodiments/generated/nao.json");
+        let model: Model = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let names: Vec<String> = model.io.sensors.iter().map(|s| s.name.clone()).collect();
+        let mut b = Binding {
+            brain_id: "selection".into(),
+            brain_generation: 1,
+            model_digest: model.digest.clone(),
+            io_digest: model.io.digest.clone(),
+            host: "127.0.0.1".into(),
+            port: 49200,
+            sensor_names: None,
+        };
+        assert_eq!(b.selection(&model).unwrap().len(), names.len());
+        // A network built with fewer channels, in its own order.
+        b.sensor_names = Some(vec![names[3].clone(), names[0].clone()]);
+        assert_eq!(b.selection(&model).unwrap(), vec![3, 0]);
+        b.sensor_names = Some(vec!["no-such-ear".into()]);
+        assert!(b.selection(&model).is_err());
+        b.sensor_names = Some(vec![names[1].clone(), names[1].clone()]);
+        assert!(b.selection(&model).is_err());
+    }
+    #[test]
     fn binding_lease_is_atomic_and_released_without_a_socket() {
         let b = Binding {
             brain_id: "lease-test-one".into(),
@@ -630,6 +789,7 @@ mod tests {
             io_digest: String::new(),
             host: "127.0.0.1".into(),
             port: 49123,
+            sensor_names: None,
         };
         let lease = BindingLease::reserve(&b).unwrap();
         assert!(BindingLease::reserve(&b).is_err());

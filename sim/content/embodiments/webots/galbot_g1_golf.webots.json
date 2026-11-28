@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "galbot_g1_golf",
-  "model_digest": "7b9c075cbb4b91cb5912364fb6531f85291c34f4e323ab2447be51c5691204d3",
+  "model_digest": "a0e51d22656280501fbec59b1fba4b969f395d9ab6ed29e0bd1df5a2ed49181b",
   "io_digest": "e7ec78c9180a8261316c86b76af3419b358fdc048e650e547033a1edd97230e4",
   "targets": [
     {
@@ -4350,5 +4350,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 92,
-  "digest": "77786c2fef3adcb11c7aad67f7183afa90dbd298c9dd1dcf8325263a0d5f486e"
+  "digest": "21b59092efe0b8481d82e613b24bbb86f5c5d7ccbb1b1c2af78b25e9461c03cc"
 }

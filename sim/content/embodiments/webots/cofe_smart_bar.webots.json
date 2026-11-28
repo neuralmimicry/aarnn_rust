@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "cofe_smart_bar",
-  "model_digest": "41c272fe977df9904e64e85a200c143fa21d3ab5bd8eb7618b2a15881d23a886",
+  "model_digest": "f66b76be450853cea9dfbefb629e33987e682ccb0825ddfc31e755df69c9a12c",
   "io_digest": "7da2ceb8c491db1dc4ffc382c1b32db98eb9d54790cffaaae9cac2129d25f795",
   "targets": [
     {
@@ -2707,5 +2707,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 92,
-  "digest": "d6d4cb3452a610bbf955f17230af268fc391fd49e837320b7b9b1b9507bc9025"
+  "digest": "d1b29b49bc81fa53416e3d63c879c09e8550b28519874d2fef653f34b08bf9f4"
 }

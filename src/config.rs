@@ -440,6 +440,14 @@ pub struct AarnnBioParams {
     pub acetylcholine_gain: f64,
     /// Serotonin gain multiplier for plasticity damping.
     pub serotonin_gain: f64,
+    /// Postsynaptic dopamine receptor sensitivity: change of synaptic
+    /// efficacy per unit dopamine above baseline (+ D1-like, - D2-like).
+    /// Used from depth 2 (per type); depth 1 uses the network default type.
+    pub dopamine_receptor_gain: f64,
+    /// Postsynaptic serotonin receptor sensitivity (- 5-HT1-like, + 5-HT2-like).
+    pub serotonin_receptor_gain: f64,
+    /// Postsynaptic noradrenaline / octopamine receptor sensitivity (+ beta-like gain increase).
+    pub noradrenaline_receptor_gain: f64,
 
     /// Graded (non-spiking) membrane. The cell integrates its synaptic
     /// current on a leaky membrane and releases transmitter continuously as a
@@ -534,6 +542,9 @@ impl Default for AarnnBioParams {
             dopamine_gain: 1.0,
             acetylcholine_gain: 1.0,
             serotonin_gain: 1.0,
+            dopamine_receptor_gain: 0.4,
+            serotonin_receptor_gain: -0.25,
+            noradrenaline_receptor_gain: 0.3,
             graded_enabled: false,
             graded_tau_ms: 30.0,
             graded_v_rest_mv: -70.0,
@@ -2671,25 +2682,61 @@ fn ensure_default_neuron_types(cfg: &mut NetworkConfig) {
 /// `hidden[l][j]` marks hidden cell `j` of layer `l`, `outputs[k]` output
 /// `k`; a cell missing from the lists does not learn. Indices follow the
 /// built network, so growth that adds or removes cells leaves new cells
-/// non-plastic.
+/// non-plastic, unless `newborns` is set: then a hidden cell past the end of
+/// its layer's list (born after the mask was written) learns. Adult-born
+/// neurons go through a critical period of enhanced plasticity; without it a
+/// newborn in a masked network can never integrate by experience.
+///
+/// `pre_hidden[l][i]`, when given, also restricts learning by presynaptic
+/// cell: a synapse from hidden cell `i` of layer `l` onto a plastic cell
+/// learns only if that entry is true (cells past the list follow
+/// `newborns`). Empty (default): every input of a plastic cell learns.
+/// Synapse classes differ in plasticity (a Purkinje cell's parallel-fibre
+/// synapses learn, its climbing fibre does not): with every input plastic,
+/// a designed entry cell's own control wiring (mode drive, adaptation,
+/// oscillator bias) grew to the clamp in 50 s and latched it (24 Nov).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PlasticCellMask {
     pub enabled: bool,
     pub hidden: Vec<Vec<bool>>,
     pub outputs: Vec<bool>,
+    pub newborns: bool,
+    pub pre_hidden: Vec<Vec<bool>>,
+    /// With `pre_hidden` given: whether synapses FROM newborns (cells past
+    /// the list) onto plastic cells learn. Separate from `newborns` (their
+    /// own inputs learn): with both on, the hexapod's niche newborns
+    /// potentiated their sonar and newborn-to-newborn inputs to the cap,
+    /// excited each other into saturation and held the learning-turn cell on
+    /// at every distance (24 Nov). With their inputs fixed (inherited, diverse
+    /// tunings) and their outputs plastic, experience selects which newborns
+    /// predict the teacher.
+    pub newborn_outputs: bool,
 }
 
 impl PlasticCellMask {
     #[inline]
     pub fn hidden_learns(&self, layer: usize, cell: usize) -> bool {
-        !self.enabled
-            || self
-                .hidden
-                .get(layer)
-                .and_then(|l| l.get(cell))
-                .copied()
-                .unwrap_or(false)
+        if !self.enabled {
+            return true;
+        }
+        match self.hidden.get(layer) {
+            Some(l) => l.get(cell).copied().unwrap_or(self.newborns),
+            None => self.newborns,
+        }
+    }
+
+    /// Whether synapses from hidden cell `cell` of layer `layer` may learn
+    /// (onto a plastic cell); see `pre_hidden`.
+    #[inline]
+    pub fn hidden_pre_learns(&self, layer: usize, cell: usize) -> bool {
+        if !self.enabled || self.pre_hidden.is_empty() {
+            return true;
+        }
+        match self.pre_hidden.get(layer) {
+            Some(l) => l.get(cell).copied().unwrap_or(self.newborn_outputs),
+            None => self.newborn_outputs,
+        }
     }
 
     #[inline]
@@ -2780,6 +2827,67 @@ pub struct NetworkConfig {
     pub migrate_out_prob: f32,
     /// Probability of creating additional edges between the new neuron and its neighbors.
     pub new_edge_prob: f32,
+    /// Scale of every synapse a newborn neuron receives at random (input,
+    /// output and new hidden edges are drawn from 0.05-0.25 and multiplied by
+    /// this). 1.0 keeps the historical strength. Designed circuits set it
+    /// small, so newborns start nearly silent and gain influence only through
+    /// experience: at full strength 42 newborns wired into a designed
+    /// hexapod CPG drove every motor output to saturation in 3 s (24 Nov).
+    pub growth_new_synapse_scale: f64,
+    /// Where a new neuron (spontaneous or activity-triggered) is placed among
+    /// the free candidate locations around its parent's layer band and
+    /// column, scored by the local energy field (activity, morphology,
+    /// ambient): "high" (default) the highest-energy location, "low" the
+    /// lowest, "mid" the location nearest the midpoint between the highest-
+    /// and lowest-energy ones (user's comparison, 24 Nov).
+    pub growth_placement_mode: String,
+    /// While growth is on, every step tops up any sensory channel with no
+    /// hidden target (1 wire) and any output with too few hidden inputs (8-32
+    /// for invertebrates) with random 0.1-0.4 wires to the nearest cells. That
+    /// floor bootstraps random networks; a designed circuit already has its
+    /// connectome's IO, and the extra wires saturated every servo of the
+    /// Freenove hexapod CPG and killed its swing rhythm even with no newborn
+    /// (24 Nov, measured). Designed circuits set it false.
+    pub growth_io_floor_enabled: bool,
+    /// Cell type of a new neuron whose location has no brain region with a
+    /// type distribution (designed circuits have no `brain_regions`). Empty
+    /// (default) keeps the old fallback: a canonical laminar type if the
+    /// network has one, else `aarnn_bio`. Designed circuits name an immature
+    /// graded interneuron (no tonic drive, ~0.4 Hz release at rest): with the
+    /// template's spiking `aarnn_bio` their newborns fired at ~250 Hz and
+    /// saturated every hexapod servo through near-silent synapses (24 Nov).
+    pub growth_newborn_type: String,
+    /// Scale of synapses INTO a newborn (sensory contacts, inherited inputs,
+    /// the parent's recurrent inputs); negative (default) = the same as
+    /// `growth_new_synapse_scale`, which then scales its outputs only. Adult-
+    /// born neurons receive input before their output synapses mature: a
+    /// newborn with real inputs and silent outputs takes part in the
+    /// network's activity without driving it, so experience (plasticity) can
+    /// select which of its outputs grow.
+    pub growth_new_input_synapse_scale: f64,
+    /// A newborn inherits its parent's sensory inputs (lineage: clonally
+    /// related neurons share input selectivity), each scaled by the input
+    /// scale and jittered 0.5-1.5x, so it shares the parent's modality with
+    /// its own sensitivity. Default false (one contact to the nearest
+    /// unused sensory channel).
+    pub growth_inherit_sensory_inputs: bool,
+    /// Neurogenic niche: `growth_parent_cells[l][j]` marks hidden cells that
+    /// may give rise to new neurons (by saturation or spontaneously). Empty
+    /// (default): every cell. Cells past the list (newborns) do not divide.
+    /// Adult neurogenesis is confined to niches (dentate gyrus, olfactory
+    /// bulb; the mushroom-body Kenyon cells in insects). Without one, the
+    /// designed hexapod's always-saturated CPG cells (first in index order)
+    /// fathered all 151 newborns and none joined the learning circuit (24 Nov).
+    pub growth_parent_cells: Vec<Vec<bool>>,
+    /// A newborn takes its parent's cell type (clonal identity: sister
+    /// neurons share their parent's type, as mushroom-body Kenyon-cell clones
+    /// do) instead of `growth_newborn_type`. With inherited, jittered inputs
+    /// (`growth_inherit_sensory_inputs`) a sharply tuned relay's daughters get
+    /// their own thresholds: new tunings, off beyond them. Newborns of a
+    /// generic graded type responded weakly at every distance, so teacher-
+    /// gated learning strengthened all of them and the learning-turn cell
+    /// fired everywhere (hexapod, 24 Nov). Default false.
+    pub growth_newborn_inherit_type: bool,
     /// Number of neurons in a layer that triggers a potential layer split.
     pub layer_split_threshold: usize,
     /// Global cooldown (ms) to prevent a burst of growth events across the entire network.
@@ -2845,6 +2953,13 @@ pub struct NetworkConfig {
     // --- Morphological Development (AARNN-specific) ---
     /// Enable dynamic growth and retraction of axons and dendrites during simulation.
     pub morpho_growth_enabled: bool,
+    /// Whether morphological growth may move an existing synapse to a closer
+    /// target (a capped sensory channel or output trades its farthest synapse
+    /// for a new contact; the post-fallback planner moves sensory and output
+    /// synapses to nearer cells). Default true. Designed circuits set false:
+    /// migration moved the Freenove hexapod CPG's premotor synapses onto
+    /// other servos (~560 in 120 s) and the walk stalled (24 Nov).
+    pub morpho_synapse_migration_enabled: bool,
     /// EMA window (ms) for tracking synaptic activity, which drives morphological changes.
     pub synaptic_energy_window_ms: f32,
     /// Radius within which "synaptic energy" from active synapses attracts dendrite growth.
@@ -2931,6 +3046,70 @@ pub struct NetworkConfig {
     pub aarnn_neuromod_activity_gain: f32,
     /// Gain applied to the selected serotonin signal (0..1+).
     pub aarnn_neuromod_stability_gain: f32,
+    /// Neuromodulators act on synaptic transmission (depth >= 1): postsynaptic
+    /// efficacy from DA/5-HT/NA (receptor sensitivities in the bio params) and
+    /// dynamic ACh excitability; from depth 2 also per-type receptors and the
+    /// presynaptic release probability. Neutral at baseline levels.
+    pub aarnn_neuromod_transmission_enabled: bool,
+    /// Noradrenaline (octopamine/tyramine in invertebrates) baseline level.
+    pub aarnn_neuromod_baseline_noradrenaline: f32,
+    /// Environmental and cellular drive of the levels (food, light, heat,
+    /// noxious input, energy reserve, activity, novelty, modulatory cells).
+    pub aarnn_neuromod_env_enabled: bool,
+    /// External reward -> dopamine.
+    pub aarnn_neuromod_reward_dopamine_gain: f32,
+    /// Food sensing (taste, attractant odour) -> dopamine.
+    pub aarnn_neuromod_food_dopamine_gain: f32,
+    /// Food sensing -> serotonin (feeding state; C. elegans NSM).
+    pub aarnn_neuromod_food_serotonin_gain: f32,
+    /// Energy-reserve (satiety / battery) sensing -> serotonin.
+    pub aarnn_neuromod_energy_serotonin_gain: f32,
+    /// Light sensing -> serotonin.
+    pub aarnn_neuromod_light_serotonin_gain: f32,
+    /// Heat sensing -> noradrenaline (arousal).
+    pub aarnn_neuromod_heat_noradrenaline_gain: f32,
+    /// Noxious / repellent sensing -> noradrenaline.
+    pub aarnn_neuromod_noxious_noradrenaline_gain: f32,
+    /// Motor output activity -> dopamine (vigour).
+    pub aarnn_neuromod_activity_dopamine_gain: f32,
+    /// Sensory novelty (change of sensory activity from its slow mean) -> noradrenaline.
+    pub aarnn_neuromod_novelty_noradrenaline_gain: f32,
+    /// Modulatory cells (dopaminergic, serotonergic, noradrenergic /
+    /// octopaminergic, cholinergic by type or region name) -> their pool,
+    /// per unit fraction of the pool's cells active.
+    pub aarnn_neuromod_cell_release_gain: f32,
+    /// Slow mean time constant for sensory novelty (ms).
+    pub aarnn_neuromod_novelty_tau_ms: f32,
+    /// Presynaptic (bouton) release-probability sensitivity to dopamine (depth >= 2).
+    pub aarnn_neuromod_presynaptic_dopamine: f32,
+    /// Presynaptic release sensitivity to serotonin (5-HT1B autoreceptor depression).
+    pub aarnn_neuromod_presynaptic_serotonin: f32,
+    /// Presynaptic release sensitivity to noradrenaline.
+    pub aarnn_neuromod_presynaptic_noradrenaline: f32,
+    /// Bounds of the postsynaptic efficacy and presynaptic release factors.
+    pub aarnn_neuromod_efficacy_min: f32,
+    pub aarnn_neuromod_efficacy_max: f32,
+    /// Optional per-sensory-neuron modality tags (`light`, `heat`, `food`,
+    /// `noxious`, `energy`, `other`) written by network builders; when empty
+    /// the runner classifies sensory cells from their region / type names.
+    pub aarnn_sensory_modalities: Vec<String>,
+    /// Rate (Hz per cell) at which a motor or modulatory population counts as
+    /// fully driving its modulator (drives are rate / this, at most 1).
+    pub aarnn_neuromod_ref_rate_hz: f32,
+    /// Rate (Hz per cell) at which a sensory population counts as fully
+    /// driving its modulator (sensory transducers fire up to ~500 events/s).
+    pub aarnn_neuromod_sensory_ref_rate_hz: f32,
+    /// Thermosensors report temperature (mid-range = the temperature the body
+    /// is adapted to): heat drives noradrenaline by its deviation from a slow
+    /// adapted mean with this time constant (ms), as AFD-like cells adapt.
+    pub aarnn_neuromod_thermal_adapt_tau_ms: f32,
+    /// Time constants (ms) with which each pool follows its environmental and
+    /// cellular drive (biological release and clearance: phasic dopamine
+    /// ~200 ms, serotonin ~1 s, noradrenaline ~300 ms, acetylcholine ~100 ms).
+    pub aarnn_neuromod_tau_dopamine_ms: f32,
+    pub aarnn_neuromod_tau_serotonin_ms: f32,
+    pub aarnn_neuromod_tau_noradrenaline_ms: f32,
+    pub aarnn_neuromod_tau_acetylcholine_ms: f32,
     /// Fraction of presynaptic neurons treated as inhibitory for Dale-style sign constraints (0..1).
     pub aarnn_inhibitory_fraction: f32,
     /// Strength of Dale-style sign enforcement on synapses (0 = disabled, 1 = strict).
@@ -3109,6 +3288,21 @@ pub struct NetworkConfig {
     /// runtime's STDP default). A parameter only: every network runs the
     /// same plasticity algorithm.
     pub aarnn_plasticity_eta: f64,
+    /// Largest magnitude a learning synapse may reach in this network (0 =
+    /// the runtime's STDP clamp, 1.0). Designed circuits are calibrated in
+    /// mV/ms (~0.09 per mV/ms at synaptic gain 100), so the default clamp
+    /// lets one learned synapse deliver ~11 mV/ms: body-state synapses onto
+    /// a righting entry cell grew 43x in 50 s and latched it (24 Nov).
+    pub aarnn_plasticity_w_max: f64,
+    /// Long-term rule of the matrix (point-cell) synapses for this network:
+    /// "" (default) the runtime's rule for its learning mode (STDP for
+    /// AARNN), or "hebb" / "oja" / "stdp". With graded cells active for
+    /// seconds, STDP's depression term balanced or beat its potentiation, and
+    /// the teacher-gated sonar -> learning-turn synapses of the point-cell NAO
+    /// and Freenove hexapod learners depressed to the floor (24 Nov); the
+    /// spatial NAO learned through the dendritic-bouton Hebbian/Oja path.
+    /// Oja: Hebbian growth with a decay that bounds each synapse.
+    pub aarnn_matrix_plasticity_rule: String,
     /// Teacher-gated (three-factor) plasticity: cells that release a
     /// neuromodulator. Disabled (the default) = plasticity is not gated.
     /// Enabled: the marked cells' activity, cleared with
@@ -3126,6 +3320,21 @@ pub struct NetworkConfig {
     /// Modulatory-cell release rate (Hz, mean over the marked cells) that
     /// gives the full learning rate.
     pub aarnn_modulator_ref_hz: f32,
+    /// Teacher-gated plasticity by a global neuromodulator pool instead of
+    /// marked cells: "" (default, off), "dopamine", "serotonin",
+    /// "noradrenaline" or "acetylcholine". Used when no modulatory cells are
+    /// marked and the pools run (neuromodulation on, depth >= 1). The gate is
+    /// (level - `aarnn_modulator_pool_threshold`) / `aarnn_modulator_pool_ref`,
+    /// clamped to 0..3: plasticity runs only while the pool is raised, as
+    /// when food raises dopamine. Imported connectomes whose dopaminergic
+    /// cells have no food input (the C. elegans CEP / ADE / PDE sense
+    /// bacteria mechanically, which the habitat does not model) learn from
+    /// the pool the food senses drive.
+    pub aarnn_modulator_pool: String,
+    /// Pool level at which pool-gated plasticity starts.
+    pub aarnn_modulator_pool_threshold: f32,
+    /// Pool level above the threshold that gives the full learning rate.
+    pub aarnn_modulator_pool_ref: f32,
     /// Legacy automatic output gain control: whenever the output source layer
     /// spikes, rescale every output current so the largest reaches a profile
     /// peak (up to 512x). It erases relative motor drive and amplifies
@@ -3179,6 +3388,14 @@ impl Default for NetworkConfig {
             migrate_in_prob: 0.5,
             migrate_out_prob: 0.5,
             new_edge_prob: 0.05,
+            growth_new_synapse_scale: 1.0,
+            growth_placement_mode: "high".to_string(),
+            growth_io_floor_enabled: true,
+            growth_newborn_type: String::new(),
+            growth_new_input_synapse_scale: -1.0,
+            growth_inherit_sensory_inputs: false,
+            growth_parent_cells: Vec::new(),
+            growth_newborn_inherit_type: false,
             layer_split_threshold: 32,
             global_growth_cooldown_ms: 150.0,
             development_growth_interval_ms: 10.0,
@@ -3210,6 +3427,7 @@ impl Default for NetworkConfig {
             max_reroute_tries: 6,
             use_mid_bends: true,
             morpho_growth_enabled: true,
+            morpho_synapse_migration_enabled: true,
             synaptic_energy_window_ms: 1000.0,
             energy_attraction_radius: 0.4,
             energy_kernel_k: 2.0,
@@ -3253,6 +3471,33 @@ impl Default for NetworkConfig {
             aarnn_neuromod_error_gain: 0.0,
             aarnn_neuromod_activity_gain: 0.0,
             aarnn_neuromod_stability_gain: 0.0,
+            aarnn_neuromod_transmission_enabled: true,
+            aarnn_neuromod_baseline_noradrenaline: 1.0,
+            aarnn_neuromod_env_enabled: true,
+            aarnn_neuromod_reward_dopamine_gain: 1.0,
+            aarnn_neuromod_food_dopamine_gain: 0.5,
+            aarnn_neuromod_food_serotonin_gain: 0.5,
+            aarnn_neuromod_energy_serotonin_gain: 0.5,
+            aarnn_neuromod_light_serotonin_gain: 0.5,
+            aarnn_neuromod_heat_noradrenaline_gain: 0.5,
+            aarnn_neuromod_noxious_noradrenaline_gain: 0.5,
+            aarnn_neuromod_activity_dopamine_gain: 0.3,
+            aarnn_neuromod_novelty_noradrenaline_gain: 0.5,
+            aarnn_neuromod_cell_release_gain: 1.0,
+            aarnn_neuromod_novelty_tau_ms: 2000.0,
+            aarnn_neuromod_presynaptic_dopamine: 0.3,
+            aarnn_neuromod_presynaptic_serotonin: -0.3,
+            aarnn_neuromod_presynaptic_noradrenaline: 0.2,
+            aarnn_neuromod_efficacy_min: 0.25,
+            aarnn_neuromod_efficacy_max: 3.0,
+            aarnn_sensory_modalities: Vec::new(),
+            aarnn_neuromod_ref_rate_hz: 50.0,
+            aarnn_neuromod_sensory_ref_rate_hz: 250.0,
+            aarnn_neuromod_thermal_adapt_tau_ms: 30000.0,
+            aarnn_neuromod_tau_dopamine_ms: 200.0,
+            aarnn_neuromod_tau_serotonin_ms: 1000.0,
+            aarnn_neuromod_tau_noradrenaline_ms: 300.0,
+            aarnn_neuromod_tau_acetylcholine_ms: 100.0,
             aarnn_inhibitory_fraction: 0.2,
             aarnn_dale_strictness: 0.0,
             aarnn_gap_junction_strength: 0.0,
@@ -3325,9 +3570,14 @@ impl Default for NetworkConfig {
             aarnn_rate_homeostasis_warmup_ms: 2000.0,
             aarnn_plastic_cells: PlasticCellMask::default(),
             aarnn_plasticity_eta: 0.0,
+            aarnn_plasticity_w_max: 0.0,
+            aarnn_matrix_plasticity_rule: String::new(),
             aarnn_modulatory_cells: PlasticCellMask::default(),
             aarnn_modulator_tau_ms: 1000.0,
             aarnn_modulator_ref_hz: 10.0,
+            aarnn_modulator_pool: String::new(),
+            aarnn_modulator_pool_threshold: 1.3,
+            aarnn_modulator_pool_ref: 0.3,
             aarnn_output_gain_floor_enabled: true,
             aarnn_bio: AarnnBioParams::default(),
             spike_io: SpikeIoConfig::default(),
@@ -3343,6 +3593,46 @@ impl Default for NetworkConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plastic_mask_newborns_flag_covers_cells_past_the_mask() {
+        let mut m = PlasticCellMask {
+            enabled: true,
+            hidden: vec![vec![false, true]],
+            outputs: vec![false],
+            newborns: false,
+            pre_hidden: Vec::new(),
+            newborn_outputs: false,
+        };
+        assert!(!m.hidden_learns(0, 0));
+        assert!(m.hidden_learns(0, 1));
+        assert!(!m.hidden_learns(0, 5), "newborn frozen by default");
+        m.newborns = true;
+        assert!(m.hidden_learns(0, 5), "newborn learns when enabled");
+        assert!(!m.hidden_learns(0, 0), "designed cells keep their mask");
+        let old: PlasticCellMask =
+            serde_json::from_str(r#"{"enabled":true,"hidden":[[true]],"outputs":[]}"#).unwrap();
+        assert!(!old.newborns, "older networks keep frozen newborns");
+        assert!(
+            old.hidden_pre_learns(0, 3),
+            "no presynaptic mask: every input learns"
+        );
+        m.pre_hidden = vec![vec![true, false]];
+        assert!(m.hidden_pre_learns(0, 0));
+        assert!(
+            !m.hidden_pre_learns(0, 1),
+            "designed control input stays fixed"
+        );
+        assert!(
+            !m.hidden_pre_learns(0, 7),
+            "newborn outputs fixed unless newborn_outputs"
+        );
+        m.newborn_outputs = true;
+        assert!(
+            m.hidden_pre_learns(0, 7),
+            "newborn outputs learn when newborn_outputs is set"
+        );
+    }
 
     #[test]
     fn test_lif_params_default() {

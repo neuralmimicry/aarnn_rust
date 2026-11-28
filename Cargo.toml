@@ -9,7 +9,7 @@ version = "0.1.43"
 edition = "2024"
 
 [workspace]
-members = [".", "tools/xtask", "crates/aarnn-aer-legacy", "crates/aarnn-embodiment", "crates/aarnn-embodiment-ffi", "adapters/mujoco", "adapters/webots"]
+members = [".", "tools/xtask", "crates/aarnn-aer-legacy", "crates/aarnn-embodiment", "crates/aarnn-embodiment-ffi", "crates/aarnn-explorer", "adapters/mujoco", "adapters/webots"]
 default-members = ["."]
 resolver = "2"
 

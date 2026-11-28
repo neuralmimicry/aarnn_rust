@@ -55,7 +55,28 @@ def main():
     if not records:
         raise SystemExit('trace has no qpos (record with aarnn-mujoco --trace, schema v2)')
     model_path = args.model or str(ROOT / f"sim/content/embodiments/generated/{header['profile']}.xml")
-    model = mujoco.MjModel.from_xml_path(model_path)
+    # A programmed NPC actor (NM_MUJOCO_NPC_ACTOR) shared the body's world:
+    # draw it from its traced pose with the adapter's own body definition
+    # (adapters/mujoco/src/npc_actor.rs), in a sibling copy of the model.
+    actor = any(r.get('npc_actor') for r in records)
+    if actor:
+        source = Path(model_path).read_text()
+        body = ('<body name="npc_actor" mocap="true" pos="40 40 0">'
+                + ''.join(f'<geom name="npc_actor_{n}" {g} rgba="0.95 0.55 0.15 1" contype="0" conaffinity="0" group="0"/>'
+                          for n, g in (("leg_left", 'type="capsule" fromto="0 0.05 0.04 0 0.05 0.30" size="0.035"'),
+                                       ("leg_right", 'type="capsule" fromto="0 -0.05 0.04 0 -0.05 0.30" size="0.035"'),
+                                       ("torso", 'type="box" pos="0 0 0.40" size="0.05 0.09 0.11"'),
+                                       ("head", 'type="sphere" pos="0 0 0.56" size="0.065"')))
+                + '</body>')
+        sibling = Path(model_path).with_name(f'.render-npc-actor-{os.getpid()}.xml')
+        sibling.write_text(source.replace('</worldbody>', body + '</worldbody>', 1))
+        try:
+            model = mujoco.MjModel.from_xml_path(str(sibling))
+        finally:
+            sibling.unlink(missing_ok=True)
+        actor_mocap = model.body_mocapid[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, 'npc_actor')]
+    else:
+        model = mujoco.MjModel.from_xml_path(model_path)
     data = mujoco.MjData(model)
     if len(records[0]['qpos']) != model.nq:
         raise SystemExit(f"trace nq {len(records[0]['qpos'])} != model nq {model.nq}")
@@ -85,6 +106,10 @@ def main():
                              '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20', str(out)], stdin=subprocess.PIPE)
     trail = []
     for rec in records:
+        if actor and rec.get('npc_actor'):
+            a = rec['npc_actor']
+            data.mocap_pos[actor_mocap] = a['pos']
+            data.mocap_quat[actor_mocap] = [np.cos(a['yaw_rad'] / 2), 0.0, 0.0, np.sin(a['yaw_rad'] / 2)]
         data.qpos[:] = rec['qpos']
         data.qvel[:] = 0
         mujoco.mj_forward(model, data)

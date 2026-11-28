@@ -17,8 +17,9 @@ The C. elegans work established a common recipe for embodied locomotion:
    2012; Cruse's walking rules; Ekeberg 2004);
 4. a tonic command drive (``tonic_current``) setting the behavioural state;
 5. an operating point inside each cell's dynamic range, no common-mode
-   coupling, and a frozen structure (no growth, plasticity, spontaneous
-   drives or Dale rewiring) so the designed wiring is what runs.
+   coupling, and no plasticity, spontaneous drives or Dale rewiring, so the
+   designed wiring is what runs at the start. Structural growth is on except
+   for C. elegans (user, 24 Nov; ``Circuit.growth`` overrides).
 
 ``Circuit`` collects cells, per-type biology, signed synapses, electrical
 synapses, sensory projections and outputs, and writes a snapshot in the
@@ -73,6 +74,17 @@ EXC_EFFECTIVE = 1.373
 INH_EFFECTIVE = 0.9
 
 
+# Newborn neurons (growth) start immature: a graded interneuron with no tonic
+# drive, releasing ~0.4 Hz at rest (v_half -50 mV, slope 5 mV), so it joins
+# the circuit nearly silent and gains influence only through experience.
+NEWBORN_TYPE = "Growth:newborn"
+
+
+def newborn_type(base: dict) -> dict:
+    return {"name": NEWBORN_TYPE, "bio_params": {**base, **graded(tau_ms=30.0, release_hz=20.0),
+                                                 "graded_release_v_half_mv": -50.0, "graded_release_slope_mv": 5.0}}
+
+
 def drive_weight(mv: float, gain: float, release_hz: float = RELEASE_HZ, exact: bool = False) -> float:
     """Weight giving ``mv`` mV/ms of input current at full presynaptic release
     onto a cell type of ``synaptic_gain`` ``gain`` (nominal units unless
@@ -104,6 +116,24 @@ def release_tonic(target: float, resistance: float = 5.0) -> float:
 class Circuit:
     def __init__(self, profile: str, sensory: List[str], outputs: List[str], exact_cells: bool = False):
         self.profile = profile
+        self.growth: Optional[bool] = None     # None: on unless C. elegans (see _net)
+        # Newborn synapse strength (x the runtime's 0.05-0.25 draw). 0.0025
+        # gives ~0.1 mV/ms per sensory synapse at sensor value 1.0 and
+        # ~0.004 mV/ms per synapse from a cell at full 20 Hz release: newborns
+        # join silent (designed relays saturate at ~20 mV/ms). At 0.05 (2 mV/ms
+        # per sensory synapse) closed-loop hexapod newborns saturated at
+        # 20 Hz release, spawned in a cascade to the neuron cap and turned the
+        # walk backwards (24 Nov).
+        self.newborn_scale = 0.0025
+        self.growth_placement = "high"         # new neurons at the highest-energy free location (or "low", "mid")
+        # Morphological growth (neurite growth, contact synaptogenesis,
+        # synapse migration, soma movement) is off for designed circuits until
+        # it preserves their function: on the Freenove hexapod CPG it stalled
+        # the walk in three closed-loop tests (0.48 m vs 1.10 m in 120 s) -
+        # with full-strength contacts, with silent contacts and no migration,
+        # and with contacts no longer overwriting existing synapses - while
+        # neurogenesis alone did no harm (1.03-1.07 m; 24 Nov).
+        self.morpho_growth = False
         # exact_cells: switch off the runtime's unmodelled cell nonlinearities
         # inherited from the template (active dendritic plateau: positive net
         # synaptic current x up to 1.4 with ~120-350 ms calcium state; adaptive
@@ -135,6 +165,7 @@ class Circuit:
         the binding pins (imported connectome IDs for the flies)."""
         io = json.loads((ROOT / f"sim/content/embodiments/generated/{profile}.json").read_text())["io"]
         c = cls(profile, [s["name"] for s in io["sensors"]], list(io["output_names"]), exact_cells=exact_cells)
+        c.sensory_modalities = [sensory_modality(s) for s in io["sensors"]]
         c.neural_sensory = io.get("neural_sensory_names")
         c.neural_outputs = io.get("neural_output_names")
         return c
@@ -179,13 +210,39 @@ class Circuit:
     def _net(self, template: dict, synaptic_gain: float, depth: int, extra: dict) -> dict:
         net = dict(template.get("net", template))
         n = len(self.cells)
+        # Structural growth (neurogenesis at energy peaks: a saturated cell
+        # spawns a neighbour placed by the local activity-energy field, and
+        # new cells connect with the template's new-edge probability) is on
+        # for every body except C. elegans, whose network failed with more
+        # than its 302 neurons (user, 24 Nov). It stays on until a body's own
+        # tests show extra neurons do more harm than good; ``self.growth``
+        # overrides for such comparisons.
+        growth = self.growth if self.growth is not None else self.profile not in ("celegans", "c_elegans")
+        edge_p = float(net.get("new_edge_prob", 0.05) or 0.05) if growth else 0.0
+        # Newborns integrate the way new neurons do: nearly silent synapses
+        # (growth_new_synapse_scale), the designed cells keep their own
+        # synapses (no migration: splitting a threshold-tuned cell's inputs
+        # and outputs with a daughter is not function-preserving), and a
+        # sparse chance of input/output contacts. With the template's
+        # full-strength, p = 1 wiring, 42 newborns saturated every motor
+        # output of the hexapod CPG in 3 s (24 Nov).
+        newborn = dict(growth_new_synapse_scale=self.newborn_scale, migrate_in_prob=0.0, migrate_out_prob=0.0,
+                       p_in=0.25, p_out=0.25, growth_placement_mode=self.growth_placement,
+                       growth_io_floor_enabled=False, growth_newborn_type=NEWBORN_TYPE,
+                       # Morphological growth keeps the designed wiring: contacts
+                       # made by growing neurites start as silent as newborn
+                       # synapses (the template's 1.0 is ~11 mV/ms from a 20 Hz
+                       # cell; 3417 such contacts stalled the hexapod walk), and
+                       # existing synapses never migrate to "closer" targets.
+                       initial_synaptic_weight=0.15 * self.newborn_scale,
+                       morpho_synapse_migration_enabled=False) if growth else {}
         net.update(
             num_sensory_neurons=len(self.sensory), num_hidden_layers=1,
             num_hidden_per_layer_initial=n, num_output_neurons=len(self.outputs),
             io_channels_are_biological=False, sensory_target_layer=0, output_source_layer=0,
             max_total_neurons=max(n + len(self.outputs), int(net.get("max_total_neurons", 0) or 0)),
-            growth_enabled=False, morpho_growth_enabled=False, use_morphology=False, use_aarnn_delays=False,
-            aarnn_layer_depth=depth, max_layers=1, new_edge_prob=0.0,
+            growth_enabled=growth, morpho_growth_enabled=self.morpho_growth, use_morphology=False, use_aarnn_delays=False,
+            aarnn_layer_depth=depth, max_layers=1, new_edge_prob=edge_p,
             development_stage_mode="manual", development_pruning_interval_ms=1.0e12,
             sleep_enabled=False, world_model_enabled=False, theta_rhythm_enabled=False,
             thalamic_gating_enabled=False, aarnn_dale_strictness=0.0,
@@ -197,6 +254,7 @@ class Circuit:
             aarnn_resonance_gain=0.0, aarnn_ambient_energy_level=0.0,
             clumping_design="None", brain_regions=[],
         )
+        net.update(newborn)
         spike_io = dict(net.get("spike_io") or {})
         # The runtime's spike-I/O profile enum knows the legacy bodies only;
         # every other embodiment uses the generic channel layout.
@@ -210,6 +268,13 @@ class Circuit:
             base.update(dendritic_active_enabled=False, adaptive_threshold_enabled=False, stp_enabled=False)
         net["aarnn_bio"] = base
         net["neuron_types"] = [{"name": t, "bio_params": {**base, **bio}} for t, bio in sorted(self.types.items())]
+        # What each sensory channel reports, for the runtime's neuromodulator
+        # drive (food -> DA/5-HT, light -> 5-HT, heat/noxious -> NA, energy
+        # reserve -> 5-HT); from the IO contract's kind and mode when known.
+        net["aarnn_sensory_modalities"] = list(getattr(self, "sensory_modalities", None)
+                                               or [sensory_modality({"name": n}) for n in self.sensory])
+        if growth and NEWBORN_TYPE not in self.types:
+            net["neuron_types"].append(newborn_type(base))
         net.update(extra)
         return net
 
@@ -378,6 +443,96 @@ def add_turn_bouts(c: "Circuit", gain: float, hb: Dict[str, object], on_ms: floa
     for side in "lr":
         c.connect(e["on"], hb["rs"][side], w(kick_mv))
     return e
+
+
+def add_touch_escape(c: "Circuit", gain: float, hb: Dict[str, object], touch: Dict[str, list],
+                     s_ref: float = 0.5, relay_mv: float = 8.0, touch_mv: float = 8.0, escape_rs_mv: float = 12.0,
+                     mutual_mv: float = 30.0, silence_mv: float = 30.0, adapt_ms: float = 1500.0,
+                     latch_mv: float = 0.0, lead_mv: float = 0.1, adapt_mv: float = 1.0, touch_tau_ms: float = 400.0,
+                     plateau_mv: float = 22.0, artr_mv: float = 0.5, suppress: Optional[List[str]] = None,
+                     quiet: Optional[List[str]] = None, region: str = "hindbrain") -> Dict[str, object]:
+    """Innate touch escape: contact on one side turns the body away, decisively.
+
+    Why (26 Nov): with a wall ahead, the range rays and the learned
+    anticipation cells drove both ``RS`` cells far past their mutual
+    inhibition. RS_l and RS_r both ran at 19.4 Hz (fish) and 19.9 Hz (fly), so
+    the two turns cancelled: the fish pressed its head against the tank wall
+    and sank, and the fly shortened every stride, stalled and reared up the
+    arena wall.
+
+    ``touch``: {"l": [...], "r": [...], "f": [...]} channels reporting contact
+    (or near contact) on the left, the right or head-on. An entry is a channel
+    name or (channel, s_ref). Each passes through its own relay
+    (``TCH_<side>_<k>``, ``add_sensor_relay`` centred on s_ref). The relays of
+    one side converge on a saturating touch cell (``TOUCH_<side>``), so the
+    escape's drive does not grow with the number of sensors. The fly's six
+    relays per side, each wired straight to ESC, beat the mutual inhibition
+    and both sides fired.
+
+    ``ESC_l`` / ``ESC_r``: bistable escape cells with strong mutual inhibition,
+    so only one side fires. This is like the paired Mauthner cells and their
+    recurrent inhibition in fish, or the paired descending neurons of an
+    insect's escape. Left contact excites ESC_l; frontal contact excites both,
+    and ARTR's standing bias (plus a small lead on the left) picks the side.
+    An escape outlasts the contact. The touch cells decay slowly
+    (``touch_tau_ms``), an afterdischarge that carries the turn on for about
+    1-3 s after the contact ends; adaptation (``ESC_A_<side>``, ``adapt_ms``,
+    ``adapt_mv``) bounds it. A short escape was not enough: the fly let go as
+    soon as its antennae cleared the wall, crept back and touched again,
+    holding a fixed 37 deg angle to the wall (26 Nov).
+
+    ``latch_mv`` is a tonic inside ESC's bistable band. A latch of 0.8 mV/ms
+    (lead 0.2) made escapes self-sustaining, but the cells then leaked 1-2 Hz at
+    rest, and the lead made that leak asymmetric. It held RS_l on in open water
+    74 % of the time (fish) and 32 % (fly), against 17 % and 7 % without the
+    block, so the body circled. Hence a latch of 0 and only a small lead.
+
+    Effects:
+    - ESC_s excites RS_s (by convention RS_l turns the body right, away from
+      the left).
+    - ESC_s silences RS_o and the ``suppress`` cells, e.g. the learned
+      steering, which could otherwise turn the body back into the wall.
+    - Builders add direct motor effects (a stronger tail bend, a pivot).
+    - ``quiet`` cells (e.g. FEED) silence the escape: a feeding body tolerates
+      touching its food.
+
+    Returns dict(esc={l, r}, adapt={l, r}, touch={side}, relays=[...]).
+    """
+    def w(mv):
+        return drive_weight(mv, gain)
+    common = dict(nmda_ratio=0.0, synaptic_gain=gain)
+    c.type("Escape:E", **graded(tau_ms=10.0, plateau_mv=plateau_mv, tonic=latch_mv), **common)
+    c.type("Escape:E_lead", **graded(tau_ms=10.0, plateau_mv=plateau_mv, tonic=latch_mv + lead_mv), **common)
+    c.type("Escape:A", **graded(tau_ms=adapt_ms), **common)
+    c.type("Escape:touch", **graded(tau_ms=touch_tau_ms), **common)
+    esc = {s: c.cell(f"ESC_{s}", "Escape:E_lead" if s == "l" else "Escape:E", region) for s in "lr"}
+    adapt = {s: c.cell(f"ESC_A_{s}", "Escape:A", region) for s in "lr"}
+    relays, sums = [], {}
+    for side in ("l", "r", "f"):
+        entries = touch.get(side, [])
+        if not entries:
+            continue
+        sums[side] = c.cell(f"TOUCH_{side}", "Escape:touch", region)
+        for s in ("l", "r") if side == "f" else (side,):
+            c.connect(sums[side], esc[s], w(touch_mv))
+        for k, entry in enumerate(entries):
+            channel, ref = (entry, s_ref) if isinstance(entry, str) else entry
+            cell, _, _ = add_sensor_relay(c, gain, channel, ref, name=f"TCH_{side}_{k}")
+            relays.append(cell)
+            c.connect(cell, sums[side], w(relay_mv))
+    rs, artr = hb["rs"], hb["artr"]
+    for s, o in (("l", "r"), ("r", "l")):
+        c.connect(esc[s], adapt[s], w(10.0))
+        c.connect(adapt[s], esc[s], w(-adapt_mv))
+        c.connect(esc[s], esc[o], w(-mutual_mv))
+        c.connect(artr[s], esc[s], w(artr_mv))
+        c.connect(esc[s], rs[s], w(escape_rs_mv))
+        c.connect(esc[s], rs[o], w(-silence_mv))
+        for cell in suppress or []:
+            c.connect(esc[s], cell, w(-silence_mv))
+        for cell in quiet or []:
+            c.connect(cell, esc[s], w(-silence_mv))
+    return dict(esc=esc, adapt=adapt, touch=sums, relays=relays)
 
 
 # --- Shared spinal blocks ---
@@ -580,3 +735,560 @@ def add_servo_reflex(c: "Circuit", gain: float, joint: str, out_pos: str, out_ne
     c.connect(qp, out_pos, drive_weight(out_mv, gain))
     c.connect(qn, out_neg, drive_weight(out_mv, gain))
     return qp, qn
+
+
+# --- Innate motor sequences (fall recovery and other fixed action patterns) ---
+
+SEQ_TONIC = 1.0        # inside the 22 mV plateau band: off until kicked, then self-holding
+SEQ_W_AE = 4.0         # A_i -> K_i: ends K_i (2.0 let a residual trigger drive hold K_0 on)
+SEQ_ON = 0.95          # release of a held keyframe cell (22 mV plateau, measured ~18.6-19.3 Hz / 20)
+SEQ_M_GAIN = 60.0      # K -> M (motor relay): saturated from K ~0.3 up
+SEQ_M_THRESHOLD = 8.0  # M tonic inhibition: an idle K (~0.035) gives no output
+SEQ_M_SOURCE = 34.0    # net drive of a saturated M (K ~0.7); the drive curve's source
+
+
+def add_motor_sequence(c: "Circuit", gain: float, name: str, taus_ms: List[float], trigger: str,
+                       trigger_mv: float = 12.0, gate_tau_ms: float = 1500.0, gate_mv: float = 40.0,
+                       region: str = "spinal") -> Dict[str, object]:
+    """A chain of keyframe cells: an innate motor program (fixed action pattern).
+
+    ``K_<name>_<i>`` (22 mV plateau, tonic inside its bistable band) is off
+    until kicked and then holds itself on; its adaptation cell ``A`` (time
+    constant ``taus_ms[i]``) ends it. The handover is latched: ``S`` (a
+    plateau cell set by ``K``) remembers that the keyframe ran, ``X`` = S and
+    not K fires once ``K`` falls below ~0.3 and kicks ``K_{i+1}``, whose
+    adaptation resets ``S``. (Kicking the next cell from ``A``'s level
+    stalled the chain with long time constants; a slow copy of ``K``
+    decayed with it.)
+    The caller drives the body from each ``K`` (posture offsets, as the
+    walk's phase cells do). ``trigger`` (a graded cell, e.g. a fall
+    detector) starts ``K_0`` through ``T_<name>``; every ``K`` excites a slow
+    gate ``G_<name>`` that inhibits ``T``, so a running program is not
+    restarted and the trigger re-arms ~``gate_tau_ms`` after the program
+    ends (a retry while still lying). Durations follow the adaptation time
+    constants; calibrate them in the runtime (``measure_sequence``).
+    Drive the body from ``M`` (the saturating motor relay of each ``K``),
+    with weights from ``posture_drive``.
+    Returns {"K": [...], "A": [...], "M": [...], "T": trigger cell, "G": gate}."""
+    def w(mv):
+        return drive_weight(mv, gain)
+    common = dict(nmda_ratio=0.0, synaptic_gain=gain)
+    c.type(f"Seq:{name}:K", **graded(tau_ms=50.0, plateau_mv=22.0, tonic=SEQ_TONIC), **common)
+    # T: on (release ~0.5) when the trigger cell is well on (> ~0.4).
+    c.type(f"Seq:{name}:T", **graded(tau_ms=20.0, tonic=-3.0), **common)
+    # G: every K excites it (12 mV/ms); idle K cells leak ~0.035 each, which
+    # with 12 keyframes held G at 0.4 and blocked the trigger before any
+    # program ran, so G's tonic cancels the idle leak of all n keyframes.
+    c.type(f"Seq:{name}:G", **graded(tau_ms=gate_tau_ms, tonic=-(len(taus_ms) * 0.035 * 12.0 + 1.0)), **common)
+    c.type(f"Seq:{name}:S", **graded(tau_ms=50.0, plateau_mv=22.0, tonic=SEQ_TONIC), **common)
+    c.type(f"Seq:{name}:X", **graded(tau_ms=20.0, tonic=-4.0), **common)
+    # M: the keyframe's motor relay, saturated whenever K is above ~0.3 and
+    # silent when it idles. K's own release sags from ~0.85 to ~0.5 as its
+    # adaptation grows, and idle K cells leak; driving the joints from K
+    # directly let every keyframe drift back toward the rest posture.
+    c.type(f"Seq:{name}:M", **graded(tau_ms=10.0, tonic=-SEQ_M_THRESHOLD), **common)
+    t = c.cell(f"T_{name}", f"Seq:{name}:T", region)
+    g = c.cell(f"G_{name}", f"Seq:{name}:G", region)
+    c.connect(trigger, t, w(trigger_mv))
+    c.connect(g, t, w(-gate_mv))
+    ks, as_, ms, xs, edge, latch = [], [], [], [], None, None
+    for i, tau in enumerate(taus_ms):
+        tname = f"Seq:{name}:A:{round(tau)}"
+        if tname not in c.types:
+            c.type(tname, **graded(tau_ms=tau), **common)
+        k = c.cell(f"K_{name}_{i:02d}", f"Seq:{name}:K", region)
+        a = c.cell(f"A_{name}_{i:02d}", tname, region)
+        mo = c.cell(f"M_{name}_{i:02d}", f"Seq:{name}:M", region)
+        c.connect(k, mo, w(SEQ_M_GAIN))
+        ms.append(mo)
+        c.connect(k, a, w(10.0))
+        c.connect(a, k, w(-SEQ_W_AE))
+        c.connect(k, g, w(12.0))
+        c.connect(edge if edge else t, k, w(4.0))
+        if not edge:
+            # The first keyframe shuts its trigger off once established (from
+            # its adaptation): the slow gate alone held T, and so K_0, on for
+            # ~1.4 s, longer than a short first keyframe; cutting T from K_0
+            # itself stopped K_0 before it latched.
+            c.connect(a, t, w(-40.0))
+        if edge:
+            # Reset the previous keyframe's latch (which ends its edge cell)
+            # from this keyframe's adaptation: it rises only once this one is
+            # established. Resetting from K itself let K's first partial
+            # activation cut its own starter off and the chain stalled.
+            c.connect(a, latch, w(-20.0))
+        if i + 1 < len(taus_ms):
+            sl = c.cell(f"S_{name}_{i:02d}", f"Seq:{name}:S", region)
+            x = c.cell(f"X_{name}_{i:02d}", f"Seq:{name}:X", region)
+            c.connect(k, sl, w(4.0))
+            c.connect(sl, x, w(30.0))
+            c.connect(k, x, w(-80.0))
+            edge, latch = x, sl
+            xs.append(x)
+        ks.append(k)
+        as_.append(a)
+    return {"K": ks, "A": as_, "M": ms, "X": xs, "T": t, "G": g}
+
+
+def measure_sequence(c: "Circuit", seq: Dict[str, object], trigger_channel: str, trigger_value: float,
+                     ms: int = 30000, rest_value: float = 0.5, start_s: float = 1.0) -> List[Tuple[float, float]]:
+    """(on, off) times (s) of each keyframe cell of ``seq`` in the runtime,
+    with ``trigger_channel`` held at ``trigger_value`` from ``start_s`` (the
+    other channels at ``rest_value``): the open-loop probe, as
+    ``measure_sensor_relay``."""
+    import subprocess
+    import tempfile
+    io = json.loads((ROOT / f"sim/content/embodiments/generated/{c.profile}.json").read_text())["io"]
+    names = [s["name"] for s in io["sensors"]]
+    k = names.index(trigger_channel)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        c.write(tmp / "net.json", synaptic_gain=100.0, depth=0)
+        hidden = json.loads((tmp / "net.json").read_text())["connectome_labels"]["hidden_nodes"]
+        header = {"profile": c.profile, "sensor_names": names, "output_names": c.outputs, "trace_every_steps": 10}
+        with open(tmp / "in.jsonl", "w") as f:
+            f.write(json.dumps(header) + "\n")
+            for step in range(0, ms // 2 + 10, 10):
+                sv = [rest_value] * len(names)
+                sv[k] = trigger_value if step * 0.002 >= start_s else rest_value
+                f.write(json.dumps({"time_s": step * 0.002, "step": step, "sensors": sv}) + "\n")
+        subprocess.run([str(ROOT / "target/release/examples/celegans_depth_probe"), "--network", str(tmp / "net.json"),
+                        "--ms", str(ms), "--input", str(tmp / "in.jsonl"), "--out", str(tmp / "o.json"),
+                        "--series", str(tmp / "s.jsonl"), "--series-ms", "10", "--no-raster"],
+                       check=True, capture_output=True)
+        rows = [json.loads(x)["hidden_hz"] for x in open(tmp / "s.jsonl")]
+    # First pass only: a program that ends while the trigger still holds
+    # (still lying) runs again once the gate decays - a retry.
+    out, after = [], 0
+    for kc in seq["K"]:
+        i = hidden.index(kc)
+        on = next((n for n in range(after, len(rows)) if rows[n][i] > 10.0), None)
+        if on is None:
+            out.append((float("nan"), float("nan")))
+            continue
+        off = next((n for n in range(on, len(rows)) if rows[n][i] < 5.0), len(rows) - 1)
+        out.append(((on + 1) * 0.01, (off + 1) * 0.01))
+        after = off
+    return out
+
+
+# --- Measured motor-cell drive curve (exact posture offsets) ---
+
+DRIVE_CURVE_CACHE = ROOT / "target/qa/aarnn_drive_curve.json"
+
+
+def measure_drive_curve(profile: str = "nao", tau_ms: float = 15.0, source_drive: float = SEQ_M_SOURCE,
+                        gain: float = 100.0, ms: int = 3000) -> dict:
+    """Steady release of a motor (posture) cell - graded, ``tau_ms``,
+    release 500 Hz, tonic set for a resting release r0 - under one extra
+    synapse from a source cell like a keyframe's motor relay (tau 10 ms,
+    net drive ``source_drive``: saturated), measured in the
+    runtime over a grid of r0 x drive (mV/ms nominal). The closed-form
+    ``release_tonic`` difference is exact for excitation but not for strong
+    inhibition (24 Nov: a keyframe asking an elbow for its joint limit got
+    -0.93 of -1.54 rad), so keyframe drives are read from this curve."""
+    import subprocess
+    import tempfile
+    key = f"{profile}:{tau_ms}:M{source_drive}:{gain}"
+    store = json.loads(DRIVE_CURVE_CACHE.read_text()) if DRIVE_CURVE_CACHE.exists() else {}
+    if key in store:
+        return store[key]
+    r0s = [round(0.05 * i, 2) for i in range(1, 20)]
+    drives = [round(-20.0 + 0.5 * j, 2) for j in range(81)]
+    c = Circuit.for_embodiment(profile, exact_cells=True)
+    common = dict(nmda_ratio=0.0, synaptic_gain=gain)
+    c.type("Src", **graded(tau_ms=10.0, tonic=source_drive), **common)
+    src = c.cell("SRC", "Src")
+    cells = {}
+    for r0 in r0s:
+        c.type(f"P:{r0}", **graded(tau_ms=tau_ms, release_hz=500.0, tonic=release_tonic(r0)), **common)
+        for d in drives:
+            cells[r0, d] = c.cell(f"P_{r0}_{d}", f"P:{r0}")
+            if d:
+                c.connect(src, cells[r0, d], drive_weight(d, gain))
+    c.type("Motor:x", **graded(tau_ms=15.0, release_hz=500.0), **common)
+    for o in c.outputs:
+        c.output(o, "Motor:x")
+    io = json.loads((ROOT / f"sim/content/embodiments/generated/{profile}.json").read_text())["io"]
+    names = [s["name"] for s in io["sensors"]]
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        c.write(tmp / "net.json", synaptic_gain=gain, depth=0)
+        hidden = json.loads((tmp / "net.json").read_text())["connectome_labels"]["hidden_nodes"]
+        with open(tmp / "in.jsonl", "w") as f:
+            f.write(json.dumps({"profile": profile, "sensor_names": names, "output_names": c.outputs,
+                                "trace_every_steps": 10}) + "\n")
+            for step in range(0, ms // 2 + 10, 10):
+                f.write(json.dumps({"time_s": step * 0.002, "step": step, "sensors": [0.5] * len(names)}) + "\n")
+        subprocess.run([str(ROOT / "target/release/examples/celegans_depth_probe"), "--network", str(tmp / "net.json"),
+                        "--ms", str(ms), "--input", str(tmp / "in.jsonl"), "--out", str(tmp / "o.json"),
+                        "--series", str(tmp / "s.jsonl"), "--series-ms", "10", "--no-raster"],
+                       check=True, capture_output=True)
+        rows = [json.loads(x)["hidden_hz"] for x in open(tmp / "s.jsonl")]
+    tail = rows[len(rows) // 2:]
+
+    def rel(name):
+        i = hidden.index(name)
+        return sum(r[i] for r in tail) / len(tail) / 500.0
+    curve = {"r0": r0s, "drive": drives, "release": [[rel(cells[r0, d]) for d in drives] for r0 in r0s]}
+    store[key] = curve
+    DRIVE_CURVE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    DRIVE_CURVE_CACHE.write_text(json.dumps(store))
+    return curve
+
+
+def posture_drive(curve: dict, r0: float, target: float) -> float:
+    """Drive (mV/ms nominal, from a source at the curve's release) that
+    moves a motor cell resting at release ``r0`` to ``target``, by
+    interpolation in the measured curve (clamped to its range)."""
+    r0s, drives = curve["r0"], curve["drive"]
+
+    def at(row):     # drive for `target` on one measured row (monotone in drive)
+        rel = curve["release"][row]
+        if target <= rel[0]:
+            return drives[0]
+        for j in range(1, len(drives)):
+            if rel[j] >= target:
+                lo, hi = rel[j - 1], rel[j]
+                f = 0.0 if hi == lo else (target - lo) / (hi - lo)
+                return drives[j - 1] + f * (drives[j] - drives[j - 1])
+        return drives[-1]
+    if r0 <= r0s[0]:
+        return at(0)
+    if r0 >= r0s[-1]:
+        return at(len(r0s) - 1)
+    k = next(i for i in range(1, len(r0s)) if r0s[i] >= r0)
+    f = (r0 - r0s[k - 1]) / (r0s[k] - r0s[k - 1])
+    return at(k - 1) + f * (at(k) - at(k - 1))
+
+
+# --- Learning by experience: teacher-gated anticipation (any body) -----------
+#
+# The same block on every body (NAO pattern, 23-24 Nov): an innate near
+# detector on each side's range channel is the teacher. It drives the
+# modulatory cell LC (which gates plasticity) and a learning-turn cell LT_side,
+# and LT_side drives that side's turn command exactly as the innate reflex
+# does. LT's candidate inputs are distance-tuned range cells CS_side_k (a sparse
+# group) whose synapses onto LT start silent and are the only plastic ones;
+# when an echo at their distance predicts the near reflex, they strengthen and
+# the body learns to turn earlier. Growth (neurogenesis in the CS niche, clonal
+# newborns with jittered tunings, inputs fixed, outputs plastic) can extend
+# the anticipation beyond the designed group's range (Freenove hexapod, 25 Nov).
+
+
+def _range_cell(c: "Circuit", gain: float, channel: str, value: float, inverted: bool, name: str) -> str:
+    """A cell on while the channel reads nearer than the distance coded by
+    ``value``: a rising relay when the code grows with nearness, else a relay
+    and an inverting cell (on while the code is below ``value``)."""
+    if not inverted:
+        cell, _, _ = add_sensor_relay(c, gain, channel, value, tau_ms=30.0, name=name)
+        return cell
+    # Direct proximity from the sensor (the wheeled explorer's proximity
+    # cell): tonic w and sensor weight -w give w (1 - code), at half release
+    # (5.68 mV/ms) where the code equals ``value``; a steep release slope makes
+    # it a threshold. Relays on these small d / reach codes changed only
+    # ~16.8 vs 20 Hz from far to near, so relay-and-invert cells barely
+    # switched (UGOT quadruped, Keenon T8, 25 Nov).
+    # The response is graded (the cell ramps over ~0.3-0.5 m), not the
+    # threshold the formula suggests, and the switch-on point drifts nearer
+    # as ``value`` grows. The sensor weight is divided by
+    # _prox_inh_gain(value) so the cell reaches ~5 Hz at ``value``, the
+    # point the UGOT quadruped's learner already met (gain 1.0 at code
+    # 0.093). Measured on the Keenon T8 (code 0.22): gain 1.0 gave 1.4 Hz at
+    # its nearest approach, so its teacher barely fired; gain 1.5 gives 5 Hz
+    # at the teach distance (25 Nov).
+    pv = max(1.0 - value, 0.05)
+    w = 5.68 / pv
+    tname = f"Learn:prox:{round(value, 4)}"
+    if tname not in c.types:
+        c.type(tname, **graded(tau_ms=20.0, tonic=w), nmda_ratio=0.0, synaptic_gain=gain,
+               graded_release_slope_mv=1.5, graded_release_v_half_mv=-70.0 / (1.0 + 5.0 * 5.68 / 70.0))
+    cell = c.cell(name, tname, "sensory")
+    c.sensor(channel, cell, sensor_weight(-w / _prox_inh_gain(value), gain, exact=True))
+    return cell
+
+
+def _prox_inh_gain(value: float) -> float:
+    """Sensor-weight divisor of a direct proximity cell; a two-point
+    calibration (UGOT code 0.093 -> 1.0, Keenon T8 code 0.22 -> 1.5)."""
+    return max(1.0, 1.0 + 3.9 * (value - 0.093))
+
+
+def add_learned_anticipation(c: "Circuit", gain: float, sides: Dict[str, List[str]], encode, inverted: bool,
+                             teach_m: float, near_m: float, far_m: float, groups: int,
+                             targets: Dict[str, List[Tuple[str, float]]], w0_mv: float = 0.05, teach_mv: float = 12.0,
+                             within_p: float = 0.5, within_mv: float = 0.3, seed: int = 7) -> Dict[str, object]:
+    """Teacher-gated anticipation on every side in ``sides`` (side -> range
+    channels; ``encode(d)`` -> sensor value at distance d). ``targets``:
+    side -> [(cell, mV/ms at full LT release)] the learned turn drives."""
+    import random
+    rnd = random.Random(seed)
+    common = dict(nmda_ratio=0.0, synaptic_gain=gain)
+    if "LC" not in c.index:
+        c.type("Modulator:LC", **graded(tau_ms=50.0), **common)
+        c.cell("LC", "Modulator:LC", "hindbrain")
+    c.type("Learn:turn", **graded(tau_ms=20.0), **common)
+    out = dict(lt={}, cs={}, teacher={}, channels=sides, teach_m=teach_m, near_m=near_m, far_m=far_m, inverted=inverted)
+    for side, channels in sides.items():
+        lt = c.cell(f"LT_{side}", "Learn:turn", "hindbrain")
+        for cell, mv in targets.get(side, []):
+            c.connect(lt, cell, drive_weight(mv, gain))
+        teachers = [_range_cell(c, gain, ch, encode(teach_m), inverted, f"TN_{side}_{i}") for i, ch in enumerate(channels)]
+        for t in teachers:
+            c.connect(t, "LC", drive_weight(12.0, gain))
+            c.connect(t, lt, drive_weight(teach_mv / len(teachers), gain))
+        cells = []
+        for k in range(groups):
+            d = near_m + (far_m - near_m) * k / max(1, groups - 1)
+            ch = channels[k % len(channels)]
+            cs = _range_cell(c, gain, ch, encode(d), inverted, f"CS_{side}_{k:02d}")
+            c.connect(cs, lt, drive_weight(w0_mv, gain))
+            cells.append(cs)
+        for a in cells:
+            for b in cells:
+                if a != b and rnd.random() < within_p:
+                    c.connect(a, b, drive_weight(within_mv, gain))
+        out["lt"][side], out["cs"][side], out["teacher"][side] = lt, cells, teachers
+    return out
+
+
+def add_learned_foraging(c: "Circuit", gain: float, walk: str, bout_on: Optional[str], levels: int = 6,
+                         hunger_below: float = 0.5, w0_mv: float = 0.05, teach_mv: float = 12.0,
+                         stop_mv: float = 30.0, run_mv: float = 20.0, turn_mv: float = 8.0,
+                         slow_tau_ms: float = 3000.0, trend_threshold_mv: float = 2.0, hunger_gate_mv: float = 14.0,
+                         hunger_tonic_mv: float = 14.0, hunger_inhibit_mv: float = 24.0,
+                         hunger_tau_ms: float = 2000.0, halt: Optional[List[str]] = None,
+                         steer: bool = False, steer_mv: float = 20.0,
+                         steer_threshold_mv: float = 2.0) -> Dict[str, object]:
+    """Learned foraging / recharging (needs-v1; user, 25 Nov: newborns feed when
+    food is presented but must learn to seek it; robots are given power first).
+
+    Innate (physiology, not the seeking):
+    - FEED: on while energy flows in (``needs_consume``: food at the mouth,
+      charge current; it flows only below a full reserve). It stops the walk
+      command and the ``halt`` cells (turning) while feeding (consummatory
+      reflex), teaches the value cell V and
+      drives the reward cell DA_R (dopaminergic: opens the plasticity gate and
+      feeds the dopamine pool).
+    - HUNGER: tonically on, silenced by SATED (a relay of the reserve centred on
+      ``hunger_below``).
+    - Run-and-turn machinery: RISE / FALL compare V with a slow copy V_SLOW. A
+      rising value suppresses the spontaneous turn bouts (``bout_on``: keep
+      running); a falling value starts one (turn, as a worm's pirouette). Both
+      need HUNGER: the motivational state gates whether a food memory is used,
+      not whether it is formed (Drosophila: Krashes et al. 2009).
+
+    Learned:
+    - CF_<side>_<k>: cue-band cells (on while ``needs_cue_<side>`` exceeds band
+      k), each onto V through a silent plastic synapse (``w0_mv``). While energy
+      flows in, the cue is strong and V is taught, so the active bands
+      strengthen: the body learns that the cue predicts energy.
+    - Before learning V stays silent, RISE / FALL never fire and the body only
+      explores. After learning, a hungry body climbs the cue's gradient; a
+      sated one ignores it.
+
+    Optional learned steering (``steer``; klinotaxis, as a worm's head-swing
+    comparison or a fly's bilateral antennal comparison):
+    - V_l / V_r: one value cell per side, taught by FEED like V, learning
+      through silent plastic synapses from that side's cue bands.
+    - STEER_l / STEER_r: the difference V_l - V_r (``steer_mv`` per full
+      release), gated by HUNGER like RISE / FALL.
+    - STEER_<side> turns the body toward that side; the builder wires it to
+      the motors, e.g. a graded wheel push-pull.
+    - Before learning both values are silent and nothing steers. After
+      learning, a hungry body turns toward the side whose cue predicts food.
+    Run 1 (26 Nov) showed why it is needed: a Keenon running at 0.3 m/s
+    passed 0.59 m from the dock centre (reach 0.51 m) with its left cue at
+    0.83. Bout timing alone could not bring it back.
+    """
+    common = dict(nmda_ratio=0.0, synaptic_gain=gain)
+    sated, _, _ = add_sensor_relay(c, gain, "needs_energy", hunger_below, tau_ms=200.0, name="SATED")
+    c.type("Need:hunger", **graded(tau_ms=hunger_tau_ms, tonic=hunger_tonic_mv), **common)
+    hunger = c.cell("HUNGER", "Need:hunger", "hindbrain")
+    c.connect(sated, hunger, drive_weight(-hunger_inhibit_mv, gain))
+    feed, _, _ = add_sensor_relay(c, gain, "needs_consume", 0.5, tau_ms=30.0, name="FEED")
+    c.type("Modulator:DA_reward", **graded(tau_ms=50.0), **common)
+    da = c.cell("DA_R", "Modulator:DA_reward", "hindbrain")
+    c.connect(feed, da, drive_weight(12.0, gain))
+    c.connect(feed, walk, drive_weight(-stop_mv, gain))
+    # Feeding halts locomotion as a whole (a worm dwelling on food): on wheeled
+    # bases the turn cells drive the wheels directly, and a Keenon stopped only
+    # in its forward command still rolled off the dock at 0.13-0.28 m/s,
+    # grazing the pad's edge and charging for ~1 s per arrival (25 Nov).
+    for cell in halt or []:
+        c.connect(feed, cell, drive_weight(-stop_mv, gain))
+    c.type("Learn:value", **graded(tau_ms=50.0), **common)
+    v = c.cell("V", "Learn:value", "hindbrain")
+    c.connect(feed, v, drive_weight(teach_mv, gain))
+    cf = {}
+    for side in ("left", "right"):
+        cf[side] = []
+        for k in range(levels):
+            level = (k + 1) / (levels + 1)
+            cell, _, _ = add_sensor_relay(c, gain, f"needs_cue_{side}", level, tau_ms=30.0, name=f"CF_{side[0]}_{k}")
+            c.connect(cell, v, drive_weight(w0_mv, gain))
+            cf[side].append(cell)
+    c.type("Learn:value_slow", **graded(tau_ms=slow_tau_ms), **common)
+    v_slow = c.cell("V_SLOW", "Learn:value_slow", "hindbrain")
+    c.connect(v, v_slow, drive_weight(10.0, gain))
+    # RISE ~ V - V_SLOW, FALL ~ V_SLOW - V (20 mV/ms per full-release
+    # difference), each against its threshold plus the hunger gate, which a
+    # hungry body's near-saturated HUNGER (tonic 14 mV/ms, ~0.9 release)
+    # cancels. With tonic 8 the Keenon's HUNGER reached only 9.8 Hz (its
+    # template keeps active dendrites) and the gate leaked when sated.
+    c.type("Learn:trend", **graded(tau_ms=50.0, tonic=-(trend_threshold_mv + hunger_gate_mv)), **common)
+    rise = c.cell("RISE", "Learn:trend", "hindbrain")
+    fall = c.cell("FALL", "Learn:trend", "hindbrain")
+    for cell, sign in ((rise, 1.0), (fall, -1.0)):
+        c.connect(v, cell, drive_weight(20.0 * sign, gain))
+        c.connect(v_slow, cell, drive_weight(-20.0 * sign, gain))
+        c.connect(hunger, cell, drive_weight(hunger_gate_mv / 0.9, gain))
+    if bout_on:
+        c.connect(rise, bout_on, drive_weight(-run_mv, gain))
+        c.connect(fall, bout_on, drive_weight(turn_mv, gain))
+        c.connect(feed, bout_on, drive_weight(-run_mv, gain))
+    steer_cells = {}
+    if steer:
+        side_v = {}
+        for sd in "lr":
+            side_v[sd] = c.cell(f"V_{sd}", "Learn:value", "hindbrain")
+            c.connect(feed, side_v[sd], drive_weight(teach_mv, gain))
+            for cell in cf["left" if sd == "l" else "right"]:
+                c.connect(cell, side_v[sd], drive_weight(w0_mv, gain))
+        c.type("Learn:steer", **graded(tau_ms=100.0, tonic=-(steer_threshold_mv + hunger_gate_mv)), **common)
+        for sd, other in (("l", "r"), ("r", "l")):
+            cell = c.cell(f"STEER_{sd}", "Learn:steer", "hindbrain")
+            c.connect(side_v[sd], cell, drive_weight(steer_mv, gain))
+            c.connect(side_v[other], cell, drive_weight(-steer_mv, gain))
+            c.connect(hunger, cell, drive_weight(hunger_gate_mv / 0.9, gain))
+            c.connect(feed, cell, drive_weight(-stop_mv, gain))
+            steer_cells[sd] = cell
+    return dict(hunger=hunger, sated=sated, feed=feed, da=da, v=v, v_slow=v_slow, rise=rise, fall=fall, cf=cf,
+                steer=steer_cells)
+
+
+def learner_fields(hidden: List[str], outputs: List[str], gain: float, rule: str = "oja",
+                   w_max_mv: float = 1.5) -> dict:
+    """Plasticity fields of the learners: anticipation (LT_* plastic, CS_*
+    synapses, LC teacher) and foraging (V plastic, CF_* synapses, DA_R reward);
+    the newborns' outputs learn, capped."""
+    return dict(
+        aarnn_plasticity_enabled=True, aarnn_graded_plasticity_enabled=True,
+        aarnn_plastic_cells=dict(enabled=True, hidden=[[h.startswith("LT_") or h in ("V", "V_l", "V_r") for h in hidden]],
+                                 outputs=[False] * len(outputs), newborns=False, newborn_outputs=True,
+                                 pre_hidden=[[h.startswith(("CS_", "CF_")) for h in hidden]]),
+        aarnn_matrix_plasticity_rule=rule, aarnn_plasticity_w_max=w_max_mv / (RELEASE_HZ / 1000.0 * KERNEL_EXC * gain),
+        aarnn_rate_homeostasis_tau_ms=600000.0, aarnn_rate_homeostasis_gain=0.0, aarnn_plasticity_eta=0.0,
+        aarnn_modulatory_cells=dict(enabled="LC" in hidden or "DA_R" in hidden, hidden=[[h in ("LC", "DA_R") for h in hidden]],
+                                    outputs=[False] * len(outputs)),
+        aarnn_modulator_tau_ms=1000.0, aarnn_modulator_ref_hz=10.0)
+
+
+def growth_niche_fields(hidden: List[str], input_scale: float = 1.0, extra: int = 80) -> dict:
+    """Neurogenesis in the learners' niche (CS_ distance cells, CF_ cue-band
+    cells): clonal newborns (parent's type and jittered inputs), outputs
+    silent and plastic."""
+    return dict(growth_enabled=True, morpho_growth_enabled=False, new_edge_prob=0.05, growth_new_synapse_scale=0.0025,
+                migrate_in_prob=0.0, migrate_out_prob=0.0, p_in=0.25, p_out=0.25, max_total_neurons=len(hidden) + extra,
+                growth_placement_mode="high", growth_io_floor_enabled=False,
+                growth_parent_cells=[[h.startswith(("CS_", "CF_")) for h in hidden]], growth_inherit_sensory_inputs=True,
+                growth_new_input_synapse_scale=input_scale, growth_newborn_inherit_type=True)
+
+
+def _place_learner_cells(snap: dict, profile: Optional[str]) -> None:
+    """Put the learning cells (LC, LT_*, TN_*, CS_*; also the foraging and
+    touch-escape cells) that the builder left at the origin where the profile's layout rules (layout_designed_circuit.py)
+    place them. A newborn is born next to its parent: with the CS niche at
+    the origin of a laid-out body, every zebrafish newborn fell where two
+    real nuclei overlap and was refused (AmbiguousAreaOverlap, 37 of 39,
+    25 Nov). Profiles without rules for these names are left unchanged."""
+    import re
+    try:
+        from layout_designed_circuit import PROFILES, jitter
+    except ImportError:
+        return
+    rule = PROFILES.get(profile or "")
+    if rule is None:
+        return
+    names = snap["connectome_labels"]["hidden_nodes"]
+    nodes = snap["topo"]["layers"][0]
+    seen = {(round(n["x"], 4), round(n["y"], 4), round(n["z"], 4)) for n in nodes}
+    for node, name in zip(nodes, names):
+        if not re.match(r"^(LC|LT_[lr]|TN_[lr]_\d+|CS_[lr]_\d+|HUNGER|SATED|FEED|DA_R|V|V_SLOW|V_[lr]|STEER_[lr]|RISE|FALL|CF_[lr]_\d+|BOUT_(A_)?(on|off)|ESC_(A_)?[lr]|TOUCH_[lrf]|TCH_[lrf]_\d+)$", name):
+            continue
+        if abs(node["x"]) + abs(node["y"]) + abs(node["z"]) > 1e-9:
+            continue
+        hit = rule(name, "hidden")
+        if hit is None:
+            continue
+        (x, y, z), region = hit
+        key = (round(x, 4), round(y, 4), round(z, 4))
+        jx, jy, jz = jitter(f"hidden:{name}") if key in seen else (0.0, 0.0, 0.0)
+        seen.add(key)
+        node.update(x=x + jx, y=y + jy, z=z + jz, region_name=region)
+
+
+def sensory_modality(sensor: dict) -> str:
+    """Neuromodulator-drive modality of one IO-contract sensor: light, heat,
+    food, noxious, energy or other (see src/aarnn/neuromodulation.rs).
+    Mechanical, range, acoustic and proprioceptive senses are "other"; the
+    zebrafish "olfactory" channels are range rays. A hunger channel is not an
+    energy-reserve reading (it is high when the reserve is low), so it stays
+    "other"; so do camera OFF cells and water taste."""
+    name = str(sensor.get("name", "")).lower()
+    kind = str(sensor.get("kind", "")).lower()
+    mode = str(sensor.get("mode", "")).lower()
+    # Energy needs (needs-v1): intake (food at the mouth, charge current) is
+    # food for the modulators (reward dopamine, satiety serotonin); the
+    # reserve is energy; the cue is an odour for animals, a beacon (other)
+    # for machines.
+    if kind == "needs-energy":
+        return "energy"
+    if kind == "needs-consume":
+        return "food"
+    if kind == "needs-cue":
+        return "food" if mode == "food" else "other"
+    mechanical = ("range", "ray", "ultrasonic", "sonar", "proximity", "contact", "touch", "angle", "velocity", "gyro",
+                  "accel", "gravity", "joint", "foot", "acoustic", "audio", "lateral", "bend", "stretch", "flow")
+    if not mode and any(k in kind for k in mechanical):
+        return "other"
+    if ".off." in name or name.endswith("_off") or "water" in name or "hunger" in name or "fatigue" in name or "thirst" in name:
+        return "other"
+    text = " ".join((name, kind, mode))
+    has = lambda *keys: any(k in text for k in keys)
+    if has("energy", "satiet", "battery", "charge"):
+        return "energy"
+    if has("repel", "noxious", "nocicep"):
+        return "noxious"
+    if has("thermo", "heat", "temperat", "warm", "cold"):
+        return "heat"
+    if has("taste", "gustat", "attract", "odour", "odor", "food", "nutri", "sugar"):
+        return "food"
+    if has("light", "photo", "retina", "camera", "_lum", "lumin", "irradian", "ocell", "eye"):
+        return "light"
+    return "other"
+
+
+def apply_learner(snapshot_path: Path, config_path: Optional[Path], gain: float, meta: dict) -> None:
+    """Write the learner fields (and the anticipation metadata the open-loop
+    protocol reads) into a built snapshot and its config."""
+    snap = json.loads(Path(snapshot_path).read_text())
+    hidden = snap["connectome_labels"]["hidden_nodes"]
+    outs = snap["connectome_labels"]["output_nodes"]
+    fields = learner_fields(hidden, outs, gain)
+    snap["net"].update(fields)
+    # Neuromodulation stays enabled (25 Nov): from depth 1 the global DA /
+    # 5-HT levels scale the learning rate and transmission as in biology,
+    # and the LC teaching cell releases into its pool (dopaminergic in the
+    # insect mushroom body, noradrenergic in the vertebrate locus
+    # coeruleus). At depth 0, where the designed learners run, it has no
+    # effect, so earlier results are unchanged.
+    snap["connectome_labels"]["learning"] = dict(meta, plastic_cells=[h for h in hidden if h.startswith("LT_") or h in ("V", "V_l", "V_r")],
+                                                 modulatory_cells=[h for h in ("LC", "DA_R") if h in hidden],
+                                                 rule="teacher-gated anticipation / reward-gated foraging (oja)")
+    _place_learner_cells(snap, meta.get("profile"))
+    Path(snapshot_path).write_text(json.dumps(snap))
+    if config_path:
+        cfg = json.loads(Path(config_path).read_text())
+        cfg.update(fields)
+        Path(config_path).write_text(json.dumps(cfg, indent=1))

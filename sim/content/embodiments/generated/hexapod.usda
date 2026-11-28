@@ -8,8 +8,8 @@
 def Xform "Robot" (
     prepend apiSchemas = ["PhysicsArticulationRootAPI"]
     customData = {
-        string aarnnIODigest = "4a55402b54b401bedebbdd3975d892657e59f3f9cc265ccaabac957464914983"
-        string aarnnModelDigest = "46ba54cb9858d63a64ed64ed99e33231fe002eb5d8263e0afe9723e31c91c835"
+        string aarnnIODigest = "00f3dc843513f76dae3095abb0dfd7e15079625ec5045cd7dd331cfca25b7dda"
+        string aarnnModelDigest = "f43cab591d4e699c48131e1f2a62abd26142379f7f0b702f6e202a538b0b703b"
     }
 )
 {
@@ -18,11 +18,11 @@ def Xform "Robot" (
     )
     {
         point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.0006290833, 0.00154575, 0.0021208334)
-        float physics:mass = 0.25
+        float3 physics:diagonalInertia = (0.0020841334, 0.0029366333, 0.004445833)
+        float physics:mass = 1.1
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0, 0.19)
+        double3 xformOp:translate = (0, 0, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
         def Cube "chassis_collision" (
@@ -33,8 +33,45 @@ def Xform "Robot" (
             float[] primvars:displayOpacity = [1]
             double size = 2
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.135, 0.085, 0.018)
+            float3 xformOp:scale = (0.085, 0.07, 0.028)
             double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Cylinder "hex_plate_top"
+        {
+            uniform token axis = "Z"
+            double height = 0.006
+            color3f[] primvars:displayColor = [(0.08, 0.08, 0.09)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.11
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, 0.028)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Cylinder "hex_plate_bottom"
+        {
+            uniform token axis = "Z"
+            double height = 0.006
+            color3f[] primvars:displayColor = [(0.08, 0.08, 0.09)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 0.11
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, -0.028)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Cube "hex_head"
+        {
+            color3f[] primvars:displayColor = [(0.1, 0.2, 0.45)]
+            float[] primvars:displayOpacity = [1]
+            double size = 2
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.012, 0.024, 0.012)
+            double3 xformOp:translate = (0.093, 0, 0.06)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
 
@@ -231,24 +268,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.0945, 0.085, 0.19)
+        point3f physics:centerOfMass = (0, 0.0165, 0)
+        float3 physics:diagonalInertia = (0.00001690907, 0.00001690907, 0.000004710857)
+        float physics:mass = 0.07
+        quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
+        quatf xformOp:orient = (0.8910068, 0, 0, -0.45398992)
+        double3 xformOp:translate = (0.076, 0.055, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_000_lf_coxa_link_collision" (
+        def Capsule "hex_o_000_lf_coxa_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.033
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.012
+            quatf xformOp:orient = (0.70710677, 0.70710677, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0.0165, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -257,24 +296,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.0945, 0.137, 0.162)
+        point3f physics:centerOfMass = (0, 0.045, 0)
+        float3 physics:diagonalInertia = (0.00006897581, 0.00006897581, 0.0000036532258)
+        float physics:mass = 0.075
+        quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
+        quatf xformOp:orient = (0.8910068, 0, 0, -0.45398992)
+        double3 xformOp:translate = (0.1026975351605732, 0.07439694863502909, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_001_lf_femur_link_collision" (
+        def Capsule "hex_o_001_lf_femur_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.09
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.01
+            quatf xformOp:orient = (0.70710677, 0.70710677, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0.045, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -283,24 +324,39 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
+        point3f physics:centerOfMass = (0, 0, -0.055)
+        float3 physics:diagonalInertia = (0.000029280056, 0.000029280056, 4.438983e-7)
+        float physics:mass = 0.025
         quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.0945, 0.189, 0.134)
+        quatf xformOp:orient = (0.8910068, 0, 0, -0.45398992)
+        double3 xformOp:translate = (0.17550899468940923, 0.12729771763965386, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_002_lf_tibia_link_collision" (
+        def Capsule "hex_o_002_lf_tibia_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.11
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 0.006
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, -0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "hex_o_002_lf_tibia_foot" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.008)
+            double3 xformOp:translate = (0, 0, -0.11)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -309,24 +365,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        point3f physics:centerOfMass = (0, 0.0165, 0)
+        float3 physics:diagonalInertia = (0.00001690907, 0.00001690907, 0.000004710857)
+        float physics:mass = 0.07
+        quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.085, 0.19)
+        double3 xformOp:translate = (0, 0.085, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_003_lm_coxa_link_collision" (
+        def Capsule "hex_o_003_lm_coxa_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.033
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.012
+            quatf xformOp:orient = (0.70710677, 0.70710677, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0.0165, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -335,24 +393,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        point3f physics:centerOfMass = (0, 0.045, 0)
+        float3 physics:diagonalInertia = (0.00006897581, 0.00006897581, 0.0000036532258)
+        float physics:mass = 0.075
+        quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.137, 0.162)
+        double3 xformOp:translate = (0, 0.11800000000000001, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_004_lm_femur_link_collision" (
+        def Capsule "hex_o_004_lm_femur_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.09
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.01
+            quatf xformOp:orient = (0.70710677, 0.70710677, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0.045, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -361,24 +421,39 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
+        point3f physics:centerOfMass = (0, 0, -0.055)
+        float3 physics:diagonalInertia = (0.000029280056, 0.000029280056, 4.438983e-7)
+        float physics:mass = 0.025
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, 0.189, 0.134)
+        double3 xformOp:translate = (0, 0.20800000000000002, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_005_lm_tibia_link_collision" (
+        def Capsule "hex_o_005_lm_tibia_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.11
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 0.006
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, -0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "hex_o_005_lm_tibia_foot" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.008)
+            double3 xformOp:translate = (0, 0, -0.11)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -387,24 +462,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.0945, 0.085, 0.19)
+        point3f physics:centerOfMass = (0, 0.0165, 0)
+        float3 physics:diagonalInertia = (0.00001690907, 0.00001690907, 0.000004710857)
+        float physics:mass = 0.07
+        quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
+        quatf xformOp:orient = (0.8910068, 0, 0, 0.45398992)
+        double3 xformOp:translate = (-0.076, 0.055, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_006_lr_coxa_link_collision" (
+        def Capsule "hex_o_006_lr_coxa_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.033
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.012
+            quatf xformOp:orient = (0.70710677, 0.70710677, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0.0165, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -413,24 +490,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.0945, 0.137, 0.162)
+        point3f physics:centerOfMass = (0, 0.045, 0)
+        float3 physics:diagonalInertia = (0.00006897581, 0.00006897581, 0.0000036532258)
+        float physics:mass = 0.075
+        quatf physics:principalAxes = (0.70710677, 0.70710677, 0, -0)
+        quatf xformOp:orient = (0.8910068, 0, 0, 0.45398992)
+        double3 xformOp:translate = (-0.1026975351605732, 0.07439694863502909, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_007_lr_femur_link_collision" (
+        def Capsule "hex_o_007_lr_femur_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.09
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.01
+            quatf xformOp:orient = (0.70710677, 0.70710677, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0.045, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -439,24 +518,39 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
+        point3f physics:centerOfMass = (0, 0, -0.055)
+        float3 physics:diagonalInertia = (0.000029280056, 0.000029280056, 4.438983e-7)
+        float physics:mass = 0.025
         quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.0945, 0.189, 0.134)
+        quatf xformOp:orient = (0.8910068, 0, 0, 0.45398992)
+        double3 xformOp:translate = (-0.17550899468940923, 0.12729771763965386, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_008_lr_tibia_link_collision" (
+        def Capsule "hex_o_008_lr_tibia_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.11
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 0.006
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, -0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "hex_o_008_lr_tibia_foot" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.008)
+            double3 xformOp:translate = (0, 0, -0.11)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -465,24 +559,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.0945, -0.085, 0.19)
+        point3f physics:centerOfMass = (0, -0.0165, 0)
+        float3 physics:diagonalInertia = (0.00001690907, 0.00001690907, 0.000004710857)
+        float physics:mass = 0.07
+        quatf physics:principalAxes = (0.70710677, -0.70710677, 0, 0)
+        quatf xformOp:orient = (0.8910068, 0, 0, 0.45398992)
+        double3 xformOp:translate = (0.076, -0.055, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_009_rf_coxa_link_collision" (
+        def Capsule "hex_o_009_rf_coxa_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.033
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.012
+            quatf xformOp:orient = (0.70710677, -0.70710677, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, -0.0165, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -491,24 +587,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.0945, -0.137, 0.162)
+        point3f physics:centerOfMass = (0, -0.045, 0)
+        float3 physics:diagonalInertia = (0.00006897581, 0.00006897581, 0.0000036532258)
+        float physics:mass = 0.075
+        quatf physics:principalAxes = (0.70710677, -0.70710677, 0, 0)
+        quatf xformOp:orient = (0.8910068, 0, 0, 0.45398992)
+        double3 xformOp:translate = (0.1026975351605732, -0.07439694863502909, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_010_rf_femur_link_collision" (
+        def Capsule "hex_o_010_rf_femur_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.09
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.01
+            quatf xformOp:orient = (0.70710677, -0.70710677, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, -0.045, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -517,24 +615,39 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
+        point3f physics:centerOfMass = (0, 0, -0.055)
+        float3 physics:diagonalInertia = (0.000029280056, 0.000029280056, 4.438983e-7)
+        float physics:mass = 0.025
         quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0.0945, -0.189, 0.134)
+        quatf xformOp:orient = (0.8910068, 0, 0, 0.45398992)
+        double3 xformOp:translate = (0.17550899468940923, -0.12729771763965386, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_011_rf_tibia_link_collision" (
+        def Capsule "hex_o_011_rf_tibia_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.11
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 0.006
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, -0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "hex_o_011_rf_tibia_foot" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.008)
+            double3 xformOp:translate = (0, 0, -0.11)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -543,24 +656,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        point3f physics:centerOfMass = (0, -0.0165, 0)
+        float3 physics:diagonalInertia = (0.00001690907, 0.00001690907, 0.000004710857)
+        float physics:mass = 0.07
+        quatf physics:principalAxes = (0.70710677, -0.70710677, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.085, 0.19)
+        double3 xformOp:translate = (0, -0.085, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_012_rm_coxa_link_collision" (
+        def Capsule "hex_o_012_rm_coxa_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.033
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.012
+            quatf xformOp:orient = (0.70710677, -0.70710677, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, -0.0165, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -569,24 +684,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
-        quatf physics:principalAxes = (1, 0, 0, 0)
+        point3f physics:centerOfMass = (0, -0.045, 0)
+        float3 physics:diagonalInertia = (0.00006897581, 0.00006897581, 0.0000036532258)
+        float physics:mass = 0.075
+        quatf physics:principalAxes = (0.70710677, -0.70710677, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.137, 0.162)
+        double3 xformOp:translate = (0, -0.11800000000000001, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_013_rm_femur_link_collision" (
+        def Capsule "hex_o_013_rm_femur_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.09
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.01
+            quatf xformOp:orient = (0.70710677, -0.70710677, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, -0.045, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -595,24 +712,39 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
+        point3f physics:centerOfMass = (0, 0, -0.055)
+        float3 physics:diagonalInertia = (0.000029280056, 0.000029280056, 4.438983e-7)
+        float physics:mass = 0.025
         quatf physics:principalAxes = (1, 0, 0, 0)
         quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (0, -0.189, 0.134)
+        double3 xformOp:translate = (0, -0.20800000000000002, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_014_rm_tibia_link_collision" (
+        def Capsule "hex_o_014_rm_tibia_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.11
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 0.006
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, -0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "hex_o_014_rm_tibia_foot" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.008)
+            double3 xformOp:translate = (0, 0, -0.11)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -621,24 +753,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.0945, -0.085, 0.19)
+        point3f physics:centerOfMass = (0, -0.0165, 0)
+        float3 physics:diagonalInertia = (0.00001690907, 0.00001690907, 0.000004710857)
+        float physics:mass = 0.07
+        quatf physics:principalAxes = (0.70710677, -0.70710677, 0, 0)
+        quatf xformOp:orient = (0.8910068, 0, 0, -0.45398992)
+        double3 xformOp:translate = (-0.076, -0.055, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_015_rr_coxa_link_collision" (
+        def Capsule "hex_o_015_rr_coxa_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.033
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.012
+            quatf xformOp:orient = (0.70710677, -0.70710677, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, -0.0165, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -647,24 +781,26 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
-        quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.0945, -0.137, 0.162)
+        point3f physics:centerOfMass = (0, -0.045, 0)
+        float3 physics:diagonalInertia = (0.00006897581, 0.00006897581, 0.0000036532258)
+        float physics:mass = 0.075
+        quatf physics:principalAxes = (0.70710677, -0.70710677, 0, 0)
+        quatf xformOp:orient = (0.8910068, 0, 0, -0.45398992)
+        double3 xformOp:translate = (-0.1026975351605732, -0.07439694863502909, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_016_rr_femur_link_collision" (
+        def Capsule "hex_o_016_rr_femur_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.09
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
-            quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            double radius = 0.01
+            quatf xformOp:orient = (0.70710677, -0.70710677, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, -0.045, 0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -673,24 +809,39 @@ def Xform "Robot" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0)
-        float3 physics:diagonalInertia = (0.000010826667, 0.00000336, 0.000010826667)
-        float physics:mass = 0.035
+        point3f physics:centerOfMass = (0, 0, -0.055)
+        float3 physics:diagonalInertia = (0.000029280056, 0.000029280056, 4.438983e-7)
+        float physics:mass = 0.025
         quatf physics:principalAxes = (1, 0, 0, 0)
-        quatf xformOp:orient = (1, 0, 0, 0)
-        double3 xformOp:translate = (-0.0945, -0.189, 0.134)
+        quatf xformOp:orient = (0.8910068, 0, 0, -0.45398992)
+        double3 xformOp:translate = (-0.17550899468940923, -0.12729771763965386, 0.13)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient"]
 
-        def Cube "hex_o_017_rr_tibia_link_collision" (
+        def Capsule "hex_o_017_rr_tibia_link_collision" (
             prepend apiSchemas = ["PhysicsCollisionAPI"]
         )
         {
+            uniform token axis = "Z"
+            double height = 0.11
             color3f[] primvars:displayColor = [(0.4, 0.45, 0.3)]
             float[] primvars:displayOpacity = [1]
-            double size = 2
+            double radius = 0.006
             quatf xformOp:orient = (1, 0, 0, 0)
-            float3 xformOp:scale = (0.012, 0.028, 0.012)
-            double3 xformOp:translate = (0, 0, 0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, -0.055)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+        }
+
+        def Sphere "hex_o_017_rr_tibia_foot" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
+            float[] primvars:displayOpacity = [1]
+            double radius = 1
+            quatf xformOp:orient = (1, 0, 0, 0)
+            float3 xformOp:scale = (0.008, 0.008, 0.008)
+            double3 xformOp:translate = (0, 0, -0.11)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
     }
@@ -710,19 +861,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/chassis>
         rel physics:body1 = </Robot/hex_o_000_lf_coxa_link>
-        point3f physics:localPos0 = (0.0945, 0.085, 0)
+        point3f physics:localPos0 = (0.076, 0.055, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot0 = (0.63003695, -0.32101935, -0.63003695, -0.32101935)
         quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
-        float physics:lowerLimit = -40.107044
-        float physics:upperLimit = 40.107044
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_001_lf_femur" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "hex_o_001_lf_femur"
-            double aarnnJointRef = -0.7999999999999999
+            double aarnnJointRef = 0
         }
     )
     {
@@ -733,19 +884,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/hex_o_000_lf_coxa_link>
         rel physics:body1 = </Robot/hex_o_001_lf_femur_link>
-        point3f physics:localPos0 = (0, 0.052, -0.028)
+        point3f physics:localPos0 = (0, 0.033, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -34.37747
-        float physics:upperLimit = 34.37747
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_002_lf_tibia" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "hex_o_002_lf_tibia"
-            double aarnnJointRef = -1.2
+            double aarnnJointRef = 0
         }
     )
     {
@@ -756,12 +907,12 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/hex_o_001_lf_femur_link>
         rel physics:body1 = </Robot/hex_o_002_lf_tibia_link>
-        point3f physics:localPos0 = (0, 0.052, -0.028)
+        point3f physics:localPos0 = (0, 0.09, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -40.107044
-        float physics:upperLimit = 40.107044
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_003_lm_coxa" (
@@ -783,15 +934,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
         quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
-        float physics:lowerLimit = -40.107044
-        float physics:upperLimit = 40.107044
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_004_lm_femur" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "hex_o_004_lm_femur"
-            double aarnnJointRef = -0.7999999999999999
+            double aarnnJointRef = 0
         }
     )
     {
@@ -802,19 +953,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/hex_o_003_lm_coxa_link>
         rel physics:body1 = </Robot/hex_o_004_lm_femur_link>
-        point3f physics:localPos0 = (0, 0.052, -0.028)
+        point3f physics:localPos0 = (0, 0.033, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -34.37747
-        float physics:upperLimit = 34.37747
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_005_lm_tibia" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "hex_o_005_lm_tibia"
-            double aarnnJointRef = -1.2
+            double aarnnJointRef = 0
         }
     )
     {
@@ -825,12 +976,12 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/hex_o_004_lm_femur_link>
         rel physics:body1 = </Robot/hex_o_005_lm_tibia_link>
-        point3f physics:localPos0 = (0, 0.052, -0.028)
+        point3f physics:localPos0 = (0, 0.09, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -40.107044
-        float physics:upperLimit = 40.107044
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_006_lr_coxa" (
@@ -848,19 +999,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/chassis>
         rel physics:body1 = </Robot/hex_o_006_lr_coxa_link>
-        point3f physics:localPos0 = (-0.0945, 0.085, 0)
+        point3f physics:localPos0 = (-0.076, 0.055, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot0 = (0.63003695, 0.32101935, -0.63003695, 0.32101935)
         quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
-        float physics:lowerLimit = -40.107044
-        float physics:upperLimit = 40.107044
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_007_lr_femur" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "hex_o_007_lr_femur"
-            double aarnnJointRef = -0.7999999999999999
+            double aarnnJointRef = 0
         }
     )
     {
@@ -871,19 +1022,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/hex_o_006_lr_coxa_link>
         rel physics:body1 = </Robot/hex_o_007_lr_femur_link>
-        point3f physics:localPos0 = (0, 0.052, -0.028)
+        point3f physics:localPos0 = (0, 0.033, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -34.37747
-        float physics:upperLimit = 34.37747
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_008_lr_tibia" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "hex_o_008_lr_tibia"
-            double aarnnJointRef = -1.2
+            double aarnnJointRef = 0
         }
     )
     {
@@ -894,12 +1045,12 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/hex_o_007_lr_femur_link>
         rel physics:body1 = </Robot/hex_o_008_lr_tibia_link>
-        point3f physics:localPos0 = (0, 0.052, -0.028)
+        point3f physics:localPos0 = (0, 0.09, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -40.107044
-        float physics:upperLimit = 40.107044
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_009_rf_coxa" (
@@ -917,19 +1068,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/chassis>
         rel physics:body1 = </Robot/hex_o_009_rf_coxa_link>
-        point3f physics:localPos0 = (0.0945, -0.085, 0)
+        point3f physics:localPos0 = (0.076, -0.055, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot0 = (0.63003695, 0.32101935, -0.63003695, 0.32101935)
         quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
-        float physics:lowerLimit = -40.107044
-        float physics:upperLimit = 40.107044
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_010_rf_femur" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "hex_o_010_rf_femur"
-            double aarnnJointRef = -0.7999999999999999
+            double aarnnJointRef = 0
         }
     )
     {
@@ -940,19 +1091,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/hex_o_009_rf_coxa_link>
         rel physics:body1 = </Robot/hex_o_010_rf_femur_link>
-        point3f physics:localPos0 = (0, -0.052, -0.028)
+        point3f physics:localPos0 = (0, -0.033, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -34.37747
-        float physics:upperLimit = 34.37747
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_011_rf_tibia" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "hex_o_011_rf_tibia"
-            double aarnnJointRef = -1.2
+            double aarnnJointRef = 0
         }
     )
     {
@@ -963,12 +1114,12 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/hex_o_010_rf_femur_link>
         rel physics:body1 = </Robot/hex_o_011_rf_tibia_link>
-        point3f physics:localPos0 = (0, -0.052, -0.028)
+        point3f physics:localPos0 = (0, -0.09, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -40.107044
-        float physics:upperLimit = 40.107044
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_012_rm_coxa" (
@@ -990,15 +1141,15 @@ def Xform "Robot" (
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
         quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
-        float physics:lowerLimit = -40.107044
-        float physics:upperLimit = 40.107044
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_013_rm_femur" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "hex_o_013_rm_femur"
-            double aarnnJointRef = -0.7999999999999999
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1009,19 +1160,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/hex_o_012_rm_coxa_link>
         rel physics:body1 = </Robot/hex_o_013_rm_femur_link>
-        point3f physics:localPos0 = (0, -0.052, -0.028)
+        point3f physics:localPos0 = (0, -0.033, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -34.37747
-        float physics:upperLimit = 34.37747
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_014_rm_tibia" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "hex_o_014_rm_tibia"
-            double aarnnJointRef = -1.2
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1032,12 +1183,12 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/hex_o_013_rm_femur_link>
         rel physics:body1 = </Robot/hex_o_014_rm_tibia_link>
-        point3f physics:localPos0 = (0, -0.052, -0.028)
+        point3f physics:localPos0 = (0, -0.09, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -40.107044
-        float physics:upperLimit = 40.107044
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_015_rr_coxa" (
@@ -1055,19 +1206,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/chassis>
         rel physics:body1 = </Robot/hex_o_015_rr_coxa_link>
-        point3f physics:localPos0 = (-0.0945, -0.085, 0)
+        point3f physics:localPos0 = (-0.076, -0.055, 0)
         point3f physics:localPos1 = (0, 0, 0)
-        quatf physics:localRot0 = (0.70710677, 0, -0.70710677, 0)
+        quatf physics:localRot0 = (0.63003695, -0.32101935, -0.63003695, -0.32101935)
         quatf physics:localRot1 = (0.70710677, 0, -0.70710677, 0)
-        float physics:lowerLimit = -40.107044
-        float physics:upperLimit = 40.107044
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_016_rr_femur" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "hex_o_016_rr_femur"
-            double aarnnJointRef = -0.7999999999999999
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1078,19 +1229,19 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/hex_o_015_rr_coxa_link>
         rel physics:body1 = </Robot/hex_o_016_rr_femur_link>
-        point3f physics:localPos0 = (0, -0.052, -0.028)
+        point3f physics:localPos0 = (0, -0.033, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -34.37747
-        float physics:upperLimit = 34.37747
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 
     def PhysicsRevoluteJoint "joint_hex_o_017_rr_tibia" (
         prepend apiSchemas = ["PhysicsDriveAPI:angular"]
         customData = {
             string aarnnJointName = "hex_o_017_rr_tibia"
-            double aarnnJointRef = -1.2
+            double aarnnJointRef = 0
         }
     )
     {
@@ -1101,12 +1252,12 @@ def Xform "Robot" (
         uniform token physics:axis = "X"
         rel physics:body0 = </Robot/hex_o_016_rr_femur_link>
         rel physics:body1 = </Robot/hex_o_017_rr_tibia_link>
-        point3f physics:localPos0 = (0, -0.052, -0.028)
+        point3f physics:localPos0 = (0, -0.09, 0)
         point3f physics:localPos1 = (0, 0, 0)
         quatf physics:localRot0 = (1, 0, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
-        float physics:lowerLimit = -40.107044
-        float physics:upperLimit = 40.107044
+        float physics:lowerLimit = -90.00021
+        float physics:upperLimit = 90.00021
     }
 }
 

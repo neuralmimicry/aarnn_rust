@@ -37,7 +37,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "qa"))
-from aarnn_circuit import Circuit, add_hindbrain, add_stretch_reflex, bistable_band, drive_weight, graded, sensor_weight, steady_release  # noqa: E402
+from aarnn_circuit import (Circuit, add_hindbrain, add_learned_anticipation, add_learned_foraging, add_stretch_reflex,  # noqa: E402
+                           add_turn_bouts, apply_learner, bistable_band,
+                           drive_weight, graded, sensor_weight, steady_release)
 
 ROOT = Path(__file__).resolve().parents[1]
 GAIN = 100.0
@@ -105,6 +107,36 @@ def build(args):
             weight = w_prs * (1.0 if facing > 0.5 else args.lateral_rs)
             c.connect(cell, rs["l" if side > 0 else "r"], w(weight))
     front = [prox[s["name"]] for s in rays if math.cos(s["angle_rad"]) > 0.9]
+    learn = None
+    if args.learn_groups > 0:
+        # Learning by experience (aarnn_circuit.add_learned_anticipation).
+        fr = [s["name"] for s in rays if math.cos(s["angle_rad"]) > 0.9]
+        side_rays = {sd: [s["name"] for s in rays if 0.9 >= math.cos(s["angle_rad"]) > 0.5
+                          and (math.sin(s["angle_rad"]) > 0) == (sd == "l")] + fr for sd in "lr"}
+        side_rays = {sd: v for sd, v in side_rays.items() if v}
+        add_learned_anticipation(c, GAIN, side_rays, lambda d: d / RAY_RANGE_M, True, d_on, d_on + 0.05, d_on + 0.35,
+                                 args.learn_groups, {sd: [(rs[sd], w_prs)] for sd in side_rays})
+        learn = dict(profile=args.profile, encoding="direct", reach_m=RAY_RANGE_M, channels=side_rays, teach_m=d_on,
+                     near_m=d_on + 0.05, far_m=d_on + 0.35, protocol_far_m=min(d_on + 1.2, RAY_RANGE_M),
+                     protocol_near_m=max(d_on - 0.1, 0.05))
+
+    bouts = None
+    if args.explore:
+        # Spontaneous run-and-turn bouts (shared hindbrain): a bout clock
+        # kicks both RS cells and the ARTR side turns.
+        bouts = add_turn_bouts(c, GAIN, hb, on_ms=args.explore_on_ms, off_ms=args.explore_off_ms)
+    if args.forage:
+        # Learned recharging at the dock (needs-v1; aarnn_circuit.add_learned_foraging):
+        # charging stops the forward command; the beacon's value is learned.
+        # Feeding halts locomotion: forward command, turns, and the stall /
+        # reversal reflex (a stopped base otherwise reads as blocked and REV
+        # backed it off the dock ~1 s after it stopped, 25 Nov). STALL and REV
+        # are created below; the halt synapses are added after them.
+        forage_halt = [rs["l"], rs["r"], artr["l"], artr["r"]]
+        forage = add_learned_foraging(c, GAIN, mlr, bouts["on"] if bouts else None, hunger_below=args.forage_hunger,
+                                      halt=forage_halt, steer=args.forage_steer > 0)
+        if learn is None:
+            learn = dict(profile=args.profile)
 
     wheels = [a for a in acts if wheel_like(a)]
     fwd = cal.get("forward_pattern", {})
@@ -114,6 +146,10 @@ def build(args):
             push_pull(mlr, a, args.drive * fwd[a] / args.mlr_release)
             for cell in front:
                 push_pull(cell, a, -args.brake * fwd[a])
+        if turn_left.get(a) and args.forage and args.forage_steer > 0:
+            # Learned steering: STEER_l (dock cue stronger on the left) -> turn left.
+            push_pull(forage["steer"]["l"], a, args.forage_steer * turn_left[a])
+            push_pull(forage["steer"]["r"], a, -args.forage_steer * turn_left[a])
         if turn_left.get(a):
             # RS_l: obstacle on the left -> turn right (negative yaw).
             push_pull(rs["l"], a, -args.turn * turn_left[a])
@@ -159,6 +195,9 @@ def build(args):
             push_pull(rev, a, -args.reverse * fwd[a])
         for k in "lr":
             c.connect(rev, rs[k], w(args.stall_rs))
+        if args.forage:
+            for cell in (stall, rev):
+                c.connect("FEED", cell, w(-30.0))
 
     # Posture: hold each non-wheel joint at its initial angle (qpos0 = 0 for
     # the archetype joints). Angle sensor (q + pi) / 2 pi; velocity (w + 40) / 80.
@@ -173,6 +212,8 @@ def build(args):
               "calibration": cal}
     c.write(Path(args.output), Path(args.config_out) if args.config_out else None, synaptic_gain=GAIN,
             depth=0, labels=labels)
+    if learn:
+        apply_learner(Path(args.output), Path(args.config_out) if args.config_out else None, GAIN, learn)
     return c, cal
 
 
@@ -182,6 +223,13 @@ def main():
     ap.add_argument("--output")
     ap.add_argument("--config-out")
     ap.add_argument("--mlr-release", type=float, default=0.5)
+    ap.add_argument("--explore", type=int, default=0, help="1: spontaneous run-and-turn bouts (shared hindbrain)")
+    ap.add_argument("--explore-on-ms", type=float, default=2000.0)
+    ap.add_argument("--explore-off-ms", type=float, default=12000.0)
+    ap.add_argument("--forage", type=int, default=0, help="1: learned recharging at the dock (needs-v1 channels)")
+    ap.add_argument("--forage-hunger", type=float, default=0.5)
+    ap.add_argument("--forage-steer", type=float, default=0.0,
+                    help="learned steering toward the stronger cue: STEER -> wheel turn push-pull (mV/ms); 0 = off")
     ap.add_argument("--drive", type=float, default=4.0, help="forward push-pull drive at MLR release (mV/ms)")
     ap.add_argument("--brake", type=float, default=4.0, help="front proximity -> forward drive reduction (mV/ms)")
     ap.add_argument("--turn", type=float, default=7.0, help="RS -> wheel turning push-pull (mV/ms)")
@@ -200,6 +248,7 @@ def main():
     ap.add_argument("--posture-kp", type=float, default=150.0, help="angle error gain (mV/ms per unit sensor)")
     ap.add_argument("--posture-kd", type=float, default=20.0)
     ap.add_argument("--posture-out", type=float, default=8.0)
+    ap.add_argument("--learn-groups", type=int, default=0, help="anticipation learning: range cells per side (0 = off)")
     args = ap.parse_args()
     args.output = args.output or f"network_{args.profile}_explorer.json"
     args.config_out = args.config_out or f"webots_world/configs/config_{args.profile}_explorer.json"

@@ -1,0 +1,14 @@
+{
+  "schema": "aarnn-explorer-plan-v1",
+  "source": "synthetic-sensorimotor",
+  "split": "development",
+  "interventions": [
+    {"id": "ablate-G1a", "selection": {"kind": "neurons", "ids": ["G1a"]}, "action": {"kind": "neuron-ablation"}},
+    {"id": "ablate-go-both", "selection": {"kind": "neurons", "ids": ["G1a", "G1b"]}, "action": {"kind": "neuron-ablation"}},
+    {"id": "ablate-inhibitor", "selection": {"kind": "neurons", "ids": ["I"]}, "action": {"kind": "neuron-ablation"}},
+    {"id": "ablate-memory-region", "selection": {"kind": "region", "region": "memory"}, "action": {"kind": "neuron-ablation"}},
+    {"id": "silence-M2-80-120ms", "selection": {"kind": "neurons", "ids": ["M2"]}, "action": {"kind": "silence", "start_ms": 80.0, "end_ms": 120.0}},
+    {"id": "inhibition-x2", "selection": {"kind": "synapses", "ids": ["I->O_go", "I->G2a", "I->G2b"]}, "action": {"kind": "weight-scale", "factor": 2.0}},
+    {"id": "deadend-branch", "selection": {"kind": "region", "region": "deadend"}, "action": {"kind": "neuron-ablation"}}
+  ]
+}

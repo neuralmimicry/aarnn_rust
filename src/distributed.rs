@@ -739,6 +739,13 @@ fn persist_workspace_snapshot(
     binding: &NetworkWorkspaceBinding,
     snapshot_json: &str,
 ) -> anyhow::Result<()> {
+    // An atomic write needs room for the new copy beside the old one; a full
+    // disk would otherwise fail mid-write or starve the host.
+    crate::monitor::check_disk_for_write(
+        std::path::Path::new(&binding.latest_snapshot_path),
+        snapshot_json.len() as u64,
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
     atomic_write_workspace_snapshot(&binding.latest_snapshot_path, snapshot_json.as_bytes())?;
     if let Some(manifest_path) = binding.manifest_path.as_deref() {
         if let Err(err) = update_workspace_manifest_saved_at(manifest_path, now_ms()) {
@@ -3210,7 +3217,16 @@ fn plan_active_layer_assignments(
             let memory_bytes = node_statuses
                 .get(node_id)
                 .and_then(|node| node.resources.as_ref())
-                .map(|resources| resources.available_ram.max(resources.total_ram / 2))
+                // The node's own headroom (cgroup-aware, monitor::ResourceSample)
+                // when it reports one, else host available RAM; the former
+                // `total_ram / 2` floor let a full host look half empty.
+                .map(|resources| {
+                    if resources.memory_headroom_bytes > 0 {
+                        resources.memory_headroom_bytes
+                    } else {
+                        resources.available_ram
+                    }
+                })
                 .unwrap_or(total_state)
                 .max(total_state);
             HostCapacity {
@@ -7783,6 +7799,15 @@ impl DistributedNode {
                 }
             }
         }
+        // This process's own memory pressure (cgroup-aware): a node under
+        // pressure attracts less work, a critical one none.
+        let own = crate::monitor::resource_sample();
+        capacity *= match own.level {
+            crate::monitor::PressureLevel::Normal => 1.0,
+            crate::monitor::PressureLevel::Warn => 0.35,
+            crate::monitor::PressureLevel::Critical => 0.0,
+        };
+        let disk_free = crate::monitor::disk_free_bytes(std::path::Path::new(".")).unwrap_or(0);
 
         let temperature_c = {
             #[cfg(feature = "sysinfo")]
@@ -7965,6 +7990,15 @@ impl DistributedNode {
                 .as_ref()
                 .map(|snapshot| snapshot.recent_action_count)
                 .unwrap_or(0),
+            process_rss_bytes: own.rss_bytes.unwrap_or(0),
+            process_rss_peak_bytes: own.rss_peak_bytes.unwrap_or(0),
+            memory_limit_bytes: own.limit_bytes.unwrap_or(0),
+            memory_headroom_bytes: own.headroom_bytes.unwrap_or(0),
+            pressure_level: own.level.as_u32(),
+            psi_memory_some_avg10: own.psi_memory_some_avg10.unwrap_or(0.0),
+            load1: own.load1.unwrap_or(0.0),
+            threads: own.threads.unwrap_or(0),
+            disk_free_bytes: disk_free,
         }
     }
 
@@ -10565,9 +10599,36 @@ impl DistributedNode {
             network_id,
             node_id
         );
+        // Resource pacing for this network on this node (see monitor::Pacer).
+        let mut pacer = crate::monitor::Pacer::new(format!("node {node_id} network {network_id}"));
         loop {
             if *shutdown.borrow() {
                 break;
+            }
+            match pacer.tick() {
+                crate::monitor::PaceAction::Continue => {}
+                crate::monitor::PaceAction::Delay(pause) => {
+                    tokio::select! {
+                        _ = shutdown.changed() => {}
+                        _ = tokio::time::sleep(pause) => {}
+                    }
+                }
+                crate::monitor::PaceAction::Hold(pause) => {
+                    tokio::select! {
+                        _ = shutdown.changed() => {}
+                        _ = tokio::time::sleep(pause) => {}
+                    }
+                    continue;
+                }
+                crate::monitor::PaceAction::Pause(reason) => {
+                    let mut net = net_arc.write().await;
+                    if net.playing {
+                        net.playing = false;
+                        lock_external_sensory_ingress(&sensory_ingress).sync_network_metadata(&net);
+                        nm_err!("[error] {}", reason);
+                    }
+                    continue;
+                }
             }
             let current = {
                 let state = self.state.read().await;
@@ -10785,10 +10846,15 @@ impl DistributedNode {
                 not(feature = "replicated_durability"),
                 not(feature = "superdense_executor")
             ))]
-            let out = if let Some(ref sensory) = external_sensory {
-                net.runner.step(Some(sensory.as_slice()))
-            } else {
-                net.runner.step(None)
+            let out = {
+                if net.runner.neuromod_trace_label.is_none() {
+                    net.runner.neuromod_trace_label = Some(net.id.clone());
+                }
+                if let Some(ref sensory) = external_sensory {
+                    net.runner.step(Some(sensory.as_slice()))
+                } else {
+                    net.runner.step(None)
+                }
             };
 
             // Complete admission only after the biological state transition
@@ -12939,6 +13005,7 @@ impl DistributedNeuromorphic for DistributedNode {
             } else {
                 (Vec::new(), Vec::new())
             };
+            let neuromod_sample = net.runner.neuromod_sample;
             (
                 sensory_vec,
                 sensory_history_vecs,
@@ -12951,6 +13018,7 @@ impl DistributedNeuromorphic for DistributedNode {
                 output_stage_assigned,
                 sensory_target_layer_u32,
                 sensory_stage_assigned,
+                neuromod_sample,
             )
         })
         .await
@@ -12968,6 +13036,7 @@ impl DistributedNeuromorphic for DistributedNode {
             output_stage_assigned,
             sensory_target_layer,
             sensory_stage_assigned,
+            neuromod_sample,
         ) = raw_activity;
         let ts_us = (sim_time_ms * 1000.0) as u64;
         let (sensory, sensory_history, hidden, output, output_history) =
@@ -13025,7 +13094,66 @@ impl DistributedNeuromorphic for DistributedNode {
             sensory_history,
             sensory_stage_assigned,
             sensory_target_layer,
+            neuromod: Some(neuromod_state_proto(&neuromod_sample)),
         }))
+    }
+}
+
+/// Runner sample from its wire form (display clients).
+pub fn neuromod_sample_from_proto(
+    n: &NeuromodState,
+) -> crate::aarnn::neuromodulation::NeuromodSample {
+    crate::aarnn::neuromodulation::NeuromodSample {
+        t_ms: n.t_ms,
+        depth: n.depth as usize,
+        dopamine: n.dopamine,
+        serotonin: n.serotonin,
+        noradrenaline: n.noradrenaline,
+        acetylcholine: n.acetylcholine,
+        stimuli: n.stimuli,
+        synapse_drive: n.synapse_drive,
+        synapse_energy: n.synapse_energy,
+        synapse_stimuli: n.synapse_stimuli,
+        efficacy: n.efficacy,
+        release_factor: n.release_factor,
+        drives: crate::aarnn::neuromodulation::ModulatorDrives {
+            reward: n.drive_reward,
+            food: n.drive_food,
+            light: n.drive_light,
+            heat: n.drive_heat,
+            noxious: n.drive_noxious,
+            energy: n.drive_energy,
+            activity: n.drive_activity,
+            novelty: n.drive_novelty,
+            cells: crate::aarnn::neuromodulation::ModulatorLevels::zero(),
+        },
+        rates_hz: [0.0; 11],
+    }
+}
+
+/// Wire form of a runner's neuromodulator telemetry sample.
+fn neuromod_state_proto(s: &crate::aarnn::neuromodulation::NeuromodSample) -> NeuromodState {
+    NeuromodState {
+        t_ms: s.t_ms,
+        depth: s.depth.min(u32::MAX as usize) as u32,
+        dopamine: s.dopamine,
+        serotonin: s.serotonin,
+        noradrenaline: s.noradrenaline,
+        acetylcholine: s.acetylcholine,
+        stimuli: s.stimuli,
+        synapse_drive: s.synapse_drive,
+        synapse_energy: s.synapse_energy,
+        synapse_stimuli: s.synapse_stimuli,
+        efficacy: s.efficacy,
+        release_factor: s.release_factor,
+        drive_reward: s.drives.reward,
+        drive_food: s.drives.food,
+        drive_light: s.drives.light,
+        drive_heat: s.drives.heat,
+        drive_noxious: s.drives.noxious,
+        drive_energy: s.drives.energy,
+        drive_activity: s.drives.activity,
+        drive_novelty: s.drives.novelty,
     }
 }
 

@@ -120,7 +120,7 @@ env:
     libxrandr-dev libxcomposite-dev libxdamage-dev libxfixes-dev
     libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev
     libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev
-    libfontconfig1-dev libfreetype6-dev
+    libfontconfig1-dev libfreetype-dev
 
 concurrency:
   group: unified-ci-cd-${{ github.ref }}
@@ -195,7 +195,10 @@ jobs:
             local attempts="${1:-6}"
             local attempt=1
             while true; do
+              # Self-hosted runners run unattended-upgrades; wait for its
+              # dpkg lock instead of failing (ARM64 verify, 24 Nov 2026).
               if sudo apt-get \
+                -o DPkg::Lock::Timeout=900 \
                 -o Acquire::ForceIPv4=true \
                 -o Acquire::Retries=5 \
                 -o Acquire::http::Timeout=30 \
@@ -221,6 +224,7 @@ jobs:
                 -y \
                 --no-install-recommends \
                 --allow-downgrades \
+                -o DPkg::Lock::Timeout=900 \
                 -o Acquire::ForceIPv4=true \
                 -o Acquire::Retries=5 \
                 -o Acquire::http::Timeout=30 \
@@ -237,8 +241,22 @@ jobs:
               attempt=$((attempt + 1))
             done
           }
+          # Self-hosted runners keep these packages installed between runs.
+          # Only call apt (which takes the dpkg lock that unattended-upgrades
+          # can hold for a long time) when something is actually missing.
+          missing=()
           # shellcheck disable=SC2086
-          apt_install_retry 4 $UBUNTU_NATIVE_BUILD_DEPS
+          for pkg in $UBUNTU_NATIVE_BUILD_DEPS; do
+            if ! dpkg-query -W -f='${db:Status-Abbrev}' "$pkg" 2>/dev/null | grep -q '^ii'; then
+              missing+=("$pkg")
+            fi
+          done
+          if (( ${#missing[@]} == 0 )); then
+            echo "All native build dependencies are installed; apt is not needed."
+            exit 0
+          fi
+          echo "Installing missing native build dependencies: ${missing[*]}"
+          apt_install_retry 4 "${missing[@]}"
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2

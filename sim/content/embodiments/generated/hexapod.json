@@ -8,7 +8,7 @@
   "exact_replica": "pending OEM variant and calibration",
   "controller_transfer": "legacy-native-projections-v1; native MuJoCo engineering adapter; calibration unvalidated",
   "source": "scripts/embodiment_legacy.py:build",
-  "source_digest": "a2f0a10b13d7e755b75aca98929838ce2987f528a83c351b97123c5f4089ad5f",
+  "source_digest": "24bcc91ee720267a171386c5cdfa4099bc85ee10cefdd8c397f62e895668ddf9",
   "policy_digest": "35a2dbc6477ae9308c4f5eae4d09ccffc2f7aadce2cb54ce29018d63e43b9e2f",
   "io": {
     "schema_version": 1,
@@ -259,7 +259,19 @@
           1
         ],
         "rate_hz": 500,
-        "missing": "fault-disarm"
+        "missing": "fault-disarm",
+        "region_m": [
+          [
+            -0.02,
+            -0.02,
+            -0.125
+          ],
+          [
+            0.02,
+            0.02,
+            -0.095
+          ]
+        ]
       },
       {
         "name": "hex_s_19_lm_foot",
@@ -271,7 +283,19 @@
           1
         ],
         "rate_hz": 500,
-        "missing": "fault-disarm"
+        "missing": "fault-disarm",
+        "region_m": [
+          [
+            -0.02,
+            -0.02,
+            -0.125
+          ],
+          [
+            0.02,
+            0.02,
+            -0.095
+          ]
+        ]
       },
       {
         "name": "hex_s_20_lr_foot",
@@ -283,7 +307,19 @@
           1
         ],
         "rate_hz": 500,
-        "missing": "fault-disarm"
+        "missing": "fault-disarm",
+        "region_m": [
+          [
+            -0.02,
+            -0.02,
+            -0.125
+          ],
+          [
+            0.02,
+            0.02,
+            -0.095
+          ]
+        ]
       },
       {
         "name": "hex_s_21_rf_foot",
@@ -295,7 +331,19 @@
           1
         ],
         "rate_hz": 500,
-        "missing": "fault-disarm"
+        "missing": "fault-disarm",
+        "region_m": [
+          [
+            -0.02,
+            -0.02,
+            -0.125
+          ],
+          [
+            0.02,
+            0.02,
+            -0.095
+          ]
+        ]
       },
       {
         "name": "hex_s_22_rm_foot",
@@ -307,7 +355,19 @@
           1
         ],
         "rate_hz": 500,
-        "missing": "fault-disarm"
+        "missing": "fault-disarm",
+        "region_m": [
+          [
+            -0.02,
+            -0.02,
+            -0.125
+          ],
+          [
+            0.02,
+            0.02,
+            -0.095
+          ]
+        ]
       },
       {
         "name": "hex_s_23_rr_foot",
@@ -319,7 +379,19 @@
           1
         ],
         "rate_hz": 500,
-        "missing": "fault-disarm"
+        "missing": "fault-disarm",
+        "region_m": [
+          [
+            -0.02,
+            -0.02,
+            -0.125
+          ],
+          [
+            0.02,
+            0.02,
+            -0.095
+          ]
+        ]
       },
       {
         "name": "hex_s_24_body_accel.x",
@@ -461,34 +533,116 @@
         "rate_hz": 500,
         "missing": "fault-disarm",
         "position_m": [
-          0.165,
-          0.024,
-          0.05
+          0.105,
+          0.013,
+          0.06
         ],
         "direction": [
-          0.9800665778412416,
-          0.19866933079506122,
-          0
+          1.0,
+          0.0,
+          0.0
         ],
-        "angle_rad": 1.2,
-        "lookup": [
+        "angle_rad": 3.0,
+        "rays": [
           [
-            0,
-            1000
+            1.0,
+            0.0,
+            0.0
           ],
           [
-            0.4,
-            620
+            0.997859,
+            0.056641,
+            0.032702
           ],
           [
-            0.8,
-            280
+            0.997859,
+            0.0,
+            0.065403
           ],
           [
-            1.2,
-            120
+            0.997859,
+            -0.056641,
+            0.032702
+          ],
+          [
+            0.997859,
+            -0.056641,
+            -0.032702
+          ],
+          [
+            0.997859,
+            -0.0,
+            -0.065403
+          ],
+          [
+            0.997859,
+            0.056641,
+            -0.032702
+          ],
+          [
+            0.991445,
+            0.130526,
+            0.0
+          ],
+          [
+            0.991445,
+            0.113039,
+            0.065263
+          ],
+          [
+            0.991445,
+            0.065263,
+            0.113039
+          ],
+          [
+            0.991445,
+            0.0,
+            0.130526
+          ],
+          [
+            0.991445,
+            -0.065263,
+            0.113039
+          ],
+          [
+            0.991445,
+            -0.113039,
+            0.065263
+          ],
+          [
+            0.991445,
+            -0.130526,
+            0.0
+          ],
+          [
+            0.991445,
+            -0.113039,
+            -0.065263
+          ],
+          [
+            0.991445,
+            -0.065263,
+            -0.113039
+          ],
+          [
+            0.991445,
+            -0.0,
+            -0.130526
+          ],
+          [
+            0.991445,
+            0.065263,
+            -0.113039
+          ],
+          [
+            0.991445,
+            0.113039,
+            -0.065263
           ]
-        ]
+        ],
+        "incidence_max_rad": 0.392699,
+        "min_m": 0.02,
+        "period_s": 0.06
       },
       {
         "name": "hex_s_28_ultrasonic_right",
@@ -502,34 +656,188 @@
         "rate_hz": 500,
         "missing": "fault-disarm",
         "position_m": [
-          0.165,
-          -0.024,
-          0.05
+          0.105,
+          -0.013,
+          0.06
         ],
         "direction": [
-          0.9800665778412416,
-          -0.19866933079506122,
-          0
+          1.0,
+          0.0,
+          0.0
         ],
-        "angle_rad": 1.2,
-        "lookup": [
+        "angle_rad": 3.0,
+        "rays": [
           [
-            0,
-            1000
+            1.0,
+            0.0,
+            0.0
           ],
           [
-            0.4,
-            620
+            0.997859,
+            0.056641,
+            0.032702
           ],
           [
-            0.8,
-            280
+            0.997859,
+            0.0,
+            0.065403
           ],
           [
-            1.2,
-            120
+            0.997859,
+            -0.056641,
+            0.032702
+          ],
+          [
+            0.997859,
+            -0.056641,
+            -0.032702
+          ],
+          [
+            0.997859,
+            -0.0,
+            -0.065403
+          ],
+          [
+            0.997859,
+            0.056641,
+            -0.032702
+          ],
+          [
+            0.991445,
+            0.130526,
+            0.0
+          ],
+          [
+            0.991445,
+            0.113039,
+            0.065263
+          ],
+          [
+            0.991445,
+            0.065263,
+            0.113039
+          ],
+          [
+            0.991445,
+            0.0,
+            0.130526
+          ],
+          [
+            0.991445,
+            -0.065263,
+            0.113039
+          ],
+          [
+            0.991445,
+            -0.113039,
+            0.065263
+          ],
+          [
+            0.991445,
+            -0.130526,
+            0.0
+          ],
+          [
+            0.991445,
+            -0.113039,
+            -0.065263
+          ],
+          [
+            0.991445,
+            -0.065263,
+            -0.113039
+          ],
+          [
+            0.991445,
+            -0.0,
+            -0.130526
+          ],
+          [
+            0.991445,
+            0.065263,
+            -0.113039
+          ],
+          [
+            0.991445,
+            0.113039,
+            -0.065263
           ]
-        ]
+        ],
+        "incidence_max_rad": 0.392699,
+        "min_m": 0.02,
+        "period_s": 0.06
+      },
+      {
+        "name": "needs_energy",
+        "kind": "needs-energy",
+        "mode": "power",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "group": "needs"
+      },
+      {
+        "name": "needs_consume",
+        "kind": "needs-consume",
+        "mode": "power",
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "group": "needs"
+      },
+      {
+        "name": "needs_cue_left",
+        "kind": "needs-cue",
+        "mode": "power",
+        "position_m": [
+          0.039,
+          0.039,
+          0.0
+        ],
+        "direction": [
+          0.7071,
+          0.7071,
+          0.0
+        ],
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "group": "needs"
+      },
+      {
+        "name": "needs_cue_right",
+        "kind": "needs-cue",
+        "mode": "power",
+        "position_m": [
+          0.039,
+          -0.039,
+          0.0
+        ],
+        "direction": [
+          0.7071,
+          -0.7071,
+          0.0
+        ],
+        "units": "normalised",
+        "range": [
+          0,
+          1
+        ],
+        "rate_hz": 500,
+        "missing": "fault-disarm",
+        "group": "needs"
       }
     ],
     "output_names": [
@@ -562,7 +870,7 @@
       "neutral": "zero active drive on empty history; no twitch or oscillator",
       "fidelity": "versioned engineering projection; no learned task or biological calibration claim"
     },
-    "digest": "4a55402b54b401bedebbdd3975d892657e59f3f9cc265ccaabac957464914983",
+    "digest": "f3a5f05e3407bfd780b1aa69bea4446ca626ed73fbfba40b8634654a77cc2693",
     "neural_sensory_names": [
       "hex_s_00_lf_coxa",
       "hex_s_01_lf_femur",
@@ -597,7 +905,11 @@
       "hex_s_26_head_camera.on.r00c00",
       "hex_s_26_head_camera.off.r00c00",
       "hex_s_27_ultrasonic_left",
-      "hex_s_28_ultrasonic_right"
+      "hex_s_28_ultrasonic_right",
+      "needs_energy",
+      "needs_consume",
+      "needs_cue_left",
+      "needs_cue_right"
     ],
     "neural_output_names": [
       "hex_o_000_lf_coxa",
@@ -625,12 +937,12 @@
       "name": "hex_o_000_lf_coxa",
       "joint": "hex_o_000_lf_coxa",
       "control_range": [
-        -0.7,
-        0.7
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -3.2,
-        3.2
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -650,18 +962,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 7.5
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_001_lf_femur",
       "joint": "hex_o_001_lf_femur",
       "control_range": [
-        -1.4,
-        -0.2
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -4.0,
-        4.0
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -681,18 +993,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 6.5
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_002_lf_tibia",
       "joint": "hex_o_002_lf_tibia",
       "control_range": [
-        -1.9,
-        -0.5
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -3.6,
-        3.6
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -712,18 +1024,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 6.0
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_003_lm_coxa",
       "joint": "hex_o_003_lm_coxa",
       "control_range": [
-        -0.7,
-        0.7
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -3.2,
-        3.2
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -743,18 +1055,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 7.5
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_004_lm_femur",
       "joint": "hex_o_004_lm_femur",
       "control_range": [
-        -1.4,
-        -0.2
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -4.0,
-        4.0
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -774,18 +1086,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 6.5
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_005_lm_tibia",
       "joint": "hex_o_005_lm_tibia",
       "control_range": [
-        -1.9,
-        -0.5
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -3.6,
-        3.6
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -805,18 +1117,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 6.0
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_006_lr_coxa",
       "joint": "hex_o_006_lr_coxa",
       "control_range": [
-        -0.7,
-        0.7
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -3.2,
-        3.2
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -836,18 +1148,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 7.5
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_007_lr_femur",
       "joint": "hex_o_007_lr_femur",
       "control_range": [
-        -1.4,
-        -0.2
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -4.0,
-        4.0
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -867,18 +1179,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 6.5
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_008_lr_tibia",
       "joint": "hex_o_008_lr_tibia",
       "control_range": [
-        -1.9,
-        -0.5
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -3.6,
-        3.6
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -898,18 +1210,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 6.0
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_009_rf_coxa",
       "joint": "hex_o_009_rf_coxa",
       "control_range": [
-        -0.7,
-        0.7
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -3.2,
-        3.2
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -929,18 +1241,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 7.5
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_010_rf_femur",
       "joint": "hex_o_010_rf_femur",
       "control_range": [
-        -1.4,
-        -0.2
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -4.0,
-        4.0
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -960,18 +1272,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 6.5
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_011_rf_tibia",
       "joint": "hex_o_011_rf_tibia",
       "control_range": [
-        -1.9,
-        -0.5
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -3.6,
-        3.6
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -991,18 +1303,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 6.0
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_012_rm_coxa",
       "joint": "hex_o_012_rm_coxa",
       "control_range": [
-        -0.7,
-        0.7
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -3.2,
-        3.2
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -1022,18 +1334,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 7.5
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_013_rm_femur",
       "joint": "hex_o_013_rm_femur",
       "control_range": [
-        -1.4,
-        -0.2
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -4.0,
-        4.0
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -1053,18 +1365,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 6.5
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_014_rm_tibia",
       "joint": "hex_o_014_rm_tibia",
       "control_range": [
-        -1.9,
-        -0.5
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -3.6,
-        3.6
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -1084,18 +1396,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 6.0
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_015_rr_coxa",
       "joint": "hex_o_015_rr_coxa",
       "control_range": [
-        -0.7,
-        0.7
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -3.2,
-        3.2
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -1115,18 +1427,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 7.5
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_016_rr_femur",
       "joint": "hex_o_016_rr_femur",
       "control_range": [
-        -1.4,
-        -0.2
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -4.0,
-        4.0
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -1146,18 +1458,18 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 6.5
+      "velocity_limit": 6.16
     },
     {
       "name": "hex_o_017_rr_tibia",
       "joint": "hex_o_017_rr_tibia",
       "control_range": [
-        -1.9,
-        -0.5
+        -1.5708,
+        1.5708
       ],
       "effort_range": [
-        -3.6,
-        3.6
+        -0.92,
+        0.92
       ],
       "gear": [
         1.0,
@@ -1177,13 +1489,13 @@
         }
       ],
       "position_readout": true,
-      "velocity_limit": 6.0
+      "velocity_limit": 6.16
     }
   ],
-  "native_mjcf_sha256": "8a5b77a0894eaa914545a33166256e2d062ea7f1561942096e5377247868d224",
+  "native_mjcf_sha256": "5a713583052f0f17324671b9f3e475aa30737f3532965bb6071fe7f2ea4b8e59",
   "source_licence": "repository-original",
   "assumptions": "sim/content/embodiments/policy.json",
-  "total_mass_kg": 0.8800000000000006,
+  "total_mass_kg": 2.1199999999999997,
   "scene": {
     "version": "native-habitats-v1",
     "habitat_id": "terrain",
@@ -4145,13 +4457,67 @@
         "strength": 1,
         "anchor": "root",
         "internal": false
+      },
+      {
+        "id": "charging_dock",
+        "shape": "box",
+        "position": [
+          -0.78,
+          -0.26,
+          0.005200000000000001
+        ],
+        "size": [
+          0.18200000000000002,
+          0.18200000000000002,
+          0.010400000000000001
+        ],
+        "colour": [
+          0.12,
+          0.55,
+          0.9
+        ],
+        "yaw": 0,
+        "collision": false,
+        "material": "plastic",
+        "cue": "beacon",
+        "radius": 0.39,
+        "strength": 1.0,
+        "anchor": "root",
+        "internal": false
       }
     ],
-    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
+    "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model",
+    "needs": {
+      "version": "needs-v1",
+      "resource": "power",
+      "basal_w_per_kg": 1.0,
+      "endurance_s": 240.0,
+      "effort_ref_w_per_kg": 2.0,
+      "refill_s": 20.0,
+      "start_fraction": 1.0,
+      "sources": [
+        {
+          "id": "charging_dock",
+          "position_m": [
+            -0.78,
+            -0.26,
+            0.0052
+          ],
+          "radius_m": 0.221,
+          "field_radius_m": 0.455
+        }
+      ],
+      "caretaker": {
+        "until_s": 600.0,
+        "threshold": 0.4,
+        "feed_s": 20.0
+      },
+      "scientific_status": "engineering proxy: energy store, drain and refill are not calibrated metabolism or battery models; early-life caretaker presents food or docks the body"
+    }
   },
-  "scene_sources_sha256": "a715a28f67ac75c9624deb144618f412dae8688b833c24e07b4ae9e8838d2884",
+  "scene_sources_sha256": "f0ad36be6e4a13ae9f1747ba14d4ad5085d43896fe8f18d87c6169e1caaf33a3",
   "anatomy_sources_sha256": "76e90c0ee8947775dbfb7ae187162c7c383557a5343383f64af84d2e625f2bd1",
-  "neural_sources_sha256": "491b1c8df3570eda7bb994493ecd7617ca21066362363aaaec542de36deab729",
+  "neural_sources_sha256": "c4d6f92f5b435c040ea1d350ff17af6aac8f2625487a3987aeb9775d7f9cbafe",
   "bodies": [
     {
       "name": "chassis",
@@ -4159,7 +4525,7 @@
       "position": [
         0.0,
         0.0,
-        0.19
+        0.13
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4170,7 +4536,7 @@
       "world_position": [
         0.0,
         0.0,
-        0.19
+        0.13
       ],
       "world_quaternion_wxyz": [
         1.0,
@@ -4178,7 +4544,7 @@
         0.0,
         0.0
       ],
-      "mass_kg": 0.25,
+      "mass_kg": 1.1,
       "com_m": [
         0.0,
         0.0,
@@ -4191,52 +4557,52 @@
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        0.0006290833333333334,
-        0.0015457500000000002,
-        0.0021208333333333335
+        0.0020841333333333338,
+        0.002936633333333334,
+        0.004445833333333335
       ]
     },
     {
       "name": "hex_o_000_lf_coxa_link",
       "parent": 1,
       "position": [
-        0.0945,
-        0.085,
+        0.076,
+        0.055,
         0.0
       ],
       "quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        -0.4539899105301741
       ],
       "world_position": [
-        0.0945,
-        0.085,
-        0.19
+        0.076,
+        0.055,
+        0.13
       ],
       "world_quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        -0.4539899105301741
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.07,
       "com_m": [
         0.0,
-        0.0,
+        0.0165,
         0.0
       ],
       "inertia_orientation_wxyz": [
-        1.0,
+        0.7071067811865476,
+        0.7071067811865475,
         0.0,
-        0.0,
-        0.0
+        -0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        1.6909071428571432e-05,
+        1.6909071428571432e-05,
+        4.710857142857144e-06
       ]
     },
     {
@@ -4244,8 +4610,8 @@
       "parent": 2,
       "position": [
         0.0,
-        0.052000000000000005,
-        -0.027999999999999997
+        0.033,
+        0.0
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4254,32 +4620,32 @@
         0.0
       ],
       "world_position": [
-        0.0945,
-        0.137,
-        0.162
+        0.1026975351605732,
+        0.07439694863502909,
+        0.13
       ],
       "world_quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        -0.4539899105301741
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.075,
       "com_m": [
         0.0,
-        0.0,
+        0.045,
         0.0
       ],
       "inertia_orientation_wxyz": [
-        1.0,
+        0.7071067811865476,
+        0.7071067811865475,
         0.0,
-        0.0,
-        0.0
+        -0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        6.897580645161291e-05,
+        6.897580645161291e-05,
+        3.6532258064516132e-06
       ]
     },
     {
@@ -4287,8 +4653,8 @@
       "parent": 3,
       "position": [
         0.0,
-        0.052000000000000005,
-        -0.027999999999999997
+        0.09,
+        0.0
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4297,21 +4663,21 @@
         0.0
       ],
       "world_position": [
-        0.0945,
-        0.189,
-        0.134
+        0.17550899468940923,
+        0.12729771763965386,
+        0.13
       ],
       "world_quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        -0.4539899105301741
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.025,
       "com_m": [
         0.0,
         0.0,
-        0.0
+        -0.055
       ],
       "inertia_orientation_wxyz": [
         1.0,
@@ -4320,9 +4686,9 @@
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        2.928005649717514e-05,
+        2.928005649717514e-05,
+        4.4389830508474574e-07
       ]
     },
     {
@@ -4342,7 +4708,7 @@
       "world_position": [
         0.0,
         0.085,
-        0.19
+        0.13
       ],
       "world_quaternion_wxyz": [
         1.0,
@@ -4350,22 +4716,22 @@
         0.0,
         0.0
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.07,
       "com_m": [
         0.0,
-        0.0,
+        0.0165,
         0.0
       ],
       "inertia_orientation_wxyz": [
-        1.0,
+        0.7071067811865476,
+        0.7071067811865475,
         0.0,
-        0.0,
-        0.0
+        -0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        1.6909071428571432e-05,
+        1.6909071428571432e-05,
+        4.710857142857144e-06
       ]
     },
     {
@@ -4373,8 +4739,8 @@
       "parent": 5,
       "position": [
         0.0,
-        0.052000000000000005,
-        -0.027999999999999997
+        0.033,
+        0.0
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4384,8 +4750,8 @@
       ],
       "world_position": [
         0.0,
-        0.137,
-        0.162
+        0.11800000000000001,
+        0.13
       ],
       "world_quaternion_wxyz": [
         1.0,
@@ -4393,22 +4759,22 @@
         0.0,
         0.0
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.075,
       "com_m": [
         0.0,
-        0.0,
+        0.045,
         0.0
       ],
       "inertia_orientation_wxyz": [
-        1.0,
+        0.7071067811865476,
+        0.7071067811865475,
         0.0,
-        0.0,
-        0.0
+        -0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        6.897580645161291e-05,
+        6.897580645161291e-05,
+        3.6532258064516132e-06
       ]
     },
     {
@@ -4416,8 +4782,8 @@
       "parent": 6,
       "position": [
         0.0,
-        0.052000000000000005,
-        -0.027999999999999997
+        0.09,
+        0.0
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4427,8 +4793,8 @@
       ],
       "world_position": [
         0.0,
-        0.189,
-        0.134
+        0.20800000000000002,
+        0.13
       ],
       "world_quaternion_wxyz": [
         1.0,
@@ -4436,11 +4802,11 @@
         0.0,
         0.0
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.025,
       "com_m": [
         0.0,
         0.0,
-        0.0
+        -0.055
       ],
       "inertia_orientation_wxyz": [
         1.0,
@@ -4449,52 +4815,52 @@
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        2.928005649717514e-05,
+        2.928005649717514e-05,
+        4.4389830508474574e-07
       ]
     },
     {
       "name": "hex_o_006_lr_coxa_link",
       "parent": 1,
       "position": [
-        -0.0945,
-        0.085,
+        -0.076,
+        0.055,
         0.0
       ],
       "quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        0.4539899105301741
       ],
       "world_position": [
-        -0.0945,
-        0.085,
-        0.19
+        -0.076,
+        0.055,
+        0.13
       ],
       "world_quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        0.4539899105301741
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.07,
       "com_m": [
         0.0,
-        0.0,
+        0.0165,
         0.0
       ],
       "inertia_orientation_wxyz": [
-        1.0,
+        0.7071067811865476,
+        0.7071067811865475,
         0.0,
-        0.0,
-        0.0
+        -0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        1.6909071428571432e-05,
+        1.6909071428571432e-05,
+        4.710857142857144e-06
       ]
     },
     {
@@ -4502,8 +4868,8 @@
       "parent": 8,
       "position": [
         0.0,
-        0.052000000000000005,
-        -0.027999999999999997
+        0.033,
+        0.0
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4512,32 +4878,32 @@
         0.0
       ],
       "world_position": [
-        -0.0945,
-        0.137,
-        0.162
+        -0.1026975351605732,
+        0.07439694863502909,
+        0.13
       ],
       "world_quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        0.4539899105301741
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.075,
       "com_m": [
         0.0,
-        0.0,
+        0.045,
         0.0
       ],
       "inertia_orientation_wxyz": [
-        1.0,
+        0.7071067811865476,
+        0.7071067811865475,
         0.0,
-        0.0,
-        0.0
+        -0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        6.897580645161291e-05,
+        6.897580645161291e-05,
+        3.6532258064516132e-06
       ]
     },
     {
@@ -4545,8 +4911,8 @@
       "parent": 9,
       "position": [
         0.0,
-        0.052000000000000005,
-        -0.027999999999999997
+        0.09,
+        0.0
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4555,21 +4921,21 @@
         0.0
       ],
       "world_position": [
-        -0.0945,
-        0.189,
-        0.134
+        -0.17550899468940923,
+        0.12729771763965386,
+        0.13
       ],
       "world_quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        0.4539899105301741
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.025,
       "com_m": [
         0.0,
         0.0,
-        0.0
+        -0.055
       ],
       "inertia_orientation_wxyz": [
         1.0,
@@ -4578,52 +4944,52 @@
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        2.928005649717514e-05,
+        2.928005649717514e-05,
+        4.4389830508474574e-07
       ]
     },
     {
       "name": "hex_o_009_rf_coxa_link",
       "parent": 1,
       "position": [
-        0.0945,
-        -0.085,
+        0.076,
+        -0.055,
         0.0
       ],
       "quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        0.4539899105301741
       ],
       "world_position": [
-        0.0945,
-        -0.085,
-        0.19
+        0.076,
+        -0.055,
+        0.13
       ],
       "world_quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        0.4539899105301741
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.07,
       "com_m": [
         0.0,
-        0.0,
+        -0.0165,
         0.0
       ],
       "inertia_orientation_wxyz": [
-        1.0,
-        0.0,
+        0.7071067811865476,
+        -0.7071067811865475,
         0.0,
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        1.6909071428571432e-05,
+        1.6909071428571432e-05,
+        4.710857142857144e-06
       ]
     },
     {
@@ -4631,8 +4997,8 @@
       "parent": 11,
       "position": [
         0.0,
-        -0.052000000000000005,
-        -0.027999999999999997
+        -0.033,
+        0.0
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4641,32 +5007,32 @@
         0.0
       ],
       "world_position": [
-        0.0945,
-        -0.137,
-        0.162
+        0.1026975351605732,
+        -0.07439694863502909,
+        0.13
       ],
       "world_quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        0.4539899105301741
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.075,
       "com_m": [
         0.0,
-        0.0,
+        -0.045,
         0.0
       ],
       "inertia_orientation_wxyz": [
-        1.0,
-        0.0,
+        0.7071067811865476,
+        -0.7071067811865475,
         0.0,
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        6.897580645161291e-05,
+        6.897580645161291e-05,
+        3.6532258064516132e-06
       ]
     },
     {
@@ -4674,8 +5040,8 @@
       "parent": 12,
       "position": [
         0.0,
-        -0.052000000000000005,
-        -0.027999999999999997
+        -0.09,
+        0.0
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4684,21 +5050,21 @@
         0.0
       ],
       "world_position": [
-        0.0945,
-        -0.189,
-        0.134
+        0.17550899468940923,
+        -0.12729771763965386,
+        0.13
       ],
       "world_quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        0.4539899105301741
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.025,
       "com_m": [
         0.0,
         0.0,
-        0.0
+        -0.055
       ],
       "inertia_orientation_wxyz": [
         1.0,
@@ -4707,9 +5073,9 @@
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        2.928005649717514e-05,
+        2.928005649717514e-05,
+        4.4389830508474574e-07
       ]
     },
     {
@@ -4729,7 +5095,7 @@
       "world_position": [
         0.0,
         -0.085,
-        0.19
+        0.13
       ],
       "world_quaternion_wxyz": [
         1.0,
@@ -4737,22 +5103,22 @@
         0.0,
         0.0
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.07,
       "com_m": [
         0.0,
-        0.0,
+        -0.0165,
         0.0
       ],
       "inertia_orientation_wxyz": [
-        1.0,
-        0.0,
+        0.7071067811865476,
+        -0.7071067811865475,
         0.0,
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        1.6909071428571432e-05,
+        1.6909071428571432e-05,
+        4.710857142857144e-06
       ]
     },
     {
@@ -4760,8 +5126,8 @@
       "parent": 14,
       "position": [
         0.0,
-        -0.052000000000000005,
-        -0.027999999999999997
+        -0.033,
+        0.0
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4771,8 +5137,8 @@
       ],
       "world_position": [
         0.0,
-        -0.137,
-        0.162
+        -0.11800000000000001,
+        0.13
       ],
       "world_quaternion_wxyz": [
         1.0,
@@ -4780,22 +5146,22 @@
         0.0,
         0.0
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.075,
       "com_m": [
         0.0,
-        0.0,
+        -0.045,
         0.0
       ],
       "inertia_orientation_wxyz": [
-        1.0,
-        0.0,
+        0.7071067811865476,
+        -0.7071067811865475,
         0.0,
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        6.897580645161291e-05,
+        6.897580645161291e-05,
+        3.6532258064516132e-06
       ]
     },
     {
@@ -4803,8 +5169,8 @@
       "parent": 15,
       "position": [
         0.0,
-        -0.052000000000000005,
-        -0.027999999999999997
+        -0.09,
+        0.0
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4814,8 +5180,8 @@
       ],
       "world_position": [
         0.0,
-        -0.189,
-        0.134
+        -0.20800000000000002,
+        0.13
       ],
       "world_quaternion_wxyz": [
         1.0,
@@ -4823,11 +5189,11 @@
         0.0,
         0.0
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.025,
       "com_m": [
         0.0,
         0.0,
-        0.0
+        -0.055
       ],
       "inertia_orientation_wxyz": [
         1.0,
@@ -4836,52 +5202,52 @@
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        2.928005649717514e-05,
+        2.928005649717514e-05,
+        4.4389830508474574e-07
       ]
     },
     {
       "name": "hex_o_015_rr_coxa_link",
       "parent": 1,
       "position": [
-        -0.0945,
-        -0.085,
+        -0.076,
+        -0.055,
         0.0
       ],
       "quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        -0.4539899105301741
       ],
       "world_position": [
-        -0.0945,
-        -0.085,
-        0.19
+        -0.076,
+        -0.055,
+        0.13
       ],
       "world_quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        -0.4539899105301741
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.07,
       "com_m": [
         0.0,
-        0.0,
+        -0.0165,
         0.0
       ],
       "inertia_orientation_wxyz": [
-        1.0,
-        0.0,
+        0.7071067811865476,
+        -0.7071067811865475,
         0.0,
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        1.6909071428571432e-05,
+        1.6909071428571432e-05,
+        4.710857142857144e-06
       ]
     },
     {
@@ -4889,8 +5255,8 @@
       "parent": 17,
       "position": [
         0.0,
-        -0.052000000000000005,
-        -0.027999999999999997
+        -0.033,
+        0.0
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4899,32 +5265,32 @@
         0.0
       ],
       "world_position": [
-        -0.0945,
-        -0.137,
-        0.162
+        -0.1026975351605732,
+        -0.07439694863502909,
+        0.13
       ],
       "world_quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        -0.4539899105301741
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.075,
       "com_m": [
         0.0,
-        0.0,
+        -0.045,
         0.0
       ],
       "inertia_orientation_wxyz": [
-        1.0,
-        0.0,
+        0.7071067811865476,
+        -0.7071067811865475,
         0.0,
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        6.897580645161291e-05,
+        6.897580645161291e-05,
+        3.6532258064516132e-06
       ]
     },
     {
@@ -4932,8 +5298,8 @@
       "parent": 18,
       "position": [
         0.0,
-        -0.052000000000000005,
-        -0.027999999999999997
+        -0.09,
+        0.0
       ],
       "quaternion_wxyz": [
         1.0,
@@ -4942,21 +5308,21 @@
         0.0
       ],
       "world_position": [
-        -0.0945,
-        -0.189,
-        0.134
+        -0.17550899468940923,
+        -0.12729771763965386,
+        0.13
       ],
       "world_quaternion_wxyz": [
-        1.0,
+        0.8910068244052928,
         0.0,
         0.0,
-        0.0
+        -0.4539899105301741
       ],
-      "mass_kg": 0.035,
+      "mass_kg": 0.025,
       "com_m": [
         0.0,
         0.0,
-        0.0
+        -0.055
       ],
       "inertia_orientation_wxyz": [
         1.0,
@@ -4965,9 +5331,9 @@
         0.0
       ],
       "diagonal_inertia_kgm2": [
-        1.0826666666666667e-05,
-        3.3600000000000004e-06,
-        1.0826666666666667e-05
+        2.928005649717514e-05,
+        2.928005649717514e-05,
+        4.4389830508474574e-07
       ]
     }
   ],
@@ -5007,8 +5373,8 @@
         1.0
       ],
       "range": [
-        -0.7,
-        0.7
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5027,8 +5393,8 @@
         0.0
       ],
       "range": [
-        -1.4,
-        -0.2
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5047,8 +5413,8 @@
         0.0
       ],
       "range": [
-        -1.9,
-        -0.5
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5067,8 +5433,8 @@
         1.0
       ],
       "range": [
-        -0.7,
-        0.7
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5087,8 +5453,8 @@
         0.0
       ],
       "range": [
-        -1.4,
-        -0.2
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5107,8 +5473,8 @@
         0.0
       ],
       "range": [
-        -1.9,
-        -0.5
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5127,8 +5493,8 @@
         1.0
       ],
       "range": [
-        -0.7,
-        0.7
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5147,8 +5513,8 @@
         0.0
       ],
       "range": [
-        -1.4,
-        -0.2
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5167,8 +5533,8 @@
         0.0
       ],
       "range": [
-        -1.9,
-        -0.5
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5187,8 +5553,8 @@
         1.0
       ],
       "range": [
-        -0.7,
-        0.7
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5207,8 +5573,8 @@
         0.0
       ],
       "range": [
-        -1.4,
-        -0.2
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5227,8 +5593,8 @@
         0.0
       ],
       "range": [
-        -1.9,
-        -0.5
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5247,8 +5613,8 @@
         1.0
       ],
       "range": [
-        -0.7,
-        0.7
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5267,8 +5633,8 @@
         0.0
       ],
       "range": [
-        -1.4,
-        -0.2
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5287,8 +5653,8 @@
         0.0
       ],
       "range": [
-        -1.9,
-        -0.5
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5307,8 +5673,8 @@
         1.0
       ],
       "range": [
-        -0.7,
-        0.7
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5327,8 +5693,8 @@
         0.0
       ],
       "range": [
-        -1.4,
-        -0.2
+        -1.5708,
+        1.5708
       ],
       "limited": true
     },
@@ -5347,8 +5713,8 @@
         0.0
       ],
       "range": [
-        -1.9,
-        -0.5
+        -1.5708,
+        1.5708
       ],
       "limited": true
     }
@@ -8545,6 +8911,35 @@
       "mesh_id": -1
     },
     {
+      "name": "habitat_charging_dock",
+      "body": 0,
+      "type": 6,
+      "position": [
+        -0.78,
+        -0.26,
+        0.005200000000000001
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.09100000000000001,
+        0.09100000000000001,
+        0.005200000000000001
+      ],
+      "rgba": [
+        0.11999999731779099,
+        0.550000011920929,
+        0.8999999761581421,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
       "name": "chassis_collision",
       "body": 1,
       "type": 6,
@@ -8560,9 +8955,9 @@
         0.0
       ],
       "half_size_m": [
-        0.135,
         0.085,
-        0.018
+        0.07,
+        0.028
       ],
       "rgba": [
         0.4000000059604645,
@@ -8571,6 +8966,93 @@
         1.0
       ],
       "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "hex_plate_top",
+      "body": 1,
+      "type": 5,
+      "position": [
+        0.0,
+        0.0,
+        0.028
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.11,
+        0.003,
+        0.0
+      ],
+      "rgba": [
+        0.07999999821186066,
+        0.07999999821186066,
+        0.09000000357627869,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "hex_plate_bottom",
+      "body": 1,
+      "type": 5,
+      "position": [
+        0.0,
+        0.0,
+        -0.028
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.11,
+        0.003,
+        0.0
+      ],
+      "rgba": [
+        0.07999999821186066,
+        0.07999999821186066,
+        0.09000000357627869,
+        1.0
+      ],
+      "collision": false,
+      "mesh_id": -1
+    },
+    {
+      "name": "hex_head",
+      "body": 1,
+      "type": 6,
+      "position": [
+        0.093,
+        0.0,
+        0.06
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.012,
+        0.024,
+        0.012
+      ],
+      "rgba": [
+        0.10000000149011612,
+        0.20000000298023224,
+        0.44999998807907104,
+        1.0
+      ],
+      "collision": false,
       "mesh_id": -1
     },
     {
@@ -9040,22 +9522,22 @@
     {
       "name": "hex_o_000_lf_coxa_link_collision",
       "body": 2,
-      "type": 6,
+      "type": 3,
       "position": [
         0.0,
-        0.0,
+        0.0165,
         0.0
       ],
       "quaternion_wxyz": [
-        1.0,
+        0.7071067811865476,
+        0.7071067811865475,
         0.0,
-        0.0,
-        0.0
+        -0.0
       ],
       "half_size_m": [
         0.012,
-        0.027999999999999997,
-        0.012
+        0.0165,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9069,22 +9551,22 @@
     {
       "name": "hex_o_001_lf_femur_link_collision",
       "body": 3,
-      "type": 6,
+      "type": 3,
       "position": [
         0.0,
-        0.0,
+        0.045,
         0.0
       ],
       "quaternion_wxyz": [
-        1.0,
+        0.7071067811865476,
+        0.7071067811865475,
         0.0,
-        0.0,
-        0.0
+        -0.0
       ],
       "half_size_m": [
-        0.012,
-        0.027999999999999997,
-        0.012
+        0.01,
+        0.045,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9098,11 +9580,11 @@
     {
       "name": "hex_o_002_lf_tibia_link_collision",
       "body": 4,
-      "type": 6,
+      "type": 3,
       "position": [
         0.0,
         0.0,
-        0.0
+        -0.055
       ],
       "quaternion_wxyz": [
         1.0,
@@ -9111,9 +9593,9 @@
         0.0
       ],
       "half_size_m": [
-        0.012,
-        0.027999999999999997,
-        0.012
+        0.006,
+        0.055,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9125,13 +9607,13 @@
       "mesh_id": -1
     },
     {
-      "name": "hex_o_003_lm_coxa_link_collision",
-      "body": 5,
-      "type": 6,
+      "name": "hex_o_002_lf_tibia_foot",
+      "body": 4,
+      "type": 2,
       "position": [
         0.0,
         0.0,
-        0.0
+        -0.11
       ],
       "quaternion_wxyz": [
         1.0,
@@ -9140,9 +9622,38 @@
         0.0
       ],
       "half_size_m": [
+        0.008,
+        0.0,
+        0.0
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.15000000596046448,
+        0.15000000596046448,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "hex_o_003_lm_coxa_link_collision",
+      "body": 5,
+      "type": 3,
+      "position": [
+        0.0,
+        0.0165,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.7071067811865475,
+        0.0,
+        -0.0
+      ],
+      "half_size_m": [
         0.012,
-        0.027999999999999997,
-        0.012
+        0.0165,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9156,22 +9667,22 @@
     {
       "name": "hex_o_004_lm_femur_link_collision",
       "body": 6,
-      "type": 6,
+      "type": 3,
       "position": [
         0.0,
-        0.0,
+        0.045,
         0.0
       ],
       "quaternion_wxyz": [
-        1.0,
+        0.7071067811865476,
+        0.7071067811865475,
         0.0,
-        0.0,
-        0.0
+        -0.0
       ],
       "half_size_m": [
-        0.012,
-        0.027999999999999997,
-        0.012
+        0.01,
+        0.045,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9185,11 +9696,11 @@
     {
       "name": "hex_o_005_lm_tibia_link_collision",
       "body": 7,
-      "type": 6,
+      "type": 3,
       "position": [
         0.0,
         0.0,
-        0.0
+        -0.055
       ],
       "quaternion_wxyz": [
         1.0,
@@ -9198,9 +9709,9 @@
         0.0
       ],
       "half_size_m": [
-        0.012,
-        0.027999999999999997,
-        0.012
+        0.006,
+        0.055,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9212,13 +9723,13 @@
       "mesh_id": -1
     },
     {
-      "name": "hex_o_006_lr_coxa_link_collision",
-      "body": 8,
-      "type": 6,
+      "name": "hex_o_005_lm_tibia_foot",
+      "body": 7,
+      "type": 2,
       "position": [
         0.0,
         0.0,
-        0.0
+        -0.11
       ],
       "quaternion_wxyz": [
         1.0,
@@ -9227,9 +9738,38 @@
         0.0
       ],
       "half_size_m": [
+        0.008,
+        0.0,
+        0.0
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.15000000596046448,
+        0.15000000596046448,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "hex_o_006_lr_coxa_link_collision",
+      "body": 8,
+      "type": 3,
+      "position": [
+        0.0,
+        0.0165,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        0.7071067811865475,
+        0.0,
+        -0.0
+      ],
+      "half_size_m": [
         0.012,
-        0.027999999999999997,
-        0.012
+        0.0165,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9243,22 +9783,22 @@
     {
       "name": "hex_o_007_lr_femur_link_collision",
       "body": 9,
-      "type": 6,
+      "type": 3,
       "position": [
         0.0,
-        0.0,
+        0.045,
         0.0
       ],
       "quaternion_wxyz": [
-        1.0,
+        0.7071067811865476,
+        0.7071067811865475,
         0.0,
-        0.0,
-        0.0
+        -0.0
       ],
       "half_size_m": [
-        0.012,
-        0.027999999999999997,
-        0.012
+        0.01,
+        0.045,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9272,11 +9812,11 @@
     {
       "name": "hex_o_008_lr_tibia_link_collision",
       "body": 10,
-      "type": 6,
+      "type": 3,
       "position": [
         0.0,
         0.0,
-        0.0
+        -0.055
       ],
       "quaternion_wxyz": [
         1.0,
@@ -9285,9 +9825,9 @@
         0.0
       ],
       "half_size_m": [
-        0.012,
-        0.027999999999999997,
-        0.012
+        0.006,
+        0.055,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9299,13 +9839,13 @@
       "mesh_id": -1
     },
     {
-      "name": "hex_o_009_rf_coxa_link_collision",
-      "body": 11,
-      "type": 6,
+      "name": "hex_o_008_lr_tibia_foot",
+      "body": 10,
+      "type": 2,
       "position": [
         0.0,
         0.0,
-        0.0
+        -0.11
       ],
       "quaternion_wxyz": [
         1.0,
@@ -9314,9 +9854,38 @@
         0.0
       ],
       "half_size_m": [
+        0.008,
+        0.0,
+        0.0
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.15000000596046448,
+        0.15000000596046448,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "hex_o_009_rf_coxa_link_collision",
+      "body": 11,
+      "type": 3,
+      "position": [
+        0.0,
+        -0.0165,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.7071067811865475,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
         0.012,
-        0.027999999999999997,
-        0.012
+        0.0165,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9330,22 +9899,22 @@
     {
       "name": "hex_o_010_rf_femur_link_collision",
       "body": 12,
-      "type": 6,
+      "type": 3,
       "position": [
         0.0,
-        0.0,
+        -0.045,
         0.0
       ],
       "quaternion_wxyz": [
-        1.0,
-        0.0,
+        0.7071067811865476,
+        -0.7071067811865475,
         0.0,
         0.0
       ],
       "half_size_m": [
-        0.012,
-        0.027999999999999997,
-        0.012
+        0.01,
+        0.045,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9359,11 +9928,11 @@
     {
       "name": "hex_o_011_rf_tibia_link_collision",
       "body": 13,
-      "type": 6,
+      "type": 3,
       "position": [
         0.0,
         0.0,
-        0.0
+        -0.055
       ],
       "quaternion_wxyz": [
         1.0,
@@ -9372,9 +9941,9 @@
         0.0
       ],
       "half_size_m": [
-        0.012,
-        0.027999999999999997,
-        0.012
+        0.006,
+        0.055,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9386,13 +9955,13 @@
       "mesh_id": -1
     },
     {
-      "name": "hex_o_012_rm_coxa_link_collision",
-      "body": 14,
-      "type": 6,
+      "name": "hex_o_011_rf_tibia_foot",
+      "body": 13,
+      "type": 2,
       "position": [
         0.0,
         0.0,
-        0.0
+        -0.11
       ],
       "quaternion_wxyz": [
         1.0,
@@ -9401,9 +9970,38 @@
         0.0
       ],
       "half_size_m": [
+        0.008,
+        0.0,
+        0.0
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.15000000596046448,
+        0.15000000596046448,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "hex_o_012_rm_coxa_link_collision",
+      "body": 14,
+      "type": 3,
+      "position": [
+        0.0,
+        -0.0165,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.7071067811865475,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
         0.012,
-        0.027999999999999997,
-        0.012
+        0.0165,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9417,22 +10015,22 @@
     {
       "name": "hex_o_013_rm_femur_link_collision",
       "body": 15,
-      "type": 6,
+      "type": 3,
       "position": [
         0.0,
-        0.0,
+        -0.045,
         0.0
       ],
       "quaternion_wxyz": [
-        1.0,
-        0.0,
+        0.7071067811865476,
+        -0.7071067811865475,
         0.0,
         0.0
       ],
       "half_size_m": [
-        0.012,
-        0.027999999999999997,
-        0.012
+        0.01,
+        0.045,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9446,11 +10044,11 @@
     {
       "name": "hex_o_014_rm_tibia_link_collision",
       "body": 16,
-      "type": 6,
+      "type": 3,
       "position": [
         0.0,
         0.0,
-        0.0
+        -0.055
       ],
       "quaternion_wxyz": [
         1.0,
@@ -9459,9 +10057,9 @@
         0.0
       ],
       "half_size_m": [
-        0.012,
-        0.027999999999999997,
-        0.012
+        0.006,
+        0.055,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9473,13 +10071,13 @@
       "mesh_id": -1
     },
     {
-      "name": "hex_o_015_rr_coxa_link_collision",
-      "body": 17,
-      "type": 6,
+      "name": "hex_o_014_rm_tibia_foot",
+      "body": 16,
+      "type": 2,
       "position": [
         0.0,
         0.0,
-        0.0
+        -0.11
       ],
       "quaternion_wxyz": [
         1.0,
@@ -9488,9 +10086,38 @@
         0.0
       ],
       "half_size_m": [
+        0.008,
+        0.0,
+        0.0
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.15000000596046448,
+        0.15000000596046448,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
+    },
+    {
+      "name": "hex_o_015_rr_coxa_link_collision",
+      "body": 17,
+      "type": 3,
+      "position": [
+        0.0,
+        -0.0165,
+        0.0
+      ],
+      "quaternion_wxyz": [
+        0.7071067811865476,
+        -0.7071067811865475,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
         0.012,
-        0.027999999999999997,
-        0.012
+        0.0165,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9504,22 +10131,22 @@
     {
       "name": "hex_o_016_rr_femur_link_collision",
       "body": 18,
-      "type": 6,
+      "type": 3,
       "position": [
         0.0,
-        0.0,
+        -0.045,
         0.0
       ],
       "quaternion_wxyz": [
-        1.0,
-        0.0,
+        0.7071067811865476,
+        -0.7071067811865475,
         0.0,
         0.0
       ],
       "half_size_m": [
-        0.012,
-        0.027999999999999997,
-        0.012
+        0.01,
+        0.045,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9533,11 +10160,11 @@
     {
       "name": "hex_o_017_rr_tibia_link_collision",
       "body": 19,
-      "type": 6,
+      "type": 3,
       "position": [
         0.0,
         0.0,
-        0.0
+        -0.055
       ],
       "quaternion_wxyz": [
         1.0,
@@ -9546,9 +10173,9 @@
         0.0
       ],
       "half_size_m": [
-        0.012,
-        0.027999999999999997,
-        0.012
+        0.006,
+        0.055,
+        0.0
       ],
       "rgba": [
         0.4000000059604645,
@@ -9558,10 +10185,39 @@
       ],
       "collision": true,
       "mesh_id": -1
+    },
+    {
+      "name": "hex_o_017_rr_tibia_foot",
+      "body": 19,
+      "type": 2,
+      "position": [
+        0.0,
+        0.0,
+        -0.11
+      ],
+      "quaternion_wxyz": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "half_size_m": [
+        0.008,
+        0.0,
+        0.0
+      ],
+      "rgba": [
+        0.15000000596046448,
+        0.15000000596046448,
+        0.15000000596046448,
+        1.0
+      ],
+      "collision": true,
+      "mesh_id": -1
     }
   ],
   "constraints": [],
-  "digest": "46ba54cb9858d63a64ed64ed99e33231fe002eb5d8263e0afe9723e31c91c835",
+  "digest": "f2d2c1573590cd0b4823d1375085ff18e087d3fd5faab251d6407a34a7ffb28c",
   "profile_assumptions": "sim/content/embodiments/legacy-native-v1.json",
   "profile_assumptions_sha256": "fa7bfbfe48e68fbcd425dbf624828672cb3221e75feb9dc54c92923b6c348144",
   "neural_targets": [

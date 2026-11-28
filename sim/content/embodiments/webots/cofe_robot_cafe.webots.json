@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "cofe_robot_cafe",
-  "model_digest": "0880c807b214dd9c475188097eaf34682cb9710c462e3c1bbf26faff51cd9f9b",
+  "model_digest": "dd41757e38ad523206950d4942470fdb4d759e8723dc309521b2ef3fc23098d4",
   "io_digest": "3e5a0f2a3ddf8e6c25b211e85bae46089e3bdbf487617096d493bd2ab07e230f",
   "targets": [
     {
@@ -2707,5 +2707,5 @@
     "scientific_status": "illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model"
   },
   "world_geometry_count": 92,
-  "digest": "59e7b62b76b1a274b706d2ade2690bb172f322f1791830cfcbd1b62db1b21526"
+  "digest": "1c7e5bea294d51155cef3e6cecd0803f082159c2dc4e7ceb10091a697dbbd6cb"
 }

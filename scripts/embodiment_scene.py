@@ -15,6 +15,12 @@ from sim_content import compile_catalog, primitive
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = 'native-habitats-v1'
 CROW_FIELD_M = 40.0
+# Energy needs (needs-v1): biomimetic bodies feed on the habitat's food,
+# machines recharge at a charging dock. The crow keeps its own energy channels;
+# fixed-base machines cannot reach a dock.
+NEEDS_VERSION = 'needs-v1'
+ANIMALS = ('celegans', 'drosophila_banc', 'drosophila_fafb', 'zebrafish', 'salamander_crawler')
+NO_NEEDS = ('crow_corvus_corone', 'cofe_robot_cafe', 'cofe_smart_bar', 'xbot_ic60', 'xbot_s_pro', 'botinkit_omni')
 
 
 def geom_kind(root, geom):
@@ -30,10 +36,15 @@ def description(profile):
         habitat = copy.deepcopy(next(h for h in catalogue['habitats'] if h['id'] == original['habitat']))
         scale = {'celegans': .65, 'drosophila_banc': .55, 'drosophila_fafb': .55, 'zebrafish': .375, 'hexapod': 1.3, 'nao': 1.5}[profile]
     else:
-        kind = 'orchard' if profile == 'crow_corvus_corone' else 'terrain' if profile.startswith('ugot_') else 'room'
+        # The salamander crawler forages on the fly's orchard floor (fallen
+        # fruit is its food source), at the walkers' 1.3 scale.
+        salamander = profile == 'salamander_crawler'
+        kind = 'orchard' if profile == 'crow_corvus_corone' or salamander else 'terrain' if profile.startswith('ugot_') else 'room'
         habitat = copy.deepcopy(next(h for h in catalogue['habitats'] if h['id'] == kind))
-        scale = 2.8 if profile == 'crow_corvus_corone' else 1.3 if profile.startswith('ugot_') else 3.0
-        if profile == 'crow_corvus_corone':
+        scale = 2.8 if profile == 'crow_corvus_corone' else 1.3 if profile.startswith('ugot_') or salamander else 3.0
+        if salamander:
+            pass
+        elif profile == 'crow_corvus_corone':
             habitat.update(id='woodland', title='Carrion crow woodland edge', cues=['visible food', 'water', 'branches and perches', 'optic-flow landmarks', 'light and shade'])
             habitat['objects'] = [o for o in habitat['objects'] if not o['id'].startswith(('fruit_', 'fruit_bruise_', 'stem_', 'leaf_'))]
             for i, (x,y,z) in enumerate([(.42,.22,.12),(-.35,.28,.24),(.25,-.42,.18)]):
@@ -49,6 +60,22 @@ def description(profile):
                 # in the room's corners that explorers drove out through.
                 if o['collision'] and o['id'] != 'substrate' and not o['id'].startswith('rim_'):
                     o['position'][0] += .25 if o['position'][0] >= 0 else -.25
+    if profile not in ANIMALS and profile not in NO_NEEDS:
+        # Charging dock: a floor pad (no collision, so the body can drive or
+        # walk onto it) at the free floor point with the most clearance from
+        # every solid object's edge (and from the rims), away from the spawn
+        # point at the centre. The first placement measured from object
+        # centres and picked a corner 0.30 m from the hexapod's slalom post,
+        # where the robot wedged beside the dock for 800 s (25 Nov).
+        solid = [o for o in habitat['objects'] if o['collision'] and o['id'] != 'substrate' and not o['id'].startswith('rim_')]
+        def clearance(c):
+            edge = min((math.hypot(c[0]-o['position'][0], c[1]-o['position'][1]) - .5 * max(o['size'][:2])
+                        for o in solid), default=1.0)
+            return min(edge, .9 - max(abs(c[0]), abs(c[1])))
+        grid = [(i / 20, j / 20) for i in range(-16, 17) for j in range(-16, 17) if math.hypot(i / 20, j / 20) >= .45]
+        x, y = max(grid, key=lambda c: (round(clearance(c), 3), -abs(c[0]) - abs(c[1])))
+        habitat['objects'].append(primitive('charging_dock', 'box', [x, y, .004], [.14, .14, .008], [.12, .55, .9],
+                                            collision=False, material='plastic', cue='beacon', radius=.3, strength=1.))
     objects = []
     if profile=='celegans':
         for i,(x,y) in enumerate([(.37,0),(.39,.10),(-.37,-.06),(.06,.17)]):
@@ -103,6 +130,8 @@ def description(profile):
                  half_extent_m=CROW_FIELD_M if profile=='crow_corvus_corone' else scale,
                  catalogue_digest=catalogue['digest'], substrate=habitat['substrate'], cues=habitat['cues'], objects=objects,
                  scientific_status='illustrative ecological scenery and ideal sensory proxies; no measured chemistry, nutrition, temperature or fluid model')
+    if profile not in NO_NEEDS:
+        scene['needs'] = needs_block(profile, objects, scene['half_extent_m'])
     if profile == 'celegans':
         scene.update(celegans_stimuli(objects))
         scene['version'] = CELEGANS_VERSION
@@ -112,6 +141,57 @@ def description(profile):
 
 
 CELEGANS_VERSION = 'celegans-habitat-v3'
+
+
+def needs_block(profile, objects, half):
+    """Energy needs of a body (scene record, read by every engine).
+
+    Engineering proxy, not calibrated metabolism or battery models:
+    - store = 1 W/kg x total mass x 240 s;
+    - drain = basal x (1 + effort), effort = mechanical power / (2 W/kg x mass), at most 1;
+    - refill from empty in 20 s at a source, only below full.
+    Food items (animals) or the charging dock (machines) are consumed within
+    a tenth of the habitat's half extent of the body's root, and sensed
+    through a Gaussian odour / beacon field of 0.35 half extents. For the
+    first 600 s a caretaker presents food or plugs the robot in whenever the
+    reserve is below 40 %.
+    """
+    animal = profile in ANIMALS
+    if animal:
+        sources = [o for o in objects if o.get('cue') == 'chemical' or o['id'].startswith(('prey_', 'fruit_', 'food_'))]
+    else:
+        sources = [o for o in objects if o['id'] == 'charging_dock']
+    reach = .1 * half
+    return dict(version=NEEDS_VERSION, resource='food' if animal else 'power',
+                basal_w_per_kg=1.0, endurance_s=240.0, effort_ref_w_per_kg=2.0, refill_s=20.0, start_fraction=1.0,
+                sources=[dict(id=o['id'], position_m=[round(v, 6) for v in o['position']],
+                              radius_m=round(reach + .5 * max(o['size'][:2]), 6), field_radius_m=round(.35 * half, 6))
+                         for o in sources],
+                caretaker=dict(until_s=600.0, threshold=.4, feed_s=20.0),
+                scientific_status='engineering proxy: energy store, drain and refill are not calibrated metabolism or battery '
+                                  'models; early-life caretaker presents food or docks the body')
+
+
+def needs_sensors(profile, half):
+    """Optional sensor group `needs`: the energy reserve (interoception /
+    battery state of charge), refill (taste of food / charge current) and a
+    left/right cue pair (odour receptors or dock-beacon receivers aimed
+    45 degrees outward). Networks built without them bind without them."""
+    if profile in NO_NEEDS:
+        return []
+    resource = 'food' if profile in ANIMALS else 'power'
+    body = 'segment_23' if profile == 'celegans' else None   # the worm's head
+    off = .03 * half
+    common = dict(units='normalised', range=[0, 1], rate_hz=500, missing='fault-disarm', group='needs')
+    out = [dict(name='needs_energy', kind='needs-energy', mode=resource, **common),
+           dict(name='needs_consume', kind='needs-consume', mode=resource, **common)]
+    for side, sign in (('left', 1), ('right', -1)):
+        cue = dict(name=f'needs_cue_{side}', kind='needs-cue', mode=resource, position_m=[off, sign * off, 0.],
+                   direction=[.7071, sign * .7071, 0.], **common)
+        if body:
+            cue['body'] = body
+        out.append(cue)
+    return out
 
 
 def celegans_stimuli(objects):

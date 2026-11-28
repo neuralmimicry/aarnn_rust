@@ -10,6 +10,7 @@ fail closed rather than being assigned to arbitrary joints. No old brain is
 loaded, edited or resized by this compiler.
 """
 import json
+import math
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 LEGACY=('celegans','drosophila_banc','drosophila_fafb','hexapod','nao','zebrafish')
@@ -62,6 +63,130 @@ FLY_WING=dict(root=(0.,.02,.012),hub=.006,span=.06,chord=.025,thickness=.0004,bl
 # (+0.2 rad back: 7e-4 N m nose-down), a differential one yaws (2.6e-3 N m/rad).
 FLY_FLIGHT=dict(wingbeat_hz=40.,drive_stiffness=.03,torque_limit=.2,amplitude_max=1.2,centre_max=.4,fold=1.45,
                 recruitment=[.2,.5],hinge_angle=.5,hinge_rate=50.,hinge_lead=.5,hinge_stiffness=2e-3,panel_span=.7)
+
+
+# Drosophila anatomy v4 ("looks like a fly"): proportions from the flybody
+# model of D. melanogaster (TuragaLab/flybody, Apache-2.0; a CT-based adult
+# female in cm) at this body's 50x scale (the thorax is ~25 x 18 mm half-
+# axes, the real ~0.5 x 0.36 mm). The thorax's 3 g is split into a head
+# (0.6 g) and abdomen (0.5 g) whose moments about the thorax centre cancel,
+# so the total mass and centre of mass the flight motor was calibrated with
+# are kept (v3 hung both as massless decoration). The eyes are on the head.
+# Legs: attachment on the ventral pro-/meso-/metathorax and segment lengths
+# (coxa, femur incl. trochanter, tibia, tarsus) per pair; forelegs point
+# forward, hindlegs back (v3: six identical 22 mm-link legs splayed straight
+# out). Each segment is a capsule from its joint to the next; the coxa
+# yaws (protraction/retraction) and the distal joints flex in the leg's
+# plane. Link masses stay at v3's 0.3 g (lighter legs let the unchanged
+# walking circuit flip the body, delivery record 23 Nov).
+FLY_THORAX=dict(size=[.025,.018,.014],mass=.0019,spawn=.1)
+FLY_HEAD=dict(pos=[.0225,0,.0034],size=[.0105,.0109,.0101],mass=.0006)
+FLY_ABDOMEN=dict(pos=[-.027,0,-.00075],size=[.0199,.0113,.0101],mass=.0005)
+FLY_LEGS={'f':dict(attach=(.0159,.0105,-.0136),yaw=.7,lengths=(.0219,.0349,.0255,.0250)),
+          'm':dict(attach=(-.0072,.0121,-.0213),yaw=.09,lengths=(.0141,.0415,.0334,.0310)),
+          'r':dict(attach=(-.0189,.0096,-.0201),yaw=-.7,lengths=(.0122,.0390,.0358,.0325))}
+# Real leg proportions (above) are built only with FLY_REAL_LEGS (flight retune pending).
+FLY_REAL_LEGS=False
+FLY_LEG_PITCH=(-.96,.26,-1.05,-.44)   # coxa down, femur raised, tibia down, tarsus to the ground
+FLY_LEG_RADIUS=(.0032,.0028,.0021,.0014)
+# Compound eyes on the head's sides (catalogue eye centres, head frame).
+FLY_EYES=[(.0023,.0094,.0019),(.0023,-.0094,.0019)]
+
+
+def fly_body(part,element,world):
+    t=FLY_THORAX
+    base=part(world,'thorax',[0,0,t['spawn']],t['size'],t['mass']);element(base,'freejoint',name='root')
+    for name,spec in (('head',FLY_HEAD),('abdomen',FLY_ABDOMEN)):
+        body=element(base,'body',name=name,pos=spec['pos'])
+        element(body,'geom',name=name+'_collision',type='ellipsoid',size=spec['size'],mass=spec['mass'],rgba=[.45,.27,.11,1])
+    if not FLY_REAL_LEGS:
+        # v3 legs (identical, splayed sideways): the flight motor and its
+        # control laws are calibrated with them. Real proportions lost
+        # attitude in the flight proof (24 Nov: 2 s with v3 masses; 1.5-9 s
+        # with 0.05 g links, ideal controller included), so they wait for a
+        # flight retune.
+        for side,sign in [('l',1),('r',-1)]:
+            for row,x in [('f',.7),('m',0),('r',-.7)]:
+                parent=base
+                for i,kind in enumerate(('coxa','femur','tibia','tarsus')):
+                    name=f'{side}{row}_{kind}';scale=.03
+                    parent=part(parent,name+'_link',[x*t['size'][0],sign*t['size'][1],0] if i==0 else [0,sign*scale*.65,-scale*.35],
+                                [scale*.15,scale*.35,scale*.15],FLY_LEG_LINK_MASS,name,axis=[0,0,1] if i==0 else [1,0,0])
+        return base
+    for side,sign in [('l',1),('r',-1)]:
+        for row in 'fmr':
+            leg=FLY_LEGS[row];parent=base
+            pos=[leg['attach'][0],sign*leg['attach'][1],leg['attach'][2]]
+            for i,kind in enumerate(('coxa','femur','tibia','tarsus')):
+                name=f'{side}{row}_{kind}';length=leg['lengths'][i];pitch=FLY_LEG_PITCH[i];radius=FLY_LEG_RADIUS[i]
+                body=part(parent,name+'_link',pos,[radius,length/1.4,radius],FLY_LEG_LINK_MASS,name,axis=[0,0,1] if i==0 else [1,0,0])
+                if i==0:
+                    yaw=-sign*leg['yaw'];body.set('quat',f'{math.cos(yaw/2):.6f} 0 0 {math.sin(yaw/2):.6f}')
+                end=[0.,round(sign*length*math.cos(pitch),6),round(length*math.sin(pitch),6)]
+                geom=body.find("geom[@name='"+name+"_link_collision']")
+                geom.set('fromto',' '.join(str(v) for v in [0,0,0]+end));geom.set('size',str(radius))
+                parent=body;pos=end
+    return base
+
+
+# Hexapod v3: the Freenove Big Hexapod Robot Kit for Raspberry Pi (FNK0052).
+# Facts from Freenove's open-source code and tutorial (CC BY-NC-SA 3.0; only
+# numbers are used here, no code): legs l1 33 mm (coxa), l2 90 mm (femur), l3
+# 110 mm (tibia); six coxa servos on the body perimeter at (x right, y
+# forward, mm) (55, 76), (85, 0), (55, -76) and mirrored, each leg radial
+# (54 deg from lateral for the corner legs); 18 standard metal-gear leg
+# servos (MG996R class: ~0.92 N m at 4.8-5 V, 0.17 s/60 deg, 55 g) and two
+# SG90 head servos; HC-SR04 ultrasonic and Raspberry Pi camera on the head;
+# MPU6050 on the shield; four 18650 cells; acrylic plates. Assembled mass ~2.2
+# kg (estimated from parts: listings give 2.66 kg packed). Servos span 0-180
+# deg about their 90 deg centre, the calibration pose (coxa radial, femur
+# horizontal, tibia vertical), which is the built pose here. v2 was a 0.88 kg
+# robot with 56 mm links splayed sideways and ~3.5 N m servos. The kit has
+# no foot switches and its hobby servos report no angle: the contract's
+# foot-contact and joint-angle channels are simulated proprioception.
+HEX_FREENOVE=True
+HEX_LINKS=(.033,.090,.110)
+HEX_MOUNTS={'f':(.076,.055,math.radians(36.)),'m':(0.,.085,math.radians(90.)),'r':(-.076,.055,math.radians(144.))}
+HEX_CHASSIS=dict(half=[.085,.07,.028],mass=1.1,spawn=.13)
+HEX_LINK_MASS=(.07,.075,.025)          # coxa (femur servo), femur (tibia servo), tibia (acrylic)
+HEX_SERVO=dict(effort=.92,speed=6.16,stall_rad=.15,range=1.5708)   # MG996R class, 0-180 deg
+HEX_HEAD=dict(sonar=(.105,.013,.06),camera=(.10,0.,.085))
+
+
+def freenove_hexapod_body(part,element,world,profile):
+    c=HEX_CHASSIS
+    base=part(world,'chassis',[0,0,c['spawn']],c['half'],c['mass']);element(base,'freejoint',name='root')
+    # Massless acrylic plates and head (illustration; group 2).
+    for z in (c['half'][2],-c['half'][2]):
+        element(base,'geom',name=f'hex_plate_{"top" if z>0 else "bottom"}',type='cylinder',pos=[0,0,z],size=[.11,.003],
+                rgba=[.08,.08,.09,1],mass=0,contype=0,conaffinity=0,group=2)
+    element(base,'geom',name='hex_head',type='box',pos=[HEX_HEAD['sonar'][0]-.012,0,HEX_HEAD['sonar'][2]],size=[.012,.024,.012],
+            rgba=[.1,.2,.45,1],mass=0,contype=0,conaffinity=0,group=2)
+    _,outputs=projection(profile)
+    for side,sign in [('l',1),('r',-1)]:
+        for row in 'fmr':
+            mx,my,yaw=HEX_MOUNTS[row]
+            # Leg frame: rotated so the leg points along sign*y, as v2's legs,
+            # so the joint axes and sign conventions of the contract are kept.
+            frame_yaw=sign*yaw-sign*math.pi/2
+            parent=base
+            for i,kind in enumerate(('coxa','femur','tibia')):
+                name=next(n for n in outputs if n.endswith(f'_{side}{row}_{kind}'))
+                if i==0:pos=[mx,sign*my,0]
+                elif i==1:pos=[0,sign*HEX_LINKS[0],0]
+                else:pos=[0,sign*HEX_LINKS[1],0]
+                body=part(parent,name+'_link',pos,[.01,HEX_LINKS[i]/1.4,.01],HEX_LINK_MASS[i],name,axis=[0,0,1] if i==0 else [1,0,0],
+                          limits=(-HEX_SERVO['range'],HEX_SERVO['range']))
+                if i==0:body.set('quat',f'{math.cos(frame_yaw/2):.6f} 0 0 {math.sin(frame_yaw/2):.6f}')
+                geom=body.find("geom[@name='"+name+"_link_collision']")
+                end=[0,sign*HEX_LINKS[i],0] if i<2 else [0,0,-HEX_LINKS[2]]
+                geom.set('type','capsule');geom.set('fromto',' '.join(str(round(v,6)) for v in [0,0,0]+end))
+                geom.set('size',str([.012,.010,.006][i]))
+                if i==2:
+                    element(body,'geom',name=name+'_foot',type='sphere',pos=[0,0,-HEX_LINKS[2]],size=[.008],mass=0,
+                            rgba=[.15,.15,.15,1],friction=[1.,.01,.001])
+                parent=body
+    return base
 
 
 def fly_wings(element,base):
@@ -325,9 +450,14 @@ def build(profile,element,base_world):
         base=nao_body(element,world,actuators)
         # The two HipYawPitch joints are one physical motor on the robot.
         element(element(root,'equality'),'joint',joint1='LHipYawPitch',joint2='RHipYawPitch',polycoef=[0,1,0,0,0])
+    elif profile.startswith('drosophila'):
+        base=fly_body(part,element,world)
+        fly_wings(element,base)
+    elif profile=='hexapod' and HEX_FREENOVE:
+        base=freenove_hexapod_body(part,element,world,profile)
     else:
-        fly=profile.startswith('drosophila');size=[.025,.018,.014] if fly else [.135,.085,.018]
-        base=part(world,'thorax' if fly else 'chassis',[0,0,.09 if fly else .19],size,.003 if fly else .25);element(base,'freejoint',name='root')
+        fly=False;size=[.135,.085,.018]
+        base=part(world,'chassis',[0,0,.19],size,.25);element(base,'freejoint',name='root')
         for side,sign in [('l',1),('r',-1)]:
             for row,x in [('f',.7),('m',0),('r',-.7)]:
                 parent=base
@@ -388,7 +518,14 @@ def celegans_sensors():
             out.append(s);continue
         if i in CELEGANS_FIELDS:s.update(mode=CELEGANS_FIELDS[i])
         if i<6:s.update(axis=i%3)
-        elif i<8:s.update(body='segment_23' if i==6 else 'segment_00')
+        elif i<8:
+            # Gentle-touch receptive fields (v3): the anterior touch cells
+            # (ALM, AVM) cover the front half of the body, PLM the back half
+            # (v2 sensed only the nose and tail-tip segments). `body` keeps
+            # the extreme segment for engines that read one body.
+            front=i==6
+            s.update(body='segment_23' if front else 'segment_00',
+                     bodies=[f'segment_{k:02}' for k in (range(12,24) if front else range(0,12))])
         elif i<21:
             # Field samplers sit on the sensilla of the neurons they drive:
             # amphids at the nose (light, heat, taste, odour, O2) and

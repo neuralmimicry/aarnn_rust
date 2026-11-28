@@ -3,7 +3,7 @@
   "compiler": "embodiment-rigid-graph-v2",
   "digest_encoding": "embodiment-binary-v1",
   "profile_id": "ugot_balance",
-  "model_digest": "616cbad09652ce7125413785a4e505a57742f988798578e14c41ed2b8da7fe00",
+  "model_digest": "dfba8865ceabe9088d76a49c21623b032923b8f7f8102377d6138fc69fc02e11",
   "io_digest": "1f9326e45cc89adabacf44a9bb6c271610f443570f00c79827fe3e19f20d345f",
   "fidelity": "functional-surrogate",
   "variant_id": "original-v1",
@@ -11925,5 +11925,5 @@
   },
   "collision_exclusions": [],
   "collision_filter_scope": "source masks aggregated per rigid cluster; joint-neighbour exclusions native; different instances retain external contact",
-  "digest": "52e7ec87178bbe1f749b78902422a93db3526f9b77b146084627b0894734073f"
+  "digest": "fcda36b08dd979a8731c7a74a76140fbf67dfe9fa5608189ad59637d32547302"
 }

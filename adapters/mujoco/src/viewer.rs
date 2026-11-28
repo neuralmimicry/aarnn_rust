@@ -63,6 +63,28 @@ impl Glfw {
         }
     }
 }
+/// One line of an overlay figure: legend name, colour and (x, y) points.
+pub struct FigureLine {
+    pub name: String,
+    pub rgb: [f32; 3],
+    pub points: Vec<[f32; 2]>,
+}
+/// A 2D figure drawn over the scene (MuJoCo `mjr_figure`). `rect` is
+/// `[left, bottom, width, height]` as fractions of the framebuffer.
+pub struct FigureSpec {
+    pub title: String,
+    pub rect: [f32; 4],
+    pub x_range: [f32; 2],
+    pub y_range: [f32; 2],
+    pub lines: Vec<FigureLine>,
+}
+/// Text drawn over the scene (MuJoCo `mjr_overlay`): grid position (0 top
+/// left, 1 top right, 2 bottom left, 3 bottom right), left and right columns.
+pub struct OverlayText {
+    pub gridpos: i32,
+    pub left: String,
+    pub right: String,
+}
 pub struct Viewer {
     glfw: Glfw,
     window: Window,
@@ -85,6 +107,164 @@ impl Viewer {
         habitat_extent: Option<f64>,
         close_view: bool,
     ) -> Result<Self, String> {
+        Self::open(physics, title, habitat_extent, close_view, (1100, 760))
+    }
+    /// A window of an exact size for offscreen-style frame capture (trace
+    /// replay videos on a virtual display).
+    pub fn new_sized(
+        physics: &Physics,
+        title: &str,
+        width: i32,
+        height: i32,
+    ) -> Result<Self, String> {
+        if !(16..=4096).contains(&width) || !(16..=4096).contains(&height) {
+            return Err("replay frame size".into());
+        }
+        Self::open(physics, title, None, true, (width, height))
+    }
+    /// Place the camera (look-at point, distance, azimuth and elevation in degrees).
+    pub fn set_camera(&mut self, lookat: [f64; 3], distance: f64, azimuth: f64, elevation: f64) {
+        self.camera.lookat = lookat;
+        self.camera.distance = distance;
+        self.camera.azimuth = azimuth;
+        self.camera.elevation = elevation;
+    }
+    /// Render one frame with text and figure overlays and return its RGB
+    /// pixels, top row first, with the framebuffer size.
+    pub fn capture(
+        &mut self,
+        physics: &mut Physics,
+        texts: &[OverlayText],
+        figures: &[FigureSpec],
+    ) -> Result<(usize, usize, Vec<u8>), String> {
+        let texts = texts
+            .iter()
+            .map(|t| {
+                Ok((
+                    t.gridpos,
+                    CString::new(t.left.as_str()).map_err(|_| "overlay text")?,
+                    CString::new(t.right.as_str()).map_err(|_| "overlay text")?,
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        // SAFETY: live matching model/data and rendering allocations; the GLFW
+        // context is made current before any OpenGL call. The figure is a
+        // heap allocation initialised by mjv_defaultFigure; line counts are
+        // bounded by mjMAXLINE / mjMAXLINEPNT before writing.
+        unsafe {
+            (self.glfw.current)(self.window);
+            let mut width = 0;
+            let mut height = 0;
+            (self.glfw.size)(self.window, &mut width, &mut height);
+            if width <= 0 || height <= 0 || width > 8192 || height > 8192 {
+                return Err("replay framebuffer size".into());
+            }
+            let viewport = ffi::mjrRect {
+                left: 0,
+                bottom: 0,
+                width,
+                height,
+            };
+            ffi::mjv_updateScene(
+                physics.model.as_ptr(),
+                physics.data.as_ptr(),
+                &self.options,
+                std::ptr::null(),
+                &mut self.camera,
+                ffi::mjtCatBit__mjCAT_ALL as i32,
+                &mut *self.scene,
+            );
+            ffi::mjr_render(viewport, &mut *self.scene, &*self.context);
+            for spec in figures {
+                let mut figure: Box<ffi::mjvFigure> = Box::new(std::mem::zeroed());
+                ffi::mjv_defaultFigure(&mut *figure);
+                figure.flg_legend = 1;
+                figure.flg_ticklabel = [1, 1];
+                figure.flg_extend = 0;
+                figure.linewidth = 2.0;
+                // MuJoCo rounds the y-range outward to the order of magnitude
+                // of its span (0.8-2.2 -> 0-3, -20-120 -> -100-200): callers
+                // choose ranges whose ends are multiples of that magnitude.
+                figure.gridsize = [5, 7];
+                // Tick labels: integers, or one decimal on a small y-range (the
+                // default %g turns 200 into 2e+02; %.0f repeats on 0-2.5).
+                let fmt = |small: bool| {
+                    let f = if small { b"%.1f\0" } else { b"%.0f\0" };
+                    let mut out = [0 as c_char; 5];
+                    for (o, b) in out.iter_mut().zip(f) {
+                        *o = *b as c_char;
+                    }
+                    out
+                };
+                figure.xformat[..5].copy_from_slice(&fmt(false));
+                figure.yformat[..5]
+                    .copy_from_slice(&fmt((spec.y_range[1] - spec.y_range[0]).abs() <= 5.));
+                figure.figurergba = [0.08, 0.08, 0.08, 0.75];
+                figure.panergba = [0.12, 0.12, 0.12, 0.85];
+                figure.legendrgba = [0.0, 0.0, 0.0, 0.25];
+                figure.range = [spec.x_range, spec.y_range];
+                let copy = |dst: &mut [c_char], src: &str| {
+                    let room = dst.len() - 1;
+                    for (d, b) in dst
+                        .iter_mut()
+                        .zip(src.bytes().take(room).chain(std::iter::once(0)))
+                    {
+                        *d = b as c_char;
+                    }
+                };
+                copy(&mut figure.title, &spec.title);
+                for (k, line) in spec.lines.iter().take(figure.linepnt.len()).enumerate() {
+                    copy(&mut figure.linename[k], &line.name);
+                    figure.linergb[k] = line.rgb;
+                    let max_points = figure.linedata[k].len() / 2;
+                    let points = &line.points[line.points.len().saturating_sub(max_points)..];
+                    for (j, p) in points.iter().enumerate() {
+                        figure.linedata[k][2 * j] = p[0];
+                        figure.linedata[k][2 * j + 1] = p[1];
+                    }
+                    figure.linepnt[k] = points.len() as c_int;
+                }
+                let rect = ffi::mjrRect {
+                    left: (spec.rect[0] * width as f32) as c_int,
+                    bottom: (spec.rect[1] * height as f32) as c_int,
+                    width: (spec.rect[2] * width as f32) as c_int,
+                    height: (spec.rect[3] * height as f32) as c_int,
+                };
+                ffi::mjr_figure(rect, &mut *figure, &*self.context);
+            }
+            for (gridpos, left, right) in &texts {
+                ffi::mjr_overlay(
+                    ffi::mjtFont__mjFONT_SHADOW as c_int,
+                    *gridpos,
+                    viewport,
+                    left.as_ptr(),
+                    right.as_ptr(),
+                    &*self.context,
+                );
+            }
+            let mut rgb = vec![0u8; width as usize * height as usize * 3];
+            ffi::mjr_readPixels(
+                rgb.as_mut_ptr(),
+                std::ptr::null_mut(),
+                viewport,
+                &*self.context,
+            );
+            let row = width as usize * 3;
+            let mut flipped = Vec::with_capacity(rgb.len());
+            for line in rgb.chunks_exact(row).rev() {
+                flipped.extend_from_slice(line);
+            }
+            (self.glfw.swap)(self.window);
+            Ok((width as usize, height as usize, flipped))
+        }
+    }
+    fn open(
+        physics: &Physics,
+        title: &str,
+        habitat_extent: Option<f64>,
+        close_view: bool,
+        size: (i32, i32),
+    ) -> Result<Self, String> {
         let title = CString::new(title).map_err(|_| "window title")?;
         let glfw = Glfw::load()?;
         // SAFETY: called only on the main thread. All native storage is
@@ -96,8 +276,8 @@ impl Viewer {
                 );
             }
             let window = (glfw.create)(
-                1100,
-                760,
+                size.0,
+                size.1,
                 title.as_ptr(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),

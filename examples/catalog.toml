@@ -45,3 +45,10 @@ title = "Cross-process durable failover and fenced rejoin"
 scenario = "qa/scenarios/EX-012.toml"
 products = ["host", "server", "orchestrator"]
 oracle = "warm-boundary-and-fencing"
+
+[[example]]
+id = "EX-EXPLORER-001"
+title = "Connectome explorer: GNAT analysis, isolated lesions, function-preserving reduction and executable export"
+scenario = "qa/scenarios/EX-EXPLORER-001.toml"
+products = ["host"]
+oracle = "explorer-demo-report"

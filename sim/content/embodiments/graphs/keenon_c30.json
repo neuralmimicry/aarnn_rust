@@ -3,7 +3,7 @@
   "compiler": "embodiment-rigid-graph-v2",
   "digest_encoding": "embodiment-binary-v1",
   "profile_id": "keenon_c30",
-  "model_digest": "25ce7d78620fb1f33ab7e783330c777687c180b38e783b11bd17bf50007530db",
+  "model_digest": "6c286649d6304c553dcdf9041c9b4df00f43aad93c2b1a8697eadfcb922eedf5",
   "io_digest": "98aba52a647f34f705a07994bf75bc45871481d5aef0380333b4fa136d22b5ba",
   "fidelity": "functional-surrogate",
   "variant_id": "original-v1",
@@ -12967,5 +12967,5 @@
   },
   "collision_exclusions": [],
   "collision_filter_scope": "source masks aggregated per rigid cluster; joint-neighbour exclusions native; different instances retain external contact",
-  "digest": "095b5c1891b40cb09559f3967f751cfef3edf9e19795080714a43a854389db3e"
+  "digest": "5733a0eeae26ea59bf3bbcd05f7a97dd63f60d2be8c3446b750503797ed3ce6b"
 }

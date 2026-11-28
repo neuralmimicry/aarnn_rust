@@ -1584,6 +1584,34 @@ pub(crate) fn launch_ui(
     {
         native_options.renderer = eframe::Renderer::Wgpu;
     }
+    if std::env::var_os("NM_UI_RENDERER").is_none() {
+        // Without an explicit choice, use the OpenGL renderer when wgpu is
+        // likely to hurt the host: frame captures and replays (usually under
+        // Xvfb, where wgpu locked up the NVIDIA GPU and crashed the laptop on
+        // 23 Nov) or a GPU with too little free VRAM.
+        let capture = ui_hidden
+            || std::env::var_os("NM_UI_CAPTURE_TO").is_some()
+            || std::env::var_os("NM_UI_REPLAY_CAPTURE_DIR").is_some()
+            || std::env::var_os("NM_UI_REPLAY_INPUT").is_some();
+        let vram_free_mb = std::process::Command::new("nvidia-smi")
+            .args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|t| t.lines().next()?.trim().parse::<u64>().ok());
+        let low_vram = vram_free_mb.is_some_and(|mb| {
+            mb < crate::monitor::MonitorHeuristics::default().gpu_vram_free_min_mb
+        });
+        if capture || low_vram {
+            native_options.renderer = eframe::Renderer::Glow;
+            nm_log!(
+                "[ui.graphics] renderer=glow reason={} vram_free_mb={:?} (set NM_UI_RENDERER to override)",
+                if capture { "capture" } else { "low_vram" },
+                vram_free_mb
+            );
+        }
+    }
     if let Ok(renderer_name) = std::env::var("NM_UI_RENDERER") {
         if let Ok(renderer) = renderer_name.parse::<eframe::Renderer>() {
             native_options.renderer = renderer;
@@ -2078,6 +2106,8 @@ struct ClusterDisplayActivitySample {
     output_indices: Vec<u32>,
     /// Recent worker output history, oldest first, for the dashboard raster.
     output_history: Vec<(u64, Vec<u32>)>,
+    /// Worker's global neuromodulator state.
+    neuromod: Option<crate::aarnn::neuromodulation::NeuromodSample>,
 }
 
 #[cfg(feature = "ui")]
@@ -2189,7 +2219,12 @@ async fn poll_cluster_display_activity(
                 })
                 .collect::<Vec<_>>();
             sensory_history.reverse();
+            let neuromod = response
+                .neuromod
+                .as_ref()
+                .map(crate::distributed::neuromod_sample_from_proto);
             Some(ClusterDisplayActivitySample {
+                neuromod,
                 node_id,
                 owned_layers,
                 sim_step,
@@ -2997,6 +3032,9 @@ struct App {
     ga_pop_size: usize,
     ga_generations: usize,
     ga_sim_time_ms: f64,
+    /// Global neuromodulator samples for the dashboard graph (newest last).
+    neuromod_history: std::collections::VecDeque<crate::aarnn::neuromodulation::NeuromodSample>,
+    show_neuromod_graph: bool,
     ga_rx: Option<std::sync::mpsc::Receiver<GASearch>>,
     ga_paused: bool,
     ga_live_preview: bool,
@@ -5979,6 +6017,10 @@ impl App {
                                     snap.sim_step = r.t as u64;
                                     snap.sim_time_ms = r.t_ms;
                                     snap.dt_ms = r.lif.dt;
+                                    snap.neuromod = r.neuromod_sample;
+                                    snap.neuromod_recent.clear();
+                                    let skip = r.neuromod_history.len().saturating_sub(64);
+                                    snap.neuromod_recent.extend(r.neuromod_history.iter().skip(skip).copied());
                                     if snap.v_h.len() != r.v_h.len() {
                                         snap.v_h.resize_with(r.v_h.len(), Vec::new);
                                     }
@@ -6137,6 +6179,10 @@ impl App {
                                     snap.sim_step = r.t as u64;
                                     snap.sim_time_ms = r.t_ms;
                                     snap.dt_ms = r.lif.dt;
+                                    snap.neuromod = r.neuromod_sample;
+                                    snap.neuromod_recent.clear();
+                                    let skip = r.neuromod_history.len().saturating_sub(64);
+                                    snap.neuromod_recent.extend(r.neuromod_history.iter().skip(skip).copied());
                                     // Membrane potentials: copy as f32 for probe display.
                                     if snap.v_h.len() != r.v_h.len() {
                                         snap.v_h.resize_with(r.v_h.len(), Vec::new);
@@ -6519,6 +6565,8 @@ impl App {
             ga_pop_size: 20,
             ga_generations: 50,
             ga_sim_time_ms: 10000.0,
+            neuromod_history: std::collections::VecDeque::new(),
+            show_neuromod_graph: true,
             ga_rx: None,
             ga_paused: false,
             ga_live_preview: false,
@@ -10254,6 +10302,15 @@ impl App {
             let mut accepted_any = false;
             let mut active_count = 0usize;
             let mut accepted_samples = Vec::new();
+            if let Some(n) = poll
+                .samples
+                .iter()
+                .filter(|sample| sample.output_owner)
+                .chain(poll.samples.iter())
+                .find_map(|sample| sample.neuromod)
+            {
+                self.push_neuromod_sample(n);
+            }
             for sample in &poll.samples {
                 if let Some(previous_step) = self.cluster_activity_last_steps.get(&sample.node_id) {
                     if sample.sim_step == *previous_step {
@@ -11207,7 +11264,50 @@ impl App {
         true
     }
 
+    /// Append a neuromodulator sample when it is new (strictly later in sim time).
+    fn push_neuromod_sample(&mut self, sample: crate::aarnn::neuromodulation::NeuromodSample) {
+        if sample == crate::aarnn::neuromodulation::NeuromodSample::default() {
+            return;
+        }
+        if let Some(last) = self.neuromod_history.back() {
+            if sample.t_ms <= last.t_ms {
+                if sample.t_ms < last.t_ms {
+                    self.neuromod_history.clear();
+                } else {
+                    return;
+                }
+            }
+        }
+        self.neuromod_history.push_back(sample);
+        while self.neuromod_history.len() > 600 {
+            self.neuromod_history.pop_front();
+        }
+    }
+
+    /// Append every runner sample newer than the last one shown.
+    fn push_neuromod_history(
+        &mut self,
+        history: &std::collections::VecDeque<crate::aarnn::neuromodulation::NeuromodSample>,
+    ) {
+        let last_t = self
+            .neuromod_history
+            .back()
+            .map(|s| s.t_ms)
+            .unwrap_or(f64::NEG_INFINITY);
+        let fresh: Vec<_> = history
+            .iter()
+            .rev()
+            .take_while(|s| s.t_ms > last_t)
+            .copied()
+            .collect();
+        for sample in fresh.into_iter().rev() {
+            self.push_neuromod_sample(sample);
+        }
+    }
+
     fn sync_activity_from_runner(&mut self, runner: &Runner) {
+        self.push_neuromod_history(&runner.neuromod_history);
+        self.push_neuromod_sample(runner.neuromod_sample);
         let decay = 0.90f32;
         if !matches!(self.view_source, ViewSource::ClusterGlobal(_)) {
             let ns = runner.net.num_sensory_neurons.max(1);
@@ -12449,6 +12549,7 @@ mod topology_presentation_tests {
             hidden_indices: vec![vec![0], vec![2, 99]],
             output_indices: vec![0],
             output_history: vec![(17, vec![0])],
+            neuromod: None,
         };
         let mut sensory = vec![0.0; 2];
         let mut hidden = vec![vec![0.0; 3], vec![0.0; 3], vec![0.0; 3]];
@@ -12498,6 +12599,7 @@ mod topology_presentation_tests {
             hidden_indices: Vec::new(),
             output_indices: vec![2],
             output_history: vec![(10, vec![0]), (11, Vec::new()), (12, vec![2])],
+            neuromod: None,
         };
         let second_owner = ClusterDisplayActivitySample {
             node_id: "node-2".to_owned(),
@@ -12510,6 +12612,7 @@ mod topology_presentation_tests {
             hidden_indices: Vec::new(),
             output_indices: vec![3],
             output_history: vec![(11, vec![1]), (12, vec![3])],
+            neuromod: None,
         };
 
         let frames = cluster_activity_output_raster_frames([&first_owner, &second_owner], 4);
@@ -13098,6 +13201,156 @@ const SCOPE_SPIKE_HOLD_SAMPLES: u8 = 3;
 #[cfg(feature = "ui")]
 const SCOPE_SPIKE_RELEASE_STEP: f32 = 0.25;
 
+/// Dashboard graph of global neuromodulator levels (DA, 5-HT, NA, ACh on a
+/// 0..3 scale, baseline 1) against external stimuli (0..1) and synapse energy
+/// (chemical drive delivered across synapses per cell, normalised to the
+/// window maximum; mean axon/dendrite ATP is printed when morphology is present).
+#[cfg(feature = "ui")]
+fn draw_neuromod_graph(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    samples: &[crate::aarnn::neuromodulation::NeuromodSample],
+) {
+    painter.rect_filled(rect, 6.0, egui::Color32::from_gray(20));
+    painter.rect_stroke(
+        rect,
+        6.0,
+        egui::Stroke {
+            width: 1.0,
+            color: egui::Color32::from_gray(80),
+        },
+        egui::StrokeKind::Outside,
+    );
+    let latest = samples[samples.len() - 1];
+    painter.text(
+        rect.left_top() + egui::vec2(8.0, 4.0),
+        egui::Align2::LEFT_TOP,
+        format!("Neuromodulators (depth {})", latest.depth),
+        egui::FontId::proportional(12.0),
+        egui::Color32::WHITE,
+    );
+    let inner = egui::Rect::from_min_max(
+        rect.left_top() + egui::vec2(24.0, 34.0),
+        rect.right_bottom() - egui::vec2(8.0, 8.0),
+    );
+    let y_level = |v: f64| inner.bottom() - inner.height() * (v.clamp(0.0, 3.0) / 3.0) as f32;
+    let y_unit = |v: f64| inner.bottom() - inner.height() * v.clamp(0.0, 1.0) as f32;
+    for level in 0..=3 {
+        let y = y_level(level as f64);
+        painter.line_segment(
+            [egui::pos2(inner.left(), y), egui::pos2(inner.right(), y)],
+            egui::Stroke {
+                width: 1.0,
+                color: egui::Color32::from_gray(45),
+            },
+        );
+        painter.text(
+            egui::pos2(inner.left() - 4.0, y),
+            egui::Align2::RIGHT_CENTER,
+            level.to_string(),
+            egui::FontId::proportional(9.0),
+            egui::Color32::from_gray(140),
+        );
+    }
+    // Synapse energy = chemical drive delivered across synapses per cell
+    // (after modulation); mean axon/dendrite ATP is printed when known.
+    let e_max = samples
+        .iter()
+        .map(|s| s.synapse_drive)
+        .fold(0.0f64, f64::max);
+    let n = samples.len();
+    let x_at = |i: usize| {
+        if n > 1 {
+            egui::lerp(inner.left()..=inner.right(), i as f32 / (n - 1) as f32)
+        } else {
+            inner.right()
+        }
+    };
+    type Series = (
+        &'static str,
+        egui::Color32,
+        fn(&crate::aarnn::neuromodulation::NeuromodSample) -> f64,
+        u8,
+    );
+    let series: [Series; 6] = [
+        (
+            "DA",
+            egui::Color32::from_rgb(242, 193, 78),
+            |s| s.dopamine,
+            0,
+        ),
+        (
+            "5-HT",
+            egui::Color32::from_rgb(180, 142, 173),
+            |s| s.serotonin,
+            0,
+        ),
+        (
+            "NA",
+            egui::Color32::from_rgb(224, 108, 90),
+            |s| s.noradrenaline,
+            0,
+        ),
+        (
+            "ACh",
+            egui::Color32::from_rgb(95, 179, 179),
+            |s| s.acetylcholine,
+            0,
+        ),
+        (
+            "stimuli",
+            egui::Color32::from_rgb(156, 204, 101),
+            |s| s.stimuli,
+            1,
+        ),
+        (
+            "syn energy",
+            egui::Color32::from_gray(208),
+            |s| s.synapse_drive,
+            2,
+        ),
+    ];
+    let mut legend_x = rect.left() + 8.0;
+    for (label, color, value, scale) in series {
+        let points: Vec<egui::Pos2> = samples
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let v = value(s);
+                let y = match scale {
+                    0 => y_level(v),
+                    1 => y_unit(v),
+                    _ => y_unit(if e_max > 0.0 { v / e_max } else { 0.0 }),
+                };
+                egui::pos2(x_at(i), y)
+            })
+            .collect();
+        let width = if scale == 0 { 1.5 } else { 1.0 };
+        painter.add(egui::Shape::line(points, egui::Stroke { width, color }));
+        let galley =
+            painter.layout_no_wrap(label.to_owned(), egui::FontId::proportional(9.0), color);
+        let w = galley.size().x;
+        painter.galley(egui::pos2(legend_x, rect.top() + 20.0), galley, color);
+        legend_x += w + 8.0;
+    }
+    painter.text(
+        rect.right_top() + egui::vec2(-8.0, 4.0),
+        egui::Align2::RIGHT_TOP,
+        match latest.synapse_energy {
+            Some(atp) => format!(
+                "DA {:.2}  5-HT {:.2}  NA {:.2}  ATP {:.2}",
+                latest.dopamine, latest.serotonin, latest.noradrenaline, atp
+            ),
+            None => format!(
+                "DA {:.2}  5-HT {:.2}  NA {:.2}",
+                latest.dopamine, latest.serotonin, latest.noradrenaline
+            ),
+        },
+        egui::FontId::proportional(10.0),
+        egui::Color32::from_gray(190),
+    );
+}
+
 #[cfg(feature = "ui")]
 #[derive(Clone, Default)]
 struct UiSnapshot {
@@ -13134,6 +13387,11 @@ struct UiSnapshot {
     #[cfg(feature = "growth3d")]
     topo_early: Vec<crate::topology::EarlyCell3D>,
     display_contracts: BTreeMap<String, Arc<crate::morphology_contract::DisplaySnapshot>>,
+    /// Latest global neuromodulator sample of the runner.
+    neuromod: crate::aarnn::neuromodulation::NeuromodSample,
+    /// The runner's most recent samples (newest last), so the dashboard graph
+    /// keeps every sample even when the UI renders slower than they arrive.
+    neuromod_recent: Vec<crate::aarnn::neuromodulation::NeuromodSample>,
 }
 
 #[cfg(all(feature = "ui", feature = "growth3d"))]
@@ -18002,6 +18260,10 @@ impl eframe::App for App {
             // Probe oscilloscope update outside the guard scope.
             if let Some(sc) = snap_clone {
                 self.update_probes_from_ui_snapshot(&sc);
+                for sample in &sc.neuromod_recent {
+                    self.push_neuromod_sample(*sample);
+                }
+                self.push_neuromod_sample(sc.neuromod);
             }
         } else {
             self.pull_activity();
@@ -19388,7 +19650,7 @@ impl eframe::App for App {
                         }
                     });
                     if ui.add(egui::Slider::new(&mut net.aarnn_layer_depth, 0..=5).text("Algorithm Realism Depth"))
-                        .on_hover_text("0: Base, 1: Synaptic filters, 2: Adaptive thresholds, 3: Homeostasis/neuromod, 4+: Reserved for micro-detail").changed() {
+                        .on_hover_text("0: Instantaneous charge (no neuromodulation), 1: Synaptic filters, STP, neuromodulated transmission (global DA/5-HT/NA/ACh), 2: Adaptive thresholds, homeostasis, per-type receptors, presynaptic release modulation, 3: ATP fatigue, 4+: Reserved for micro-detail").changed() {
                             let _ = self.sim_tx.send(SimControl::ApplyConfig(net.clone()));
                         }
                     ui.add_space(4.0);
@@ -21798,6 +22060,8 @@ impl eframe::App for App {
                         ui.label(format!("Output connections: ({connection_status})"));
                     }
                     ui.separator();
+                    ui.checkbox(&mut self.show_neuromod_graph, "Neuromodulator graph")
+                        .on_hover_text("Global dopamine, serotonin, noradrenaline and acetylcholine against external stimuli and synapse energy (top right of the network view)");
                     ui.collapsing("Oscilloscope", |ui| {
                         ui.checkbox(&mut self.scope_paused, "Pause");
                         ui.horizontal(|ui|{
@@ -24304,6 +24568,11 @@ impl eframe::App for App {
             let mut tooltip_suppression_counter = self.tooltip_suppression_counter;
             let mut next_probe_id = self.next_probe_id;
             let mut probes_local = self.probes.clone();
+            let neuromod_local: Vec<crate::aarnn::neuromodulation::NeuromodSample> = if self.show_neuromod_graph {
+                self.neuromod_history.iter().copied().collect()
+            } else {
+                Vec::new()
+            };
             let mut selected_neuron_pick = self.selected_neuron_pick;
             let mut show_neuron_detail = self.show_neuron_detail;
             let mut smoothed_equalizer_values = self.smoothed_equalizer_values.clone();
@@ -26542,6 +26811,17 @@ impl eframe::App for App {
                     else if input_activity_stale { "No recent input steps" }
                     else { "No input spikes in current view" }, egui::FontId::proportional(10.0),
                     egui::Color32::from_gray(130));
+            }
+
+            if !neuromod_local.is_empty() {
+                draw_neuromod_graph(
+                    &painter,
+                    egui::Rect::from_min_size(
+                        egui::pos2(panel_rect.right() - 400.0 - margin, panel_rect.top() + margin),
+                        egui::vec2(400.0, 150.0),
+                    ),
+                    &neuromod_local,
+                );
             }
 
             // Oscilloscope window centered at bottom (multi-channel)

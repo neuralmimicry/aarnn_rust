@@ -6,6 +6,11 @@
 //! this module owns ordering, scaling and retinal history. No measured crow
 //! connectome or calibrated transducer adequacy is asserted.
 use crate::aer::Model;
+/// Value of an energy-needs channel (`needs-*`, optional group `needs`) on an
+/// engine without an energy model: a full reserve, no refill, no cue.
+pub fn neutral_needs(kind: &str) -> f64 {
+    if kind == "needs-energy" { 1. } else { 0. }
+}
 #[derive(Default)]
 pub struct Projection {
     retina: Vec<f64>,
@@ -23,7 +28,7 @@ impl Projection {
                     matches!(
                         s.kind.as_str(),
                         "angle" | "angular_velocity" | "body_gyro" | "range_ray"
-                    )
+                    ) || s.kind.starts_with("needs-")
                 }))
     }
     /// actuator (q radians/metres, dq per second) pairs, local gyro XYZ,
@@ -73,6 +78,7 @@ impl Projection {
                                     .filter(|i| *i < 8)
                                     .ok_or("range index")?]
                         }
+                        k if k.starts_with("needs-") => neutral_needs(k),
                         _ => return Err("unsupported measurement kind".into()),
                     };
                     Ok(norm(value, s.range))
@@ -136,8 +142,11 @@ mod tests {
         let mut raw = vec![0.; Projection::width(&m)];
         raw[11] = 3.;
         let s = p.measure(&m, &raw).unwrap();
-        assert_eq!(s.len(), 19);
+        // 19 core channels plus the optional energy-needs group, neutral on
+        // engines without an energy model (full reserve, no refill, no cue).
+        assert_eq!(s.len(), 23);
         assert_eq!(s[8], 1.);
+        assert_eq!(&s[19..], &[1., 0., 0., 0.]);
         let crow: Model = serde_json::from_slice(include_bytes!(
             "../../../sim/content/embodiments/generated/crow_corvus_corone.json"
         ))

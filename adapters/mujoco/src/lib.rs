@@ -12,4 +12,6 @@ pub mod native;
 #[cfg(feature = "native")]
 pub mod legacy;
 #[cfg(feature = "native")]
+pub mod npc_actor;
+#[cfg(feature = "native")]
 pub mod world;

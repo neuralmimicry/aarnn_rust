@@ -3,7 +3,7 @@
   "compiler": "embodiment-rigid-graph-v2",
   "digest_encoding": "embodiment-binary-v1",
   "profile_id": "xbot_s_pro",
-  "model_digest": "cbad7abeb8bc7bee5fad7afedacd46d069bbd0b2b815706a8150db7413dc1d67",
+  "model_digest": "970f19c417286f8041ff602c11cab3252f5c35064f14cb25aaa96f78ed335444",
   "io_digest": "7dacb487ee1c1ea6583b98c3a4400dcecf855d9a3250d2a8bee38629020e1fdb",
   "fidelity": "functional-surrogate",
   "variant_id": "lec_brochure",
@@ -14775,5 +14775,5 @@
   },
   "collision_exclusions": [],
   "collision_filter_scope": "source masks aggregated per rigid cluster; joint-neighbour exclusions native; different instances retain external contact",
-  "digest": "6867813ec62d72aa59aa1903c505ff8b72982d44966ef90f5543501707b2a288"
+  "digest": "48f05d031568ef30b6ea156eb229379fde6f0ac26de9f26e428c2991be25878c"
 }

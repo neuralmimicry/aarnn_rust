@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "profile_id": "celegans",
-  "model_digest": "bd9830fe7e7dff95673d8a9e859d0eb1cc685b861d0458a18b0c8819da056bf7",
-  "io_digest": "6e34cd92e33c31062202dadd3aff8095e0319c61db6a297c90fc686d56094361",
+  "model_digest": "dde6cefb2af5b6ed20809e7b8d702bee10e9af7c4c7d7d54f7fff7e17d32265e",
+  "io_digest": "b2d5061eb47ec0fd76e64112b0bd5ffa14a4c096985bf569082f99d396563324",
   "targets": [
     {
       "joint": "celegans_spine_02",
@@ -4377,5 +4377,5 @@
     }
   },
   "world_geometry_count": 171,
-  "digest": "38268329592749908ad200475379e9979acbe4781bd5ae77ff79561b49d3d23b"
+  "digest": "edebba32205becf45ff8306c5d7af06db907684d7ba26a0470ceeebeae89137c"
 }

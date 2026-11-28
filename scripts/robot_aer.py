@@ -29,6 +29,17 @@ class Binding:
     io_digest: str
     reset_epoch: int = 0
     protocol: str = 'AER1-reference'
+    # Optional sensor groups: the record sensor names this brain was built
+    # with, in its order (None: every record sensor). See aer.rs Binding.
+    sensor_names: tuple = None
+
+    def selection(self, model):
+        names = [s['name'] for s in model['io']['sensors']]
+        if self.sensor_names is None:
+            return list(range(len(names)))
+        if len(set(self.sensor_names)) != len(self.sensor_names) or any(n not in names for n in self.sensor_names):
+            raise ValueError('binding sensor names must be distinct record sensors')
+        return [names.index(n) for n in self.sensor_names]
 
     def validate(self, model, brain_manifest):
         if not self.instance_id or not self.brain_id or self.protocol != 'AER1-reference':
@@ -122,7 +133,7 @@ class AsyncReferenceClient:
 
     async def _run(self):
         reader, writer = await asyncio.wait_for(asyncio.open_connection(self.host,self.port),5)
-        io = self.model['io']; encoder = RateEncoder(len(io['sensors']))
+        io = self.model['io']; selection = self.binding.selection(self.model); encoder = RateEncoder(len(selection))
         async def exchange(payload):
             if not payload or len(payload)>MAX_FRAME_BYTES: raise ValueError('invalid frame size')
             writer.write(struct.pack('<I',len(payload))+payload)
@@ -131,7 +142,7 @@ class AsyncReferenceClient:
             if not 1 <= size <= MAX_FRAME_BYTES: raise ValueError('invalid response size')
             return await asyncio.wait_for(reader.readexactly(size),5)
         try:
-            names = [s['name'] for s in io['sensors']]
+            names = [io['sensors'][i]['name'] for i in selection]
             reply = json.loads(await exchange(json.dumps(dict(s_names=names,o_names=io['output_names'],sensory=len(names),output=len(io['output_names']),dt_ms=io['dt_us']/1000)).encode()))
             if (reply.get('expected_s'),reply.get('expected_o')) != (len(names),len(io['output_names'])):
                 raise ValueError('handshake shape mismatch')
@@ -141,7 +152,7 @@ class AsyncReferenceClient:
             while not self.stop_event.is_set():
                 try: step, timestamp, values = self.input.get_nowait()
                 except queue.Empty: await asyncio.sleep(.001); continue
-                packet = await exchange(encoder.encode(values,timestamp,io['sensory_base']))
+                packet = await exchange(encoder.encode([values[i] for i in selection],timestamp,io['sensory_base']))
                 output_timestamp, spikes = decode(packet,io['output_base'],len(io['output_names']))
                 result = dict(step=step, source_timestamp_us=timestamp, output_timestamp_us=output_timestamp,
                               reset_epoch=self.binding.reset_epoch, binding_generation=self.binding.binding_generation,
