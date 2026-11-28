@@ -6,6 +6,8 @@ LABEL org.opencontainers.image.source="https://github.com/neuralmimicry/aarnn_ru
       org.opencontainers.image.title="aarnn web_ui (hosted tenancy preview)" \
       org.opencontainers.image.licenses="MIT"
 WORKDIR /app
+# The HTTP clients load system roots at start-up; ubuntu:24.04 ships none.
+COPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY web_ui /app/web_ui
 USER 1001:1001
 EXPOSE 8080

@@ -62,6 +62,7 @@ jobs:
           cp target/aarch64-unknown-linux-gnu/release/web_ui dist/hosted-preview/web_ui
           aarch64-linux-gnu-strip dist/hosted-preview/web_ui
           cp Containerfile.hosted-preview dist/hosted-preview/Containerfile
+          cp /etc/ssl/certs/ca-certificates.crt dist/hosted-preview/ca-certificates.crt
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
