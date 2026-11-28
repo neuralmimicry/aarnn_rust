@@ -1,0 +1,12 @@
+# Minimal runtime for the hosted-tenancy web_ui preview: a cross-compiled
+# binary (built by .github/workflows/hosted-web-ui-preview.yml) on Ubuntu
+# 24.04. No RUN step, so no emulation is needed to assemble the arm64 image.
+FROM docker.io/library/ubuntu:24.04
+LABEL org.opencontainers.image.source="https://github.com/neuralmimicry/aarnn_rust" \
+      org.opencontainers.image.title="aarnn web_ui (hosted tenancy preview)" \
+      org.opencontainers.image.licenses="MIT"
+WORKDIR /app
+COPY web_ui /app/web_ui
+USER 1001:1001
+EXPOSE 8080
+ENTRYPOINT ["/app/web_ui"]
