@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "aarnn_rust"
-version = "0.1.43"
+version = "0.1.44"
 dependencies = [
  "aarnn-aer-legacy",
  "aarnn-biox6-exporter",
