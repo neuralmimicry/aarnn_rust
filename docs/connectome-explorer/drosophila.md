@@ -126,6 +126,17 @@ How C was produced:
 
 C differs from B only in which redundant left teacher range cell it drops: TN_l_2 instead of TN_l_3. Its resources equal B's (table below). Searching the real trained state did not change the size or the class of the reduction.
 
+**Closed-loop performance.** C ran the replicate protocol below at the same places and seeds (`target/qa/vx001d/run_c_trials.sh`; analysis `analyse_c_trials.py`, which writes `c_trials_summary.json`). These trials ran on the 28 Nov build, which adds the exit-snapshot hook and the shutdown and placement fixes. The neuromodulated original was therefore rerun on that build as the control. It reproduced its earlier runs exactly (4, 7, 4 and 2 of 12 for seeds 0-3), so the build change did not alter the closed loop, and C can be compared with A and B directly.
+
+| Network (seeds 1-3) | Releases reached per run | Total | Mean time (a miss counts as 36 s) |
+|---|---|---|---|
+| candidate C | 4, 3, 6 | 13/36 | 30.0 s |
+| neuromodulated, same build | 7, 4, 2 | 13/36 | 30.0 s |
+| candidate A | 5, 4, 5 | 14/36 | |
+| candidate B | 5, 3, 3 | 11/36 | |
+
+C against the same-build original, stratified by seed: CMH p 0.81, Fisher p 1.00, Mann-Whitney p 0.995, run permutation p 1.00. C performs the same as the original, like A and B. Reducing the real trained state rather than the cap approximation did not make the reduction perform better. Seed 0 (the original places) was still running when this was written.
+
 ### Resources
 
 | | Neuromodulated original | Candidate A | Candidate B | Candidate C |
