@@ -16,6 +16,7 @@ static LOG_FILE: OnceLock<Mutex<Option<BufWriter<std::fs::File>>>> = OnceLock::n
 static LOG_STATE: OnceLock<Mutex<LogState>> = OnceLock::new();
 static SHUTDOWN_SIGNAL: AtomicU8 = AtomicU8::new(0);
 static UI_SHUTDOWN_CLOSE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static SIMULATION_SUPERVISOR_STOPPED: AtomicBool = AtomicBool::new(false);
 
 const DEFAULT_LOG_ROTATE_BYTES: u64 = 20 * 1024 * 1024;
 const DEFAULT_LOG_ROTATE_COUNT: usize = 5;
@@ -224,6 +225,16 @@ pub fn shutdown_signal_name() -> Option<&'static str> {
         4 => Some("unknown"),
         _ => None,
     }
+}
+
+/// Recorded by a distributed node's simulation supervisor once every network
+/// worker, output task and autosave writer has finished after shutdown.
+pub fn note_simulation_supervisor_stopped() {
+    SIMULATION_SUPERVISOR_STOPPED.store(true, Ordering::SeqCst);
+}
+
+pub fn simulation_supervisor_stopped() -> bool {
+    SIMULATION_SUPERVISOR_STOPPED.load(Ordering::SeqCst)
 }
 
 pub fn take_ui_shutdown_close_request() -> bool {
