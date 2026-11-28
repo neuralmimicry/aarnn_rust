@@ -272,7 +272,9 @@ impl EntitlementClient {
         } else {
             anyhow::bail!("entitlement service returned HTTP {}", status.as_u16());
         };
-        if !self.ttl.is_zero() {
+        // Only active entitlements are cached: a customer who subscribes a
+        // moment after a refused or idle lookup must not wait out the TTL.
+        if !self.ttl.is_zero() && entitlement.active {
             if let Ok(mut cache) = self.cache.lock() {
                 cache.insert(key, (Instant::now(), entitlement.clone()));
             }
@@ -402,6 +404,51 @@ mod tests {
         assert!(parsed.active);
         assert_eq!(parsed.limits.max_networks, 1);
         assert_eq!(parsed.limits.max_devices, 0);
+    }
+
+    /// Serve canned Billing answers in order on an ephemeral port.
+    async fn billing_stub(bodies: Vec<&'static str>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for body in bodies {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = [0u8; 4096];
+                let _ = socket.read(&mut buffer).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}/api/internal/entitlements")
+    }
+
+    #[tokio::test]
+    async fn inactive_entitlements_are_not_cached_but_active_ones_are() {
+        let url = billing_stub(vec![
+            r#"{"active":false,"limits":{}}"#,
+            r#"{"active":true,"plan_id":"explorer","limits":{"max_networks":1}}"#,
+        ])
+        .await;
+        let client = EntitlementClient::new(
+            url,
+            Some("app-token".to_string()),
+            Duration::from_secs(2),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        assert!(!client.entitlement("ada").await.unwrap().active);
+        // The customer subscribes: the next lookup must see it at once.
+        let active = client.entitlement("ada").await.unwrap();
+        assert!(active.active);
+        // The stub has no third answer, so this one must come from the cache.
+        assert_eq!(client.entitlement("ADA").await.unwrap(), active);
     }
 
     #[test]

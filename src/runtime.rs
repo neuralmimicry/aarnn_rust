@@ -2489,7 +2489,7 @@ impl RuntimeManager {
             return Ok(());
         };
 
-        let (current_manifest_snapshot_ms, manifest_changed) = {
+        let (current_manifest_snapshot_ms, manifest_changed, memory_updated_at_ms) = {
             let manifest = handle.manifest.read().await;
             (
                 manifest
@@ -2500,6 +2500,7 @@ impl RuntimeManager {
                     || manifest.last_saved_at_ms != disk_manifest.last_saved_at_ms
                     || manifest.desired_running != disk_manifest.desired_running
                     || manifest.name != disk_manifest.name,
+                manifest.updated_at_ms,
             )
         };
         let snapshot_path = handle.latest_snapshot_path();
@@ -2510,23 +2511,35 @@ impl RuntimeManager {
         .await
         .context("workspace refresh stat task failed")??;
 
+        // The disk manifest was read without holding the manifest lock. If the
+        // in-memory manifest changed meanwhile (a device grant, a rename, a
+        // start), it is newer than what was read: replacing it would lose
+        // that update, and the next persist would write the loss to disk.
         let Some(snapshot_mtime) = snapshot_mtime else {
-            *handle.manifest.write().await = disk_manifest.clone();
-            handle.running.store(
-                disk_manifest.desired_running && !handle.resume_suppressed.load(Ordering::SeqCst),
-                Ordering::SeqCst,
-            );
+            let mut manifest = handle.manifest.write().await;
+            if manifest.updated_at_ms == memory_updated_at_ms {
+                *manifest = disk_manifest.clone();
+                handle.running.store(
+                    disk_manifest.desired_running
+                        && !handle.resume_suppressed.load(Ordering::SeqCst),
+                    Ordering::SeqCst,
+                );
+            }
             return Ok(());
         };
         if snapshot_mtime <= current_manifest_snapshot_ms && !manifest_changed {
             return Ok(());
         }
         if snapshot_mtime <= current_manifest_snapshot_ms {
-            *handle.manifest.write().await = disk_manifest.clone();
-            handle.running.store(
-                disk_manifest.desired_running && !handle.resume_suppressed.load(Ordering::SeqCst),
-                Ordering::SeqCst,
-            );
+            let mut manifest = handle.manifest.write().await;
+            if manifest.updated_at_ms == memory_updated_at_ms {
+                *manifest = disk_manifest.clone();
+                handle.running.store(
+                    disk_manifest.desired_running
+                        && !handle.resume_suppressed.load(Ordering::SeqCst),
+                    Ordering::SeqCst,
+                );
+            }
             return Ok(());
         }
 
@@ -2548,16 +2561,19 @@ impl RuntimeManager {
             *handle_for_refresh.activity_cache.blocking_write() = activity;
             {
                 let mut manifest = handle_for_refresh.manifest.blocking_write();
-                *manifest = disk_manifest.clone();
-                manifest.updated_at_ms = manifest.updated_at_ms.max(snapshot_mtime);
+                if manifest.updated_at_ms == memory_updated_at_ms {
+                    *manifest = disk_manifest.clone();
+                    manifest.updated_at_ms = manifest.updated_at_ms.max(snapshot_mtime);
+                    handle_for_refresh.running.store(
+                        disk_manifest.desired_running
+                            && !handle_for_refresh.resume_suppressed.load(Ordering::SeqCst),
+                        Ordering::SeqCst,
+                    );
+                }
+                // Either way the snapshot on disk is now the loaded state.
                 manifest.last_saved_at_ms = Some(snapshot_mtime);
                 manifest.engine = engine.spec().clone();
             }
-            handle_for_refresh.running.store(
-                disk_manifest.desired_running
-                    && !handle_for_refresh.resume_suppressed.load(Ordering::SeqCst),
-                Ordering::SeqCst,
-            );
             Ok(())
         })
         .await
