@@ -80,6 +80,7 @@ pub enum FieldKind {
     Dopamine,
     Acetylcholine,
     Serotonin,
+    Noradrenaline,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
