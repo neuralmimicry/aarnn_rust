@@ -687,3 +687,37 @@ async fn peripheral_grants_persist_and_count_distinct_devices_per_owner() {
     restarted.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[tokio::test]
+async fn deleting_a_workspace_removes_it_without_leaving_it_loadable() {
+    let root = temp_runtime_dir();
+    let runtime = RuntimeManager::new(hosted_runtime_config(&root))
+        .await
+        .unwrap();
+    runtime
+        .create_workspace(
+            "alice",
+            WorkspaceCreateRequest {
+                workspace_id: Some("gone".to_string()),
+                config_json: Some(small_io_config(2, 2, 1)),
+                ..WorkspaceCreateRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+    runtime.delete_workspace("alice", "gone").await.unwrap();
+    assert!(runtime.list_workspaces("alice").await.unwrap().is_empty());
+    assert!(!root.join("users/alice/workspaces/gone").exists());
+    let trash_left = std::fs::read_dir(root.join("trash"))
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    assert_eq!(trash_left, 0, "a local filesystem leaves nothing in trash");
+    runtime.shutdown().await;
+
+    let restarted = RuntimeManager::new(hosted_runtime_config(&root))
+        .await
+        .unwrap();
+    assert!(restarted.list_workspaces("alice").await.unwrap().is_empty());
+    restarted.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}

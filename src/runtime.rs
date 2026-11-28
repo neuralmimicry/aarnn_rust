@@ -1516,12 +1516,35 @@ impl RuntimeManager {
         }
         handle.running.store(false, Ordering::SeqCst);
         self.persist_manifest_only(&handle).await?;
-        let _lease = self
+        let lease = self
             .acquire_workspace_lease(&handle, Duration::from_secs(5))
             .await?;
         self.workspaces.write().await.remove(&key);
-        std::fs::remove_dir_all(&handle.dir)
+        // The lease is an open, locked file inside the workspace directory.
+        // Removing the directory while it is open fails on NFS (the client
+        // keeps a silly-renamed .nfs file, so the directory is never empty).
+        // Move the workspace out of the namespace under the lease, release
+        // it, then remove the moved directory; anything NFS still holds is
+        // left in trash, which is not a workspace and is safe to sweep later.
+        let trash_dir = self.config.root_dir.join("trash");
+        std::fs::create_dir_all(&trash_dir)
+            .with_context(|| format!("failed to create '{}'", trash_dir.display()))?;
+        let tombstone = trash_dir.join(format!(
+            "{}--{}--{}",
+            key.user_id,
+            key.workspace_id,
+            now_ms()
+        ));
+        std::fs::rename(&handle.dir, &tombstone)
             .with_context(|| format!("failed to delete '{}'", handle.dir.display()))?;
+        drop(lease);
+        if let Err(err) = std::fs::remove_dir_all(&tombstone) {
+            nm_err!(
+                "[warn] deleted workspace left in '{}' for a later sweep: {}",
+                tombstone.display(),
+                err
+            );
+        }
         Ok(serde_json::json!({ "ok": true, "workspace_id": workspace_id }))
     }
 
