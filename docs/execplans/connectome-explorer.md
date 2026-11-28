@@ -213,12 +213,12 @@ Recorded 2026-11-26 22:50Z.
   - The learned-cap preset changed 24 synapses. The reduction removed only TCH_l_1 and TCH_r_2 (96 -> 94). It validated, the bundle reproduces, and the naive `experiment` passed its naive contract (with the 20 s task).
   - 30 s walks: reduced3 net 0.84 m / path 3.29 m against the full network's 0.85 / 3.40. The contract2 reduction re-walked with a synced config is identical to the digit (1.259 / 3.514), so the stale masks did not change that walk.
   - Written up in `docs/connectome-explorer/g2-salamander.md`.
-- [ ] `2026-11-28 04:20Z` VX-001 true trained state (in progress):
+- [x] `2026-11-28 04:20Z` VX-001 true trained state (done 09:26Z):
   - The closed-loop d1_mod trial (`run_trained.sh trial`) reached food in 4/12 releases, the same as seed 0. On exit the worker wrote its network.
   - Learning moved all 44 plastic synapses upward: mean 0.0045 -> 0.093 (69 % of the cap); 16 at the cap. Nothing else changed. The learned-cap approximation is therefore an upper bound on the real state.
   - The exit snapshot has no `connectome_labels`, so the explorer rejects its runtime channel `needs_energy`. The trained state is instead the naive network with the trained `w_hh_rec` transplanted (`trained/network_d1_mod_trained.json`, source `fly-mod-trained-w`). It passes the whole learned-state contract.
   - Candidate C is the reduction of the trained network (`run_trained_w.sh`). It removes REV_lm_sw, TN_l_1, TN_l_2 and TN_r_2 (B's class), and depth is unchanged.
-  - Closed loop (`run_c_trials.sh`, `analyse_c_trials.py`): C reached 13/36 releases over seeds 1-3, the same as the same-build original (13/36; CMH p 0.81). The same-build original reproduced its earlier runs exactly (4, 7, 4, 2), so the 28 Nov build did not change the closed loop. Seed 0 of C was still running at 09:14Z.
+  - Closed loop (`run_c_trials.sh`, `analyse_c_trials.py`): C reached 18/48 releases over seeds 0-3 (5, 4, 3, 6), the same as the same-build original (17/48; CMH p 1.00). The same-build original reproduced its earlier runs exactly (4, 7, 4, 2), so the 28 Nov build did not change the closed loop.
   - The project names `fly-mod-trained`, `fly-gnatc`, `gnatc-dev` and `gnatc-dev-gnat` come from the failed first run: `validate --candidate selected` fell back to candidate B. Do not use them.
 - [x] `2026-11-28 06:20Z` A lone worker is no longer its own backup (uncommitted):
   - Found by the isolated cluster test, and reproduced locally with an orchestrator and two workers.

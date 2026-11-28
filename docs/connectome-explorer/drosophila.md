@@ -88,7 +88,7 @@ The explorer does not download data and needs no credentials. A real-data study 
 |---|---|
 | fewer neurons | **yes, slightly**: 143 → 139 hidden cells (−2.8 %), state −3.4 % |
 | greater computation depth | **not supported**: GNAT depth unchanged |
-| better performance | **no**: over four runs each (48 releases), candidate A reached food in 18, candidate B in 17 and the neuromodulated original in 17 (every p ≥ 0.79). The candidates perform the same as the original, not better |
+| better performance | **no**: over four runs each (48 releases), candidate A reached food in 18, candidate B in 17, candidate C (reduced from the real trained state) in 18 and the neuromodulated original in 17 (every p ≥ 0.79). The candidates perform the same as the original, not better |
 
 The reduction preserves function in fewer cells, as its contract asks. It did not add depth or performance, and the contract does not reward either.
 
@@ -128,14 +128,14 @@ C differs from B only in which redundant left teacher range cell it drops: TN_l_
 
 **Closed-loop performance.** C ran the replicate protocol below at the same places and seeds (`target/qa/vx001d/run_c_trials.sh`; analysis `analyse_c_trials.py`, which writes `c_trials_summary.json`). These trials ran on the 28 Nov build, which adds the exit-snapshot hook and the shutdown and placement fixes. The neuromodulated original was therefore rerun on that build as the control. It reproduced its earlier runs exactly (4, 7, 4 and 2 of 12 for seeds 0-3), so the build change did not alter the closed loop, and C can be compared with A and B directly.
 
-| Network (seeds 1-3) | Releases reached per run | Total | Mean time (a miss counts as 36 s) |
-|---|---|---|---|
-| candidate C | 4, 3, 6 | 13/36 | 30.0 s |
-| neuromodulated, same build | 7, 4, 2 | 13/36 | 30.0 s |
-| candidate A | 5, 4, 5 | 14/36 | |
-| candidate B | 5, 3, 3 | 11/36 | |
+| Network (seeds 0-3) | Releases reached per run | Total | 95 % CI | Mean time (a miss counts as 36 s) |
+|---|---|---|---|---|
+| candidate C | 5, 4, 3, 6 | 18/48 | 0.24-0.53 | 30.4 s |
+| neuromodulated, same build | 4, 7, 4, 2 | 17/48 | 0.22-0.51 | 30.2 s |
+| candidate A (replicates above) | 4, 5, 4, 5 | 18/48 | 0.24-0.53 | 30.9 s |
+| candidate B (replicates above) | 6, 5, 3, 3 | 17/48 | 0.22-0.51 | 29.5 s |
 
-C against the same-build original, stratified by seed: CMH p 0.81, Fisher p 1.00, Mann-Whitney p 0.995, run permutation p 1.00. C performs the same as the original, like A and B. Reducing the real trained state rather than the cap approximation did not make the reduction perform better. Seed 0 (the original places) was still running when this was written.
+C against the same-build original, stratified by seed: CMH p 1.00, Fisher p 1.00, Mann-Whitney p 0.90, run permutation p 1.00. C performs the same as the original, like A and B. Reducing the real trained state rather than the cap approximation did not make the reduction perform better.
 
 ### Resources
 
