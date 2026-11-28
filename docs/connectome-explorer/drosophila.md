@@ -88,9 +88,11 @@ The explorer does not download data and needs no credentials. A real-data study 
 |---|---|
 | fewer neurons | **yes, slightly**: 143 → 139 hidden cells (−2.8 %), state −3.4 % |
 | greater computation depth | **not supported**: GNAT depth unchanged |
-| better performance | **not shown**: candidate B reached food in 6 of 12 releases against 4 of 12 for the neuromodulated original (p = 0.68). It does not lose function, and it beats the non-neuromodulated fly on time to food |
+| better performance | **no**: over four runs each (48 releases), candidate A reached food in 18, candidate B in 17, candidate C (reduced from the real trained state) in 18 and the neuromodulated original in 17 (every p ≥ 0.79). The candidates perform the same as the original, not better |
 
 The reduction preserves function in fewer cells, as its contract asks. It did not add depth or performance, and the contract does not reward either.
+
+The single-run trials (27 Nov, below) first suggested that B was better (6 of 12 against 4 of 12). Three replicate runs per network removed that difference.
 
 ### The two candidates
 
@@ -110,15 +112,40 @@ What the removed cells are:
 
 Both candidates passed the locked-validation learned-state contract, and both bundles reproduce their validation in a clean process. With the removal set carried back to the naive network, both also pass the naive contract (`experiment`, locked split).
 
+### Candidate C: reduced from the true trained state (28 Nov 2026)
+
+A and B were searched on the learned-cap state, which sets every plastic synapse to the plasticity cap. C was searched on the state that closed-loop learning actually produced.
+
+How C was produced:
+
+1. **Trial.** The neuromodulated fly ran one closed-loop trial: the protocol below, at the original places. It reached food in 4 of 12 releases. With `NM_NODE_SNAPSHOT_ON_EXIT_DIR` set, the cluster worker wrote its network on shutdown.
+2. **What learning changed.** All 44 plastic synapses moved upward: mean weight 0.0045 → 0.093, 69 % of the cap (0.136), with 16 at the cap. No other synapse and no input or output weight changed. The learned-cap state is therefore an upper bound on the real one.
+3. **Trained network.** The exit snapshot has no connectome labels, so the explorer cannot name its runtime sensory channel `needs_energy`. The trained state was therefore built as the naive network with the trained hidden-to-hidden weights transplanted (`target/qa/vx001d/trained/network_d1_mod_trained.json`). It passes the whole learned-state contract.
+4. **Search.** Run with `run_trained_w.sh`: candidate `48e94c31…`, 100 proposals, frontier of 8. It removed **REV_lm_sw, TN_l_1, TN_l_2 and TN_r_2**.
+5. **Checks.** C passed locked validation, its bundle reproduces in a clean process, and with the removal set carried back to the naive network it passes the naive contract.
+
+C differs from B only in which redundant left teacher range cell it drops: TN_l_2 instead of TN_l_3. Its resources equal B's (table below). Searching the real trained state did not change the size or the class of the reduction.
+
+**Closed-loop performance.** C ran the replicate protocol below at the same places and seeds (`target/qa/vx001d/run_c_trials.sh`; analysis `analyse_c_trials.py`, which writes `c_trials_summary.json`). These trials ran on the 28 Nov build, which adds the exit-snapshot hook and the shutdown and placement fixes. The neuromodulated original was therefore rerun on that build as the control. It reproduced its earlier runs exactly (4, 7, 4 and 2 of 12 for seeds 0-3), so the build change did not alter the closed loop, and C can be compared with A and B directly.
+
+| Network (seeds 0-3) | Releases reached per run | Total | 95 % CI | Mean time (a miss counts as 36 s) |
+|---|---|---|---|---|
+| candidate C | 5, 4, 3, 6 | 18/48 | 0.24-0.53 | 30.4 s |
+| neuromodulated, same build | 4, 7, 4, 2 | 17/48 | 0.22-0.51 | 30.2 s |
+| candidate A (replicates above) | 4, 5, 4, 5 | 18/48 | 0.24-0.53 | 30.9 s |
+| candidate B (replicates above) | 6, 5, 3, 3 | 17/48 | 0.22-0.51 | 29.5 s |
+
+C against the same-build original, stratified by seed: CMH p 1.00, Fisher p 1.00, Mann-Whitney p 0.90, run permutation p 1.00. C performs the same as the original, like A and B. Reducing the real trained state rather than the cap approximation did not make the reduction perform better.
+
 ### Resources
 
-| | Neuromodulated original | Candidate A | Candidate B |
-|---|---|---|---|
-| Hidden cells | 143 | 139 | 139 |
-| Neurons (with I/O) | 619 | 615 | 615 |
-| Synapses | 568 | 556 | 555 |
-| State bytes | 1 434 608 | 1 385 712 | 1 385 712 |
-| Memory bytes (proxy) | 708 136 | 683 880 | 683 880 |
+| | Neuromodulated original | Candidate A | Candidate B | Candidate C |
+|---|---|---|---|---|
+| Hidden cells | 143 | 139 | 139 | 139 |
+| Neurons (with I/O) | 619 | 615 | 615 | 615 |
+| Synapses | 568 | 556 | 555 | 555 |
+| State bytes | 1 434 608 | 1 385 712 | 1 385 712 | 1 385 712 |
+| Memory bytes (proxy) | 708 136 | 683 880 | 683 880 | 683 880 |
 
 The latency medians reported by `optimise` were taken under different background load, so they are not compared.
 
@@ -136,10 +163,14 @@ The latency medians reported by `optimise` were taken under different background
 | neuromodulated, learned | 143 | 132.1 | 1.201 | 4 | 0.371 |
 | candidate A, learned | 139 | 132.3 | 1.201 | 4 | 0.372 |
 | candidate B, learned | 139 | 132.1 | 1.201 | 4 | 0.371 |
+| candidate C, naive | 139 | 131.6 | 1.169 | 4 | 0.367 |
+| neuromodulated, trained (real learned weights) | 143 | 131.0 | 1.195 | 4 | 0.370 |
+| candidate C, trained | 139 | 131.0 | 1.196 | 4 | 0.370 |
 
 - **The reduction leaves depth unchanged.** Mean and maximum depth are identical to three decimals. The removed cells are a redundant teacher relay, a leg reverse cell and an adaptation cell; removing them shortens no measured thread.
 - **Depth per neuron rises only by arithmetic.** The ratio of mean depth to hidden cells goes up 2.9 %, solely because there are four fewer cells.
 - **Neuromodulation does not deepen threads in these trials.** The non-neuromodulated fly's mean depth is the same as or slightly higher than the neuromodulated fly's.
+- **The real trained state gives the same picture.** With the weights closed-loop learning produced, mean depth is 1.195 (the cap approximation gives 1.201), and the 95th-percentile maximum depth is 3 rather than 2. Candidate C leaves it unchanged (1.196).
 - **Learning adds depth, by about 0.03-0.05.** The learned state's newly effective pathways lengthen some threads; the non-neuromodulated fly's maximum goes from 3 to 4.
 
 ### Performance (closed-loop MuJoCo foraging)
@@ -177,14 +208,49 @@ Pairwise tests (Fisher exact test on releases reached; Mann-Whitney U test on ti
 
 What the trials show:
 
-- **Neuromodulation helps foraging at tiers 1 and 2.** The non-neuromodulated flies do not steer: their heading error is about 90°, and each reached food only in its last release. They also tip less and need fewer caretaker feeds (1 against 3), consistent with less vigorous walking.
+- **Neuromodulation helps foraging at tiers 1 and 2** (the replicates below weaken this). The non-neuromodulated flies do not steer: their heading error is about 90°, and each reached food only in its last release. They also tip less and need fewer caretaker feeds (1 against 3), consistent with less vigorous walking.
 - **The GNAT candidates keep the neuromodulated fly's foraging.** Candidate A is equal to the original. Candidate B is numerically better on every measure, but no test separates it from the original. The original and B reach food in different releases, so release-to-release variation in this protocol is as large as the difference.
 - **Tier 0 does better than every tier-1 network.** The tier-1 synaptic filter and short-term depression were not tuned for this designed circuit. Tier 0 is context, not a contender, because it has no neuromodulated transmission.
-- **Limits:** each network ran once (one persisting brain, 12 dependent releases), in simulation, with the cap-based learned state used only for the search. Replicate runs with perturbed release places would be needed to resolve a difference of 4 against 6 out of 12.
+- **Limits:** each network ran once (one persisting brain, 12 dependent releases), in simulation, with the cap-based learned state used only for the search. The replicates below address the single run.
+
+### Replicates (28 Nov 2026)
+
+Protocol: `target/qa/vx001d/run_replicates.sh`. Each of the four tier-1 networks ran three more times (seeds 1-3) with the protocol above. Each run had its own persisting brain. Each release place was jittered by up to ±0.03 m in x and in y, and by up to ±0.5 rad in heading. A given seed used the same places for every network. Seed 0 is the original trial. Analysis: `target/qa/vx001d/analyse_replicates.py`, which writes `replicates_summary.json`.
+
+| Network | Releases reached per run (seeds 0, 1, 2, 3) | Total | 95 % CI | Mean time (a miss counts as 36 s) | Median time of those reached | Tipped windows |
+|---|---|---|---|---|---|---|
+| non-neuromodulated | 1, 0, 2, 7 | 10/48 | 0.10-0.35 | 32.3 s | 14.3 s | 0 |
+| neuromodulated | 4, 7, 4, 2 | 17/48 | 0.22-0.51 | 30.2 s | 18.4 s | 5 |
+| candidate A | 4, 5, 4, 5 | 18/48 | 0.24-0.53 | 30.9 s | 22.5 s | 2 |
+| candidate B | 6, 5, 3, 3 | 17/48 | 0.22-0.51 | 29.5 s | 15.7 s | 4 |
+
+The tests:
+
+- **CMH:** Cochran-Mantel-Haenszel, stratified by seed, so that each stratum shares its release places.
+- **Fisher:** Fisher exact test on releases reached, pooled.
+- **Mann-Whitney:** Mann-Whitney U test on the 48 release times.
+- **Permutation:** an exact permutation test on the per-run counts. It is the most conservative, because releases within a run share one brain and are not independent.
+- **Difference:** the difference in the proportion reached, with a Newcombe 95 % interval.
+
+| Comparison | Difference in proportion reached | CMH p | Fisher p | Mann-Whitney p | Permutation p |
+|---|---|---|---|---|---|
+| candidate B − neuromodulated | 0.00 [−0.19, +0.19] | 0.83 | 1.00 | 0.82 | 1.00 |
+| candidate A − neuromodulated | +0.02 [−0.17, +0.21] | 1.00 | 1.00 | 0.96 | 1.00 |
+| candidate B − candidate A | −0.02 | 1.00 | 1.00 | 0.79 | 1.00 |
+| neuromodulated − non-neuromodulated | +0.15 [−0.03, +0.31] | 0.18 | 0.17 | 0.16 | 0.46 |
+| candidate B − non-neuromodulated | +0.15 | 0.17 | 0.17 | 0.15 | 0.40 |
+
+What the replicates show:
+
+- **The GNAT reductions keep the function and gain nothing.** A and B each match the original to within one release in 48. The intervals rule out a loss larger than about 0.19 in proportion reached, which is about 9 of 48 releases. Tighter equivalence would need more runs.
+- **B's single-run lead was noise.** Runs of one network varied from 2 to 7 of 12. The original's best run (7 of 12) beat B's best (6).
+- **The neuromodulation advantage weakens.** With replicates, the neuromodulated flies lead by 7 releases in 48 (p ≈ 0.17). The earlier pooled-tier figure (p = 0.036) came from single runs. One non-neuromodulated run (seed 3) reached food in 7 of 12, so steering without neuromodulation is possible but unreliable: the other three runs reached 3 in 36.
+- **Run-level variance is the limit.** Between-run variation is as large as any effect seen here. Resolving a difference of about 0.15 in proportion, at 80 % power, would need about 160 releases per network (14 runs) if releases were independent. Because releases within one run share a brain, it would need more.
 
 Files:
 
 - networks: `target/qa/vx001d/network_{d1_mod,d1_nonmod,gnat,gnatb}.json`;
+- replicate traces: `target/qa/vx001d/replicates/`;
 - traces: `target/qa/vx001d/trials/walk_*`;
 - per-release times: `target/qa/vx001d/trials/times.txt`;
 - explorer project: `target/vx001d-explorer`;

@@ -3401,9 +3401,13 @@ fn plan_active_layer_assignments(
     let mut backup_by_node = BTreeMap::<String, Vec<u32>>::new();
     let mut backup_load = HashMap::<String, usize>::new();
     for (source_node, active_layers) in &active_by_node {
+        // Never back a range up on its own owner. Workers treat
+        // `layers - redundant_layers` as their active set, so a node listed as
+        // the backup of its own layers owns nothing: it runs warm, with no
+        // sensory or output stage, and the network has no output at all.
         let destination = nodes
             .iter()
-            .filter(|(node_id, _)| nodes.len() == 1 || node_id != source_node)
+            .filter(|(node_id, _)| node_id != source_node)
             .filter_map(|(node_id, capacity)| {
                 latency.latency(home_node, node_id).map(|measured_latency| {
                     let load = *backup_load.get(node_id).unwrap_or(&0) as u64;
@@ -10582,6 +10586,7 @@ impl DistributedNode {
             );
         }
         nm_log!("[info] Node {} simulation supervisor stopped", node_id);
+        crate::obs::note_simulation_supervisor_stopped();
     }
 
     async fn run_network_worker(
@@ -16003,6 +16008,30 @@ mod tests {
                 "node {node} cannot be both active and backup owner for one layer"
             );
         }
+    }
+
+    #[test]
+    fn hierarchical_planner_gives_a_single_node_no_local_backup() {
+        // Cluster test 28 Nov 2026: a single-layer network placed while one
+        // worker was registered got layers [0] with redundant [0]. The worker
+        // then owned no active layer, so no sensory or output stage.
+        let known_counts = HashMap::from([(0u32, 143u64)]);
+        let (assignments, _) = plan_active_layer_assignments(
+            "single-layer",
+            "node-a",
+            1,
+            "{}",
+            &known_counts,
+            &[("node-a".to_string(), 4.0)],
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .expect("the planner places a single layer on a single node");
+
+        assert_eq!(
+            assignments,
+            vec![("node-a".to_string(), vec![0], Vec::new())]
+        );
     }
 
     #[test]

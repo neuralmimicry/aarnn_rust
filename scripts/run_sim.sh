@@ -663,7 +663,24 @@ cleanup_distributed_runtime() {
       kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
     done
   fi
-  sleep 1
+  # Grace before the KILL below (NM_CLUSTER_STOP_GRACE_S, default 1 s). Raise
+  # it when workers write final snapshots on exit (NM_NODE_SNAPSHOT_ON_EXIT_DIR)
+  # for networks larger than a few MB; the wait ends early once they exit.
+  local grace_s="${NM_CLUSTER_STOP_GRACE_S:-1}"
+  [[ "$grace_s" =~ ^[0-9]+$ ]] || grace_s=1
+  if [ "$grace_s" -le 1 ] || [ "${#CLUSTER_PIDS[@]}" -eq 0 ]; then
+    sleep 1
+  else
+    local stop_deadline=$((SECONDS + grace_s)) alive
+    while [ "$SECONDS" -lt "$stop_deadline" ]; do
+      alive=0
+      for pid in "${CLUSTER_PIDS[@]}"; do
+        if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then alive=1; break; fi
+      done
+      [ "$alive" -eq 0 ] && break
+      sleep 0.2
+    done
+  fi
   for pid in "${BRIDGE_PIDS[@]}"; do
     if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
       kill -KILL "$pid" 2>/dev/null || true

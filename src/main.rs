@@ -3799,13 +3799,13 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    // Distributed nodes enter a perpetual sleep loop, as their work is managed via gRPC.
+    // Distributed nodes are driven over gRPC until a shutdown signal. They
+    // then exit once the simulation supervisor has drained its workers and
+    // autosaves, instead of idling until the service manager's SIGKILL.
     if args.orchestrator || args.node {
-        return rt.block_on(async {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            }
-        });
+        rt.block_on(wait_for_distributed_exit());
+        crate::obs::flush_log();
+        std::process::exit(0);
     }
 
     // Step 4: Batch Simulation Execution
@@ -5323,6 +5323,32 @@ async fn start_distributed(args: &Cli) -> anyhow::Result<crate::distributed::Dis
         }
     });
 
+    // Opt-in final snapshot: with NM_NODE_SNAPSHOT_ON_EXIT_DIR set, a worker
+    // writes every hosted network's runner snapshot (the JSON that --network
+    // loads) to <dir>/<network_id>.json when it is asked to shut down, then
+    // exits. This keeps the state a closed-loop run learned, so it can be
+    // analysed or reduced afterwards instead of an approximation of it.
+    if args.node {
+        if let Some(dir) =
+            std::env::var_os("NM_NODE_SNAPSHOT_ON_EXIT_DIR").filter(|dir| !dir.is_empty())
+        {
+            let node_snapshot = node.clone();
+            let mut shutdown_rx_snapshot = shutdown_rx.clone();
+            tokio::spawn(async move {
+                while !*shutdown_rx_snapshot.borrow() {
+                    if shutdown_rx_snapshot.changed().await.is_err() {
+                        break;
+                    }
+                }
+                let dir = std::path::PathBuf::from(dir);
+                let written = write_node_snapshots_on_exit(&node_snapshot, &dir).await;
+                nm_log!("[shutdown] final_snapshots={written} dir={}", dir.display());
+                crate::obs::flush_log();
+                std::process::exit(0);
+            });
+        }
+    }
+
     if args.node {
         let node_id_inner = node_id.clone();
         let node_inner = node.clone();
@@ -6245,6 +6271,97 @@ mod startup_snapshot_io_tests {
         assert_eq!(after_net["sensory_target_layer"].get(), "null");
         assert_eq!(after_net["output_source_layer"].get(), "null");
     }
+}
+
+/// Upper bound on how long a distributed process waits, after a shutdown
+/// signal, for its simulation supervisor to finish. 15 s stays inside the
+/// native unit's TimeoutStopSec (20 s) and the Kubernetes default grace (30 s).
+/// With NM_NODE_SNAPSHOT_ON_EXIT_DIR the final-snapshot task exits the process
+/// itself once it has written, so the bound is longer and the supervisor is not
+/// waited for. NM_SHUTDOWN_GRACE_MS overrides either default.
+fn distributed_exit_grace(snapshot_on_exit: bool) -> std::time::Duration {
+    let default_ms = if snapshot_on_exit { 600_000 } else { 15_000 };
+    let ms = std::env::var("NM_SHUTDOWN_GRACE_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(default_ms);
+    std::time::Duration::from_millis(ms)
+}
+
+/// Block until a shutdown signal arrives, then until the simulation supervisor
+/// reports it has stopped or the exit grace elapses.
+async fn wait_for_distributed_exit() {
+    while crate::obs::shutdown_signal_name().is_none() {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    let snapshot_on_exit =
+        std::env::var_os("NM_NODE_SNAPSHOT_ON_EXIT_DIR").is_some_and(|dir| !dir.is_empty());
+    let grace = distributed_exit_grace(snapshot_on_exit);
+    let started = std::time::Instant::now();
+    while started.elapsed() < grace
+        && (snapshot_on_exit || !crate::obs::simulation_supervisor_stopped())
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    nm_log!(
+        "[shutdown] distributed_exit supervisor_stopped={} after_ms={}",
+        crate::obs::simulation_supervisor_stopped(),
+        started.elapsed().as_millis()
+    );
+}
+
+/// Write each network hosted by this node to `<dir>/<network_id>.json`
+/// (atomically, through a temporary file). Returns the number written.
+async fn write_node_snapshots_on_exit(
+    node: &crate::distributed::DistributedNode,
+    dir: &std::path::Path,
+) -> usize {
+    if let Err(error) = std::fs::create_dir_all(dir) {
+        nm_err!(
+            "[shutdown] final_snapshot_dir={} error={error}",
+            dir.display()
+        );
+        return 0;
+    }
+    let networks: Vec<(String, std::sync::Arc<tokio::sync::RwLock<_>>)> = {
+        let state = node.state.read().await;
+        state
+            .networks
+            .iter()
+            .map(|(id, network)| (id.clone(), network.clone()))
+            .collect()
+    };
+    let mut written = 0;
+    for (id, network) in networks {
+        let json = network.read().await.runner.export_network_json();
+        let safe: String = id
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || "-_.".contains(c) {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let path = dir.join(format!("{safe}.json"));
+        let tmp = dir.join(format!(".{safe}.json.tmp"));
+        match json.map_err(|error| error.to_string()).and_then(|json| {
+            std::fs::write(&tmp, json.as_bytes())
+                .and_then(|_| std::fs::rename(&tmp, &path))
+                .map_err(|error| error.to_string())
+        }) {
+            Ok(()) => {
+                written += 1;
+                nm_log!(
+                    "[shutdown] final_snapshot network={id} path={}",
+                    path.display()
+                );
+            }
+            Err(error) => nm_err!("[shutdown] final_snapshot network={id} error={error}"),
+        }
+    }
+    written
 }
 
 #[allow(dead_code)]

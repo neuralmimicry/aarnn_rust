@@ -213,6 +213,39 @@ Recorded 2026-11-26 22:50Z.
   - The learned-cap preset changed 24 synapses. The reduction removed only TCH_l_1 and TCH_r_2 (96 -> 94). It validated, the bundle reproduces, and the naive `experiment` passed its naive contract (with the 20 s task).
   - 30 s walks: reduced3 net 0.84 m / path 3.29 m against the full network's 0.85 / 3.40. The contract2 reduction re-walked with a synced config is identical to the digit (1.259 / 3.514), so the stale masks did not change that walk.
   - Written up in `docs/connectome-explorer/g2-salamander.md`.
+- [x] `2026-11-28 04:20Z` VX-001 true trained state (done 09:26Z):
+  - The closed-loop d1_mod trial (`run_trained.sh trial`) reached food in 4/12 releases, the same as seed 0. On exit the worker wrote its network.
+  - Learning moved all 44 plastic synapses upward: mean 0.0045 -> 0.093 (69 % of the cap); 16 at the cap. Nothing else changed. The learned-cap approximation is therefore an upper bound on the real state.
+  - The exit snapshot has no `connectome_labels`, so the explorer rejects its runtime channel `needs_energy`. The trained state is instead the naive network with the trained `w_hh_rec` transplanted (`trained/network_d1_mod_trained.json`, source `fly-mod-trained-w`). It passes the whole learned-state contract.
+  - Candidate C is the reduction of the trained network (`run_trained_w.sh`). It removes REV_lm_sw, TN_l_1, TN_l_2 and TN_r_2 (B's class), and depth is unchanged.
+  - Closed loop (`run_c_trials.sh`, `analyse_c_trials.py`): C reached 18/48 releases over seeds 0-3 (5, 4, 3, 6), the same as the same-build original (17/48; CMH p 1.00). The same-build original reproduced its earlier runs exactly (4, 7, 4, 2), so the 28 Nov build did not change the closed loop.
+  - The project names `fly-mod-trained`, `fly-gnatc`, `gnatc-dev` and `gnatc-dev-gnat` come from the failed first run: `validate --candidate selected` fell back to candidate B. Do not use them.
+- [x] `2026-11-28 06:20Z` A lone worker is no longer its own backup (uncommitted):
+  - Found by the isolated cluster test, and reproduced locally with an orchestrator and two workers.
+  - In `plan_active_layer_assignments`, the backup filter `nodes.len() == 1 || node_id != source_node` made a single eligible worker the backup of its own layers: layers [0], redundant [0].
+  - Workers take `layers - redundant_layers` as their active set, so the worker owned nothing. It ran warm, with no sensory or output stage, `Neurons=0` in the orchestrator, and `/api/activity` 503. `preserve_sharded_node_assignments` then kept that assignment after more workers joined.
+  - The filter now never selects the source node. New test: `hierarchical_planner_gives_a_single_node_no_local_backup`. The legacy builder already enforced this (`a_single_eligible_node_does_not_get_a_fake_local_backup`).
+- [x] `2026-11-28 04:15Z` Distributed processes now exit on SIGTERM (uncommitted):
+  - Cause: `main` idled in `loop { sleep(1s) }` after start-up. Orchestrators and workers logged `graceful_shutdown`, but each process stayed alive until the service manager's SIGKILL. That is 20 s for the native unit, 30 s in k8s, and forever for a test process.
+  - Fix: `wait_for_distributed_exit` waits for the signal, then for the simulation supervisor's new stopped flag (`obs::note_simulation_supervisor_stopped`, set after the workers and autosave writers finish). The wait is capped at 15 s, or 600 s with `NM_NODE_SNAPSHOT_ON_EXIT_DIR`; `NM_SHUTDOWN_GRACE_MS` overrides either.
+  - Measured exit after SIGTERM: about 0.27 s for a waiting worker, a connected worker and an orchestrator (before: never). The exit-snapshot smoke walk still writes its snapshot.
+- [x] `2026-11-28 02:45Z` VX-001 replicates (3 more seeds per network, jittered places; `analyse_replicates.py`):
+  - Reached, 48 releases each: non-neuromodulated 10, neuromodulated 17, candidate A 18, candidate B 17.
+  - B vs original: difference 0.00 [-0.19, +0.19]; CMH p 0.83; Mann-Whitney p 0.82; run-level permutation p 1.00.
+  - Neuromodulated vs non-neuromodulated: +0.15 [-0.03, +0.31]; CMH p 0.18.
+  - B's single-run lead (6 against 4 of 12) was run-to-run noise; runs of one network range from 2 to 7 of 12.
+  - Performance verdict changed from "not shown" to "no": equal, not better. drosophila.md section 3 is updated.
+- [x] `2026-11-28 00:45Z` Cluster and release work (user request, 27 Nov):
+  - **Cross-architecture Slurm reproducibility:** `aarnn-explorer` was built as Slurm jobs on qc00 (aarch64) and sm00 (x86_64). Four stored VX-001 jobs (intact, lowered, intervention, capture) were submitted with the explorer's own `slurm submit` (new `--worker-exe` and `--sbatch-arg`), each on one aarch64 and one x86_64 node. All 8 results are identical to the development host's (2 723-188 898 leaves, timing excluded). See validation-report.md.
+  - **Release:** PR #44 merged (`b9647b7`) after Verify passed on X64 and ARM64. Two CI fixes:
+    - a dpkg-lock wait;
+    - skipping apt when every dependency is installed. qc01's unattended-upgrade had held the lock since 14 Nov.
+  - **Test fixes found by the local Verify replay:**
+    - the neuromod drive tests are gated to builds without `superdense_executor`. Release builds compile the Runner's neuromodulator update out, so environmental drives are absent there: a known gap;
+    - the tonic tolerance is now 0.3 mV;
+    - the modality cache rebuilds when the tag count changes.
+  - **Final-snapshot hook (uncommitted):** `NM_NODE_SNAPSHOT_ON_EXIT_DIR` makes a cluster worker write each hosted network (`export_network_json`) on SIGTERM, then exit. `scripts/run_sim.sh` gains `NM_CLUSTER_STOP_GRACE_S` (default 1 s, as before). The true-trained-state VX-001 run is `target/qa/vx001d/run_trained.sh`, which needs the release runtime rebuilt after the replicates.
+  - **VX-001 replicates:** `run_replicates.sh`, 3 seeds of jittered release places x 4 networks; analysis in `analyse_replicates.py`.
 - [x] `2026-11-27 08:47Z` VX-001 closed-loop trials of the candidates: A 4/12 reached (mean with misses 31.1 s), B 6/12 (27.4 s), against the tier-1 neuromodulated original 4/12 (30.8 s) and non-neuromodulated 1/12 (35.5 s). B vs original: Fisher p 0.68, Mann-Whitney p 0.32; B vs non-neuromodulated: Mann-Whitney p 0.02. Verdicts are written in `docs/connectome-explorer/drosophila.md` section 3: fewer neurons yes (-2.8 % hidden, -3.4 % state), depth not supported (unchanged), performance not shown (no loss; B is better only than the non-neuromodulated fly).
 - [x] `2026-11-27 07:30Z` VX-001 candidate B (`run_explorer_b.sh`, `Escape:A` declared, candidate `07fbf9ff...`; the search took 17 min because the cached evaluations were reused):
   - Declared protected: ARTR_l/r, ARTR_A_l/r, BOUT_on/off, BOUT_A_on/off, ESC_A_l/r.
